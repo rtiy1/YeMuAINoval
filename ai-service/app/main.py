@@ -64,6 +64,7 @@ async def review_chapter(request: ChapterReviewRequest):
             message=f'使用 story-review 审查章节《{request.title}》',
             skill='story-review',
             payload=request.model_dump(),
+            model_config_override=request.model_config_override,
         ))
         result = ReviewResult.model_validate(agent_result.result)
         return ChapterReviewResponse(run_id=agent_result.run_id, status=agent_result.status, result=result)

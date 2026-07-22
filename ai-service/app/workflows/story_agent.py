@@ -3,13 +3,13 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.schemas import StoryAgentRequest, StoryAgentResponse
 from app.skills.capability import SkillNotReadyError, get_story_skill_capability, route_story_intent
+from app.skills.model_helper import has_api_key
 
 
 class AgentState(TypedDict, total=False):
@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     route: str
     invocation_status: str
     tool_result: dict[str, Any]
+    model_config_override: Any
 
 
 class SkillSelection(BaseModel):
@@ -31,12 +32,22 @@ def select_skill(state: AgentState) -> dict[str, Any]:
     if state.get('requested_skill'):
         return {'selected_skill': state['requested_skill'], 'route': 'explicit'}
     settings = get_settings()
+    override = state.get('model_config_override')
     capability = get_story_skill_capability()
-    if settings.openai_api_key:
+    if has_api_key(override, settings):
         catalog = [item.model_dump() for item in capability.catalog()]
-        model_kwargs = {'model': settings.openai_model, 'api_key': settings.openai_api_key, 'temperature': 0}
-        if settings.openai_base_url:
+        from langchain_openai import ChatOpenAI
+        model_kwargs = {
+            'model': (override.model if override and override.model else None) or settings.openai_model,
+            'api_key': (override.api_key if override and override.api_key else None) or settings.openai_api_key,
+            'temperature': 0,
+        }
+        if override and override.api_base_url:
+            model_kwargs['base_url'] = override.api_base_url
+        elif settings.openai_base_url:
             model_kwargs['base_url'] = settings.openai_base_url
+        if override and override.max_tokens:
+            model_kwargs['max_tokens'] = int(override.max_tokens)
         model = ChatOpenAI(**model_kwargs).with_structured_output(SkillSelection)
         prompt = ChatPromptTemplate.from_messages([
             ('system', '你是 Story Agent 的能力路由器。只从能力目录选择最匹配的 Skill；不要执行任务，不要编造能力。'),
@@ -56,15 +67,16 @@ def select_skill(state: AgentState) -> dict[str, Any]:
 
 def invoke_skill_tool(state: AgentState) -> dict[str, Any]:
     capability = get_story_skill_capability()
-    tool = capability.as_langchain_tool()
+    override = state.get('model_config_override')
     try:
-        result = tool.invoke({
-            'skill_name': state['selected_skill'],
-            'instruction': state['message'],
-            'payload': state.get('payload', {}),
-        })
+        result = capability.invoke(
+            state['selected_skill'],
+            state['message'],
+            state.get('payload', {}),
+            override,
+        )
         result_status = result.get('status') if isinstance(result, dict) else None
-        invocation_status = result_status if result_status in {'needs_model', 'failed'} else 'completed'
+        invocation_status = result_status if result_status in {'needs_model', 'failed', 'needs_input'} else 'completed'
         return {'invocation_status': invocation_status, 'tool_result': result}
     except SkillNotReadyError as error:
         return {
@@ -94,6 +106,7 @@ def run_story_agent(request: StoryAgentRequest) -> StoryAgentResponse:
         'message': request.message,
         'requested_skill': request.skill,
         'payload': request.payload,
+        'model_config_override': request.model_config_override,
     })
     return StoryAgentResponse(
         run_id=str(uuid4()),

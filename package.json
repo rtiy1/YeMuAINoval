@@ -6,11 +6,11 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "node --env-file-if-exists=.env server/index.mjs",
-    "dev:ai": ".venv/bin/uvicorn app.main:app --app-dir ai-service --host 127.0.0.1 --port 8890",
+    "dev:ai": "node server/ai-task.mjs dev",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "npm run test:api && npm run test:ai && npm run test:integration",
     "test:api": "node server/smoke-test.mjs",
-    "test:ai": ".venv/bin/python -m unittest discover -s ai-service/tests -v",
+    "test:ai": "node server/ai-task.mjs test",
     "test:integration": "node server/ai-gateway-test.mjs",
     "build": "vite build",
     "preview": "vite preview"

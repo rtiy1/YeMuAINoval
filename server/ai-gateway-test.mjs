@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { resolvePython } from './python-path.mjs'
 
 const root = path.join(import.meta.dirname, '..')
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-gateway-'))
@@ -32,7 +33,7 @@ function waitForUrl(child, pattern, timeoutMessage) {
 
 try {
   const ai = start(
-    path.join(root, '.venv', 'bin', 'python'),
+    resolvePython(root),
     ['-m', 'uvicorn', 'app.main:app', '--app-dir', 'ai-service', '--host', '127.0.0.1', '--port', '0', '--no-use-colors'],
     { AI_SERVICE_TOKEN: 'integration-service-token', OPENAI_API_KEY: '' },
   )

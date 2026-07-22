@@ -1,13 +1,8 @@
-import json
 import re
-import subprocess
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
-from app.config import get_settings
 from app.skills.registry import SkillRegistryError, get_skill_registry
+from app.skills.script_checks import _compact, deduplicate_findings, run_check_scripts
 
 
 RUBRIC_FILES = {
@@ -17,7 +12,6 @@ RUBRIC_FILES = {
     'generic web-fiction': 'quality-rubric.md',
 }
 FALLBACK_RUBRIC = '''所有问题必须引用原文证据。主线、动机或规则崩坏为 S1；明显影响留存、节奏或可信度为 S2；局部质量问题为 S3；风格建议为 S4。无 S1/S2 可 APPROVE，有 S2 或大量 S3 为 CONCERNS，有 S1 为 REJECT。'''
-SEVERITY_ORDER = {'S1': 0, 'S2': 1, 'S3': 2, 'S4': 3}
 
 
 @dataclass(frozen=True)
@@ -75,116 +69,11 @@ def load_review_resources(rubric: str) -> ReviewResources:
 
 
 def run_skill_checks(content: str, rubric: str) -> list[dict[str, str]]:
-    registry = get_skill_registry()
-    settings = get_settings()
-    lines = content.splitlines()
-    findings: list[dict[str, str]] = []
-    with tempfile.TemporaryDirectory(prefix='story-review-') as temp_dir:
-        input_path = Path(temp_dir) / 'chapter.txt'
-        input_path.write_text(content, encoding='utf-8')
-        punctuation = _run_script(
-            settings.story_node_bin,
-            registry.script_path('story-review', 'normalize-punctuation.js'),
-            ['--check', str(input_path)],
-            Path(temp_dir) / 'punctuation.out',
-        )
-        findings.extend(_punctuation_findings(punctuation, lines))
-        ai_patterns = _run_script(
-            settings.story_node_bin,
-            registry.script_path('story-review', 'check-ai-patterns.js'),
-            ['--check', '--json', '--fail-on=blocking', str(input_path)],
-            Path(temp_dir) / 'ai-patterns.out',
-        )
-        findings.extend(_json_script_findings(ai_patterns, 'ai-patterns'))
-        degeneration = _run_script(
-            settings.story_node_bin,
-            registry.script_path('story-review', 'check-degeneration.js'),
-            ['--check', '--json', '--fail-on=blocking', str(input_path)],
-            Path(temp_dir) / 'degeneration.out',
-        )
-        findings.extend(_json_script_findings(degeneration, 'degeneration'))
+    findings = run_check_scripts('story-review', content)
     findings.extend(_banned_phrase_findings(content))
     findings.extend(_readability_findings(content))
     findings.extend(_platform_findings(content, rubric))
     return deduplicate_findings(findings)
-
-
-def _run_script(node_bin: str, script: Path, args: list[str], output_path: Path) -> str:
-    with output_path.open('w+', encoding='utf-8') as output:
-        completed = subprocess.run(
-            [node_bin, str(script), *args],
-            stdout=output,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        output.flush()
-        output.seek(0)
-        stdout = output.read()
-    if completed.returncode not in (0, 1):
-        detail = completed.stderr.strip() or f'exit code {completed.returncode}'
-        raise RuntimeError(f'{script.name} failed: {detail}')
-    return stdout
-
-
-def _punctuation_findings(output: str, lines: list[str]) -> list[dict[str, str]]:
-    findings = []
-    pattern = re.compile(r'^.+?:(\d+):(\d+): ([a-z-]+): (.+)$')
-    for raw_line in output.splitlines():
-        match = pattern.match(raw_line)
-        if not match:
-            continue
-        line_no, column, finding_type, message = match.groups()
-        source_line = lines[int(line_no) - 1].strip() if int(line_no) <= len(lines) else ''
-        findings.append({
-            'severity': 'S3',
-            'category': 'format',
-            'location': f'第 {line_no} 行，第 {column} 列',
-            'evidence': _compact(source_line),
-            'issue': f'标点或正文格式不符合 Skill 规范（{finding_type}）。',
-            'fix': message,
-        })
-    return findings
-
-
-def _json_script_findings(output: str, source: str) -> list[dict[str, str]]:
-    if not output.strip():
-        return []
-    try:
-        records = json.loads(output).get('findings', [])
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f'{source} returned invalid JSON') from error
-    findings = []
-    for record in records:
-        blocking = record.get('severity') == 'blocking'
-        finding_type = str(record.get('type', 'unknown'))
-        if source == 'degeneration':
-            severity = 'S1' if blocking and finding_type in {'verbatim-repeat', 'truncated', 'placeholder-leak'} else ('S2' if blocking else 'S4')
-        else:
-            severity = 'S2' if blocking else 'S4'
-        findings.append({
-            'severity': severity,
-            'category': 'format' if finding_type in {'em-dash', 'period-stutter', 'long-paragraph'} else 'prose',
-            'location': f"第 {record.get('line', 1)} 行，第 {record.get('column', 1)} 列",
-            'evidence': _compact(str(record.get('excerpt', ''))),
-            'issue': str(record.get('message', finding_type)),
-            'fix': _script_fix(finding_type, source),
-        })
-    return findings
-
-
-def _script_fix(finding_type: str, source: str) -> str:
-    fixes = {
-        'truncated': '补完整个未结束的句子与章节收束，再重新审查。',
-        'verbatim-repeat': '删除无功能的复读，只保留承担情绪或信息作用的一处。',
-        'placeholder-leak': '移除模型拒绝语、占位符或元信息，补回实际正文。',
-        'meta-leak': '改成角色在场景中可感知的事件、物件或相对时间。',
-        'trailer-ending': '删掉预告式总结，让结尾停在具体动作、画面或台词上。',
-        'abstract-summary-tic': '保留必要信息，删除作者总结，把后果落回角色当下。',
-        'long-paragraph': '按镜头、动作或信息变化检查断段，功能完整的长段可保留。',
-    }
-    return fixes.get(finding_type, '按原文语境处理该处；保留剧情功能，不做机械同义词替换。' if source == 'ai-patterns' else '修复该处退化痕迹后重新运行检查。')
 
 
 def _banned_phrase_findings(content: str) -> list[dict[str, str]]:
@@ -254,29 +143,3 @@ def _platform_findings(content: str, rubric: str) -> list[dict[str, str]]:
                 'fix': '人工确认开篇承诺；若确实偏平，把原文已有的风险、选择或异常信息前置，不新增无关事件。',
             }]
     return []
-
-
-def deduplicate_findings(findings: list[dict[str, str]]) -> list[dict[str, str]]:
-    unique: dict[tuple[str, str, str], dict[str, str]] = {}
-    for finding in findings:
-        key = (finding['category'], finding['location'], finding['evidence'])
-        existing = unique.get(key)
-        if not existing or SEVERITY_ORDER[finding['severity']] < SEVERITY_ORDER[existing['severity']]:
-            unique[key] = finding
-    format_by_line: dict[str, dict[str, str]] = {}
-    output: list[dict[str, str]] = []
-    for finding in unique.values():
-        if finding['category'] != 'format':
-            output.append(finding)
-            continue
-        line_key = finding['location'].split('，', 1)[0]
-        existing = format_by_line.get(line_key)
-        if not existing or SEVERITY_ORDER[finding['severity']] < SEVERITY_ORDER[existing['severity']]:
-            format_by_line[line_key] = finding
-    output.extend(format_by_line.values())
-    return sorted(output, key=lambda item: (SEVERITY_ORDER[item['severity']], item['location']))[:40]
-
-
-def _compact(text: str, limit: int = 120) -> str:
-    normalized = re.sub(r'\s+', ' ', text).strip()
-    return normalized if len(normalized) <= limit else f'{normalized[:limit - 3]}...'

@@ -53,7 +53,8 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(skills['story']['status'], 'ready')
         self.assertEqual(skills['story-review']['status'], 'ready')
         self.assertEqual(skills['story-deslop']['status'], 'needs_model')
-        self.assertEqual(skills['story-deslop']['executor'], 'prompt-only-v1')
+        self.assertEqual(skills['story-deslop']['executor'], 'deslop-v1')
+        self.assertEqual(skills['story-long-write']['executor'], 'prompt-only-v1')
         self.assertEqual(skills['story-cover']['status'], 'registered')
 
     async def test_agent_invokes_story_review_capability(self):
@@ -77,16 +78,35 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['result']['Rubric'], 'fanqie')
         self.assertEqual(payload['result']['Effective Mode'], 'solo')
 
-    async def test_prompt_skill_reports_missing_model(self):
+    async def test_prompt_skill_reports_missing_model_and_loads_references(self):
         response = await self.client.post(
             '/v1/agents/story',
             headers={'x-service-token': 'test-service-token'},
-            json={'message': '去 AI 味', 'skill': 'story-deslop'},
+            json={'message': '帮我开书', 'skill': 'story-long-write'},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['status'], 'needs_model')
         self.assertTrue(payload['result']['contract_loaded'])
+        # story-long-write SKILL.md 引用了大量 references，应非空
+        self.assertIsInstance(payload['result']['references_loaded'], list)
+        self.assertGreater(len(payload['result']['references_loaded']), 0)
+
+    async def test_deslop_reports_missing_model_with_checks(self):
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={
+                'message': '去 AI 味',
+                'skill': 'story-deslop',
+                'payload': {'content': '映入眼帘的是一幕场景。他深吸一口气，嘴角勾起一抹弧度。'},
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'needs_model')
+        self.assertEqual(payload['result']['skill'], 'story-deslop')
+        self.assertIsInstance(payload['result']['checks'], list)
 
     async def test_browser_skill_requires_adapter(self):
         response = await self.client.post(
@@ -96,6 +116,20 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'needs_adapter')
+
+    async def test_reference_path_escape_is_blocked(self):
+        registry = get_skill_registry()
+        from app.skills.registry import SkillRegistryError
+        with self.assertRaises(SkillRegistryError):
+            registry.read_reference('story-review', '../../../etc/passwd')
+        with self.assertRaises(SkillRegistryError):
+            registry.script_path('story-review', '../../../etc/passwd')
+
+    async def test_registry_auto_allows_story_deslop_scripts(self):
+        registry = get_skill_registry()
+        # story-deslop 的脚本现在应能自动获取路径（不再需要硬编码白名单）
+        path = registry.script_path('story-deslop', 'check-ai-patterns.js')
+        self.assertTrue(path.is_file())
 
     async def test_review_maps_skill_findings_and_metadata(self):
         response = await self.client.post(
@@ -118,6 +152,36 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['result']['Rubric Source'], 'file')
         self.assertGreaterEqual(payload['result']['severity_counts']['S2'], 1)
         self.assertTrue(all(set(item) == {'severity', 'category', 'location', 'evidence', 'issue', 'fix'} for item in payload['result']['findings']))
+
+    async def test_model_config_override_provides_api_key(self):
+        """传入 model_config 含 api_key 时，prompt-only skill 不再报 needs_model。"""
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={
+                'message': '帮我开书',
+                'skill': 'story-long-write',
+                'model_config': {
+                    'api_key': 'sk-test-fake-key-123456',
+                    'model': 'gpt-4o-mini',
+                    'base_url': 'http://127.0.0.1:9999',
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        # 有了 api_key 后不再是 needs_model，而是尝试调用（会因假地址失败）
+        self.assertNotEqual(payload['status'], 'needs_model')
+
+    async def test_model_config_override_with_invalid_key_still_needs_model(self):
+        """不传 model_config 且服务端无 key 时仍是 needs_model。"""
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={'message': '帮我开书', 'skill': 'story-long-write'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'needs_model')
 
 
 if __name__ == '__main__':

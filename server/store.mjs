@@ -19,11 +19,49 @@ function normalizeDb(db) {
   db.chapters ||= {}
   db.drafts ||= {}
   db.ideas ||= []
+  db.writingLog ||= []
   for (const project of db.projects) {
     if (!Object.hasOwn(project, 'userId')) project.userId = null
+    if (!Object.hasOwn(project, 'createdAt')) project.createdAt = null
+    if (!Object.hasOwn(project, 'updatedAt')) project.updatedAt = project.createdAt
+
+    const chapters = Array.isArray(db.chapters[project.id]) ? db.chapters[project.id] : []
+    db.chapters[project.id] = chapters
+
+    const legacyDraft = db.drafts[project.id]
+    if (typeof legacyDraft === 'string') {
+      const firstChapter = chapters[0]
+      db.drafts[project.id] = firstChapter
+        ? { [String(firstChapter.id)]: legacyDraft }
+        : { __legacy: legacyDraft }
+    } else if (!legacyDraft || typeof legacyDraft !== 'object' || Array.isArray(legacyDraft)) {
+      db.drafts[project.id] = {}
+    }
+
+    const draftMap = db.drafts[project.id]
+    for (const chapter of chapters) {
+      const key = String(chapter.id)
+      const content = typeof draftMap[key] === 'string' ? draftMap[key] : ''
+      if (!Object.hasOwn(chapter, 'createdAt')) chapter.createdAt = project.createdAt
+      if (!Object.hasOwn(chapter, 'updatedAt')) chapter.updatedAt = project.updatedAt
+      chapter.words = formatWords(countWords(content))
+    }
+
+    project.chapters = chapters.length
+    project.words = formatWords(chapters.reduce((total, chapter) => {
+      const content = draftMap[String(chapter.id)]
+      return total + countWords(typeof content === 'string' ? content : '')
+    }, 0))
   }
   for (const idea of db.ideas) {
     if (!Object.hasOwn(idea, 'userId')) idea.userId = null
+    if (!Object.hasOwn(idea, 'createdAt')) idea.createdAt = null
+    if (!Object.hasOwn(idea, 'updatedAt')) idea.updatedAt = idea.createdAt
+    if (!Object.hasOwn(idea, 'tags')) idea.tags = []
+    if (!Object.hasOwn(idea, 'pinned')) idea.pinned = false
+  }
+  for (const user of db.users) {
+    if (!Object.hasOwn(user, 'settings')) user.settings = null
   }
   return db
 }

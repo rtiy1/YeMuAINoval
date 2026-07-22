@@ -9,24 +9,10 @@ from app.schemas import SkillDescriptor
 
 
 SKILL_NAME_PATTERN = re.compile(r'^[a-z0-9-]+$')
-ALLOWED_REFERENCES = {
-    'story-review': {
-        'quality-checklist.md',
-        'quality-rubric.md',
-        'banned-words.md',
-        'anti-ai-writing.md',
-        'rubrics/fanqie.md',
-        'rubrics/qidian.md',
-        'rubrics/zhihu.md',
-    },
-}
-ALLOWED_SCRIPTS = {
-    'story-review': {
-        'normalize-punctuation.js',
-        'check-ai-patterns.js',
-        'check-degeneration.js',
-    },
-}
+# references/ 下允许读取的扩展名（白名单，防止读到 scripts 或二进制）
+REFERENCE_SUFFIXES = ('.md', '.txt')
+# scripts/ 下允许执行的扩展名
+SCRIPT_SUFFIX = '.js'
 
 
 class SkillRegistryError(RuntimeError):
@@ -76,16 +62,45 @@ class SkillRegistry:
         )
 
     def read_reference(self, skill_name: str, relative_path: str) -> str:
-        if relative_path not in ALLOWED_REFERENCES.get(skill_name, set()):
-            raise SkillRegistryError(f'reference is not allowed for {skill_name}: {relative_path}')
-        target = self._inside_root(self._skill_dir(skill_name) / 'references' / relative_path)
+        """读取 skill references/ 下的任意 .md/.txt 文件。
+
+        自动允许该 skill 目录下的 references 子树，不再逐文件白名单；
+        通过 _inside_root 防止路径逃逸，通过扩展名限制防止读到非文本资产。
+
+        relative_path 可带或不带 ``references/`` 前缀，两种写法等价。
+        """
+        clean = relative_path.replace('\\', '/').lstrip('/')
+        if clean.startswith('references/'):
+            clean = clean[len('references/'):]
+        if not clean or Path(clean).is_absolute() or '..' in Path(clean).parts:
+            raise SkillRegistryError(f'reference path is not allowed for {skill_name}: {relative_path}')
+        if not clean.endswith(REFERENCE_SUFFIXES):
+            raise SkillRegistryError(f'reference extension is not allowed for {skill_name}: {relative_path}')
+        target = self._inside_root(self._skill_dir(skill_name) / 'references' / clean)
         if not target.is_file():
             raise SkillRegistryError(f'reference is missing: {relative_path}')
         return target.read_text(encoding='utf-8')
 
+    def reference_exists(self, skill_name: str, relative_path: str) -> bool:
+        """安全检查 reference 是否存在，不抛异常。"""
+        clean = relative_path.replace('\\', '/').lstrip('/')
+        if clean.startswith('references/'):
+            clean = clean[len('references/'):]
+        try:
+            return self._inside_root(self._skill_dir(skill_name) / 'references' / clean).is_file()
+        except (OSError, SkillRegistryError):
+            return False
+
     def script_path(self, skill_name: str, script_name: str) -> Path:
-        if script_name not in ALLOWED_SCRIPTS.get(skill_name, set()):
-            raise SkillRegistryError(f'script is not allowed for {skill_name}: {script_name}')
+        """返回 skill scripts/ 下的 .js 脚本路径。
+
+        自动允许该 skill 目录下的 scripts 子树，不再逐文件白名单；
+        通过 _inside_root 防止路径逃逸，通过扩展名限制只允许 .js。
+        """
+        if not script_name or Path(script_name).is_absolute() or '..' in Path(script_name).parts:
+            raise SkillRegistryError(f'script path is not allowed for {skill_name}: {script_name}')
+        if not script_name.endswith(SCRIPT_SUFFIX):
+            raise SkillRegistryError(f'script extension is not allowed for {skill_name}: {script_name}')
         target = self._inside_root(self._skill_dir(skill_name) / 'scripts' / script_name)
         if not target.is_file():
             raise SkillRegistryError(f'script is missing: {script_name}')

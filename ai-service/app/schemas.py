@@ -3,12 +3,23 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ModelConfig(BaseModel):
+    """用户自定义的 LLM 模型配置，覆盖服务端默认。"""
+    api_base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    context_window: int | None = None
+
+
 class ChapterReviewRequest(BaseModel):
     title: str = Field(default='未命名章节', min_length=1, max_length=120)
     genre: str = Field(default='网络小说', min_length=1, max_length=40)
     platform: str = Field(default='通用网文', min_length=1, max_length=40)
     mode: Literal['full', 'lean', 'solo'] = 'full'
     content: str = Field(min_length=1, max_length=500_000)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
 
 
 class ReviewFinding(BaseModel):
@@ -63,6 +74,7 @@ class StoryAgentRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     skill: str | None = Field(default=None, pattern=r'^[a-z0-9-]+$')
     payload: dict[str, Any] = Field(default_factory=dict)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
 
 
 class StoryAgentResponse(BaseModel):

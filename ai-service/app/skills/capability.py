@@ -27,6 +27,7 @@ class SkillInvocation:
     skill_name: str
     instruction: str
     payload: dict[str, Any] = field(default_factory=dict)
+    model_config_override: Any = None
 
 
 SkillExecutor = Callable[[SkillInvocation], dict[str, Any]]
@@ -55,12 +56,17 @@ class StorySkillCapability:
             status_overrides,
         )
 
-    def invoke(self, skill_name: str, instruction: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def invoke(self, skill_name: str, instruction: str, payload: dict[str, Any] | None = None, model_config_override: Any = None) -> dict[str, Any]:
         self.registry.load(skill_name)
         registered = self._executors.get(skill_name)
         if not registered:
             raise SkillNotReadyError(skill_name)
-        invocation = SkillInvocation(skill_name=skill_name, instruction=instruction, payload=payload or {})
+        invocation = SkillInvocation(
+            skill_name=skill_name,
+            instruction=instruction,
+            payload=payload or {},
+            model_config_override=model_config_override,
+        )
         return registered[1](invocation)
 
     def as_langchain_tool(self) -> StructuredTool:
@@ -104,19 +110,20 @@ def _execute_story_router(invocation: SkillInvocation) -> dict[str, Any]:
             'status': 'needs_input',
             'message': '请说明要写长篇、写短篇、拆文、扫榜、去 AI 味、制作封面还是审查章节。',
         }
-    return capability.invoke(target, invocation.instruction, invocation.payload)
+    return capability.invoke(target, invocation.instruction, invocation.payload, invocation.model_config_override)
 
 
 @lru_cache
 def get_story_skill_capability() -> StorySkillCapability:
     from app.workflows.review import execute_review_skill
+    from app.skills.deslop import execute_deslop_skill
     from app.skills.prompt import execute_prompt_skill
 
     capability = StorySkillCapability(get_skill_registry())
     capability.register('story', 'router-v1', _execute_story_router)
     capability.register('story-review', 'langgraph-solo-v1', execute_review_skill)
+    capability.register('story-deslop', 'deslop-v1', execute_deslop_skill, requires_model=True)
     for skill_name in (
-        'story-deslop',
         'story-import',
         'story-long-analyze',
         'story-long-scan',

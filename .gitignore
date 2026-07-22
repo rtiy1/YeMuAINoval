@@ -8,3 +8,5 @@ server/data/db.json
 server/data/*.tmp
 .env
 .DS_Store
+.runtime-logs/
+.zcode/plans/
