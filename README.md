@@ -1,12 +1,37 @@
-# 叙事工坊 Web
+# 夜幕 AI 小说 | YeMu AI Novel
 
-面向网文作者的创作工作台。前端使用 React + Vite，业务后端使用 Node.js + Express，AI 工作流使用 Python + FastAPI + LangGraph。编辑器支持章节切换保护、自动保存、真实字数统计、章节上下文编排、伏笔生命周期管理，以及从素材库把人物/设定/剧情片段插入光标位置。
+面向网文作者的 AI 创作工作台：从一个想法开始，由创作助手确认篇幅、题材和流派，再进入作品、章节和正文的持续创作。项目支持本地 JSON 开发存储，也支持通过 Docker Compose 逐步切换到 PostgreSQL。
+
+## 核心能力
+
+- **统一创作入口**：总览页创作助手可以收集创作需求、生成建书方案并直接创建作品；也可以先手动新建作品，再进入编辑器。
+- **章节化写作**：章节大纲、正文、编辑历史和写作统计独立保存，支持自动保存、撤销、重做、分章、导入和导出。
+- **上下文感知 AI**：请求会结合当前作品设定、章节大纲、最近章节结尾、素材卡和未回收伏笔。
+- **可控 AI 回写**：支持续写、扩写、润色、审稿和局部重写；局部结果会与原文并排对比，确认后才写回正文。
+- **伏笔生命周期**：记录伏笔的分类、重要性、埋入章节、计划回收章节和实际回收章节。
+- **可恢复任务**：AI 任务拥有排队、执行、完成、失败和取消状态，刷新页面后仍能查看进度与结果。
+
+## 技术栈
+
+- Web：React、Vite、Lucide
+- API：Node.js 22、Express、JWT、PostgreSQL `JSONB` 过渡存储
+- AI：Python 3.12、FastAPI、LangGraph、LangChain
+- 部署：Docker Compose、PostgreSQL 16、Redis 7
 
 账号系统采用短期 JWT 访问令牌和可轮换的 HttpOnly 刷新令牌。密码使用 Node.js `scrypt` 加盐哈希，作品数据按用户隔离。
 
 ## 本地开发
 
-分别启动后端和前端：
+要求 Node.js 22+、Python 3.12+。首次启动 AI 服务时创建虚拟环境并安装依赖：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r ai-service/requirements.txt
+npm install
+cp .env.example .env
+```
+
+至少为 `AUTH_SECRET` 设置一个随机值。然后分别启动 API、AI 和前端：
 
 ```bash
 npm run dev:api
@@ -19,6 +44,8 @@ npm run dev
 - AI: `http://127.0.0.1:8890/health`
 
 Vite 会把 `/api` 请求代理到本地 API。
+
+本地不配置 `DATABASE_URL` 时，数据写入 `server/data/db.json`；这是开发回退模式，不需要单独安装 PostgreSQL。配置 `DATABASE_URL` 后，API 会自动使用 PostgreSQL 存储。
 
 ## 生产运行
 
