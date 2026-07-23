@@ -10,9 +10,12 @@ from app.schemas import (
     SkillCatalogResponse,
     StoryAgentRequest,
     StoryAgentResponse,
+    WritingProposalRequest,
+    WritingProposalResponse,
 )
 from app.skills.capability import get_story_skill_capability
 from app.skills.registry import SkillRegistryError
+from app.workflows.writing_assistant import generate_writing_proposal
 from app.workflows.story_agent import run_story_agent
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,11 @@ async def invoke_story_agent(request: StoryAgentRequest):
     except Exception as error:
         logger.exception('story agent failed')
         raise HTTPException(status_code=500, detail='story agent failed') from error
+
+
+@app.post('/v1/assistants/writing/proposal', response_model=WritingProposalResponse, dependencies=[Depends(verify_service_token)])
+async def writing_proposal(request: WritingProposalRequest):
+    return generate_writing_proposal(request)
 
 
 @app.post('/v1/reviews/chapter', response_model=ChapterReviewResponse, dependencies=[Depends(verify_service_token)])

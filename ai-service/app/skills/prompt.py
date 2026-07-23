@@ -56,6 +56,20 @@ def execute_prompt_skill(invocation: SkillInvocation) -> dict[str, Any]:
         '你正在执行项目内的 Story Skill。遵守下面的 Skill 契约，只完成用户请求，不声称执行了当前环境没有提供的浏览器、图片、文件写入或外部网络能力。当前适配范围是 prompt-only：需要落盘或工具调用时，输出清晰的下一步结构化计划。',
         f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 120_000)}',
     ]
+    writing_context = invocation.payload.get('writing_context')
+    if writing_context:
+        system_parts.append(
+            '\n\nWRITING CONTEXT (可信的服务端上下文，只能据此保持连续性，不要擅自改写项目设定)：\n'
+            + truncate_for_context(json.dumps(writing_context, ensure_ascii=False, default=str), context_window, override.max_tokens if override else None, 60_000)
+        )
+    rewrite_mode = invocation.payload.get('rewrite_mode')
+    if rewrite_mode in {'similar', 'expand', 'condense'}:
+        rewrite_instruction = {
+            'similar': '局部重写后尽量保持与原选区相近的长度和信息密度。',
+            'expand': '局部重写时增加动作、感官、细节和情绪推进，但不要改变事实。',
+            'condense': '局部重写时压缩冗余表达，保留事件、因果和人物情绪。',
+        }[rewrite_mode]
+        system_parts.append(f'\n\nLOCAL REWRITE MODE:\n{rewrite_instruction} 只返回可直接替换正文的内容，不要加解释。')
     if references_block:
         system_parts.append(f'\n\n{truncate_for_context(references_block, context_window, override.max_tokens if override else None, 200_000)}')
     system_prompt = ''.join(system_parts)

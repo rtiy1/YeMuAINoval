@@ -57,6 +57,33 @@ try {
   assert.equal(registration.status, 201)
   const session = await registration.json()
 
+  const settingsResponse = await fetch(`${apiUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${session.accessToken}` },
+    body: JSON.stringify({
+      apiBaseUrl: 'http://127.0.0.1:1/v1',
+      apiKey: 'fake-user-model-key',
+      model: 'integration-invalid-model',
+      maxTokens: 64,
+      contextWindow: 2048,
+    }),
+  })
+  assert.equal(settingsResponse.status, 200)
+
+  const configuredRun = await fetch(`${apiUrl}/api/ai/agent/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${session.accessToken}` },
+    body: JSON.stringify({
+      message: '帮我写一份长篇大纲',
+      skill: 'story-long-write',
+      payload: { genre: '悬疑' },
+    }),
+  })
+  const configuredPayload = await configuredRun.json()
+  assert.equal(configuredRun.status, 200)
+  assert.equal(configuredPayload.status, 'failed')
+  assert.notEqual(configuredPayload.status, 'needs_model')
+
   const skillsResponse = await fetch(`${apiUrl}/api/ai/skills`, {
     headers: { authorization: `Bearer ${session.accessToken}` },
   })

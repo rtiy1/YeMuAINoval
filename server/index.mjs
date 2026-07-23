@@ -20,7 +20,7 @@ import {
   verifyAccessToken,
   verifyPassword,
 } from './auth.mjs'
-import { countWords, findProject, formatWords, loadDb, updateDb } from './store.mjs'
+import { countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -32,6 +32,27 @@ const allowedOrigins = (process.env.WEB_ORIGIN || 'http://127.0.0.1:5173,http://
 const corsMiddleware = cors({ origin: true, credentials: true })
 const aiServiceUrl = (process.env.AI_SERVICE_URL || 'http://127.0.0.1:8890').replace(/\/$/, '')
 const aiServiceToken = process.env.AI_SERVICE_TOKEN || 'local-ai-service-token'
+const PROJECT_TYPES = new Set(['长篇', '短篇', '参考书'])
+const PROJECT_STATUSES = new Set(['构思中', '连载中', '已完结', '已拆文'])
+const CHAPTER_STATES = new Set(['draft', 'current', 'done'])
+const FORESHADOW_STATUSES = new Set(['planned', 'planted', 'resolved', 'abandoned'])
+const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
+const GENRE_SUGGESTIONS = ['现代言情', '古代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世', '历史架空']
+const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
+const writingTaskControllers = new Map()
+
+function isCodespacesOrigin(origin) {
+  if (process.env.CODESPACES !== 'true' || !process.env.CODESPACE_NAME) return false
+  try {
+    const url = new URL(origin)
+    const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev'
+    return url.protocol === 'https:'
+      && url.hostname.startsWith(`${process.env.CODESPACE_NAME}-`)
+      && url.hostname.endsWith(`.${domain}`)
+  } catch {
+    return false
+  }
+}
 
 app.disable('x-powered-by')
 app.use(helmet({ contentSecurityPolicy: false }))
@@ -40,7 +61,7 @@ app.use((req, res, next) => {
   const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim()
   const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim()
   const ownOrigin = `${forwardedProto || req.protocol}://${forwardedHost || req.get('host')}`
-  if (!origin || origin === ownOrigin || allowedOrigins.includes(origin)) {
+  if (!origin || origin === ownOrigin || allowedOrigins.includes(origin) || isCodespacesOrigin(origin)) {
     corsMiddleware(req, res, next)
     return
   }
@@ -75,6 +96,54 @@ function cleanText(value, field, maxLength) {
     throw error
   }
   return text
+}
+
+function cleanEnum(value, field, allowedValues) {
+  const text = cleanText(value, field, 20)
+  if (!allowedValues.has(text)) {
+    throw Object.assign(new Error(`${field}无效，可选值：${[...allowedValues].join('、')}`), { status: 400 })
+  }
+  return text
+}
+
+function cleanOptionalText(value, field, maxLength) {
+  if (value == null || value === '') return ''
+  if (typeof value !== 'string') throw Object.assign(new Error(`${field} 必须是文本`), { status: 400 })
+  const text = value.trim()
+  if (text.length > maxLength) throw Object.assign(new Error(`${field} 不能超过 ${maxLength} 个字符`), { status: 400 })
+  return text
+}
+
+function cleanIntegerRange(value, field, min, max, fallback = null) {
+  if (value == null || value === '') return fallback
+  const number = Number(value)
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw Object.assign(new Error(`${field}必须是 ${min} 到 ${max} 之间的整数`), { status: 400 })
+  }
+  return number
+}
+
+function cleanModelBaseUrl(value) {
+  if (value == null || value === '') return ''
+  if (typeof value !== 'string') throw Object.assign(new Error('API Base URL 必须是文本'), { status: 400 })
+  const text = value.trim().replace(/\/$/, '')
+  if (!text) return ''
+  let parsed
+  try {
+    parsed = new URL(text)
+  } catch {
+    throw Object.assign(new Error('API Base URL 格式不正确'), { status: 400 })
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw Object.assign(new Error('API Base URL 仅支持不带认证信息的 HTTP/HTTPS 地址'), { status: 400 })
+  }
+  return text
+}
+
+function isNetworkError(error) {
+  return error?.name === 'TimeoutError'
+    || error?.name === 'TypeError'
+    || ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(error?.cause?.code)
 }
 
 function cleanEmail(value) {
@@ -178,6 +247,18 @@ function recordWriting(db, { userId, projectId, chapterId, delta, timestamp }) {
   })
 }
 
+function recordEditSnapshot(db, projectId, chapterId, content, timestamp = new Date().toISOString()) {
+  db.editHistory[projectId] ||= {}
+  const key = String(chapterId)
+  const snapshots = db.editHistory[projectId][key] ||= []
+  const latest = snapshots.at(-1)
+  if (latest?.content === content) return { snapshot: latest, duplicate: true }
+  const snapshot = { id: crypto.randomUUID(), content, words: countWords(content), createdAt: timestamp }
+  snapshots.push(snapshot)
+  db.editHistory[projectId][key] = snapshots.slice(-80)
+  return { snapshot, duplicate: false }
+}
+
 function saveChapterContent(db, project, chapter, content, userId) {
   const drafts = draftMapFor(db, project.id)
   const key = String(chapter.id)
@@ -185,6 +266,7 @@ function saveChapterContent(db, project, chapter, content, userId) {
   const previousWords = countWords(previous)
   const nextWords = countWords(content)
   const timestamp = new Date().toISOString()
+  if (previous && previous !== content) recordEditSnapshot(db, project.id, chapter.id, previous, timestamp)
   drafts[key] = content
   delete drafts.__legacy
   chapter.words = formatWords(nextWords)
@@ -195,12 +277,51 @@ function saveChapterContent(db, project, chapter, content, userId) {
   return { content, chapter, project }
 }
 
+function contextExcerpt(value, maxLength = 1600) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.floor(maxLength * 0.35))}\n…\n${text.slice(-Math.floor(maxLength * 0.65))}`
+}
+
+function buildWritingContext(db, project, chapter) {
+  const chapters = db.chapters[project.id] || []
+  const chapterIndex = chapters.findIndex((item) => String(item.id) === String(chapter.id))
+  const drafts = draftMapFor(db, project.id)
+  const previousChapters = chapters
+    .slice(Math.max(0, chapterIndex - 6), chapterIndex)
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      outline: contextExcerpt(item.outline, 900),
+      ending: contextExcerpt(drafts[String(item.id)], 1200).slice(-1200),
+    }))
+  const materials = db.ideas
+    .filter((idea) => idea.userId === project.userId && (!idea.projectId || idea.projectId === project.id))
+    .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+    .slice(0, 20)
+    .map((idea) => ({ label: idea.label, title: idea.title, body: contextExcerpt(idea.body, 500), tags: idea.tags || [] }))
+  const unresolvedForeshadows = db.foreshadows
+    .filter((item) => item.userId === project.userId && item.projectId === project.id && !['resolved', 'abandoned'].includes(item.status))
+    .sort((left, right) => Number(right.importance || 0) - Number(left.importance || 0))
+    .slice(0, 20)
+    .map((item) => ({ title: item.title, content: contextExcerpt(item.content, 700), status: item.status, targetChapterId: item.targetChapterId || null }))
+  return {
+    version: 1,
+    project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
+    chapter: { id: chapter.id, title: chapter.title, outline: contextExcerpt(chapter.outline, 2400), state: chapter.state },
+    previousChapters,
+    materials,
+    unresolvedForeshadows,
+  }
+}
+
 function createChapterRecord(db, project, title) {
   const chapters = db.chapters[project.id] || []
   const timestamp = new Date().toISOString()
   const chapter = {
     id: chapters.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1,
     title,
+    outline: '',
     words: '0',
     state: 'draft',
     createdAt: timestamp,
@@ -209,10 +330,122 @@ function createChapterRecord(db, project, title) {
   db.chapters[project.id] = [...chapters, chapter]
   const drafts = draftMapFor(db, project.id)
   drafts[String(chapter.id)] = chapters.length === 0 && typeof drafts.__legacy === 'string' ? drafts.__legacy : ''
+  db.editHistory[project.id] ||= {}
+  db.editHistory[project.id][String(chapter.id)] ||= []
   delete drafts.__legacy
   recalculateProject(db, project)
   touchProject(project, timestamp)
   return chapter
+}
+
+function createProjectBase({ userId, title, type, genre, style = '', tone, timestamp }) {
+  return {
+    id: crypto.randomUUID(), userId, title, type, genre, status: '构思中', progress: 0, words: '0', updated: '刚刚', chapters: 0,
+    style, tone, cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
+  }
+}
+
+function emptyWritingRequirements() {
+  return { type: '', genre: '', style: '', premise: '', platform: '', title: '' }
+}
+
+function createWritingSession(userId) {
+  const timestamp = new Date().toISOString()
+  return {
+    id: crypto.randomUUID(), userId, phase: 'collecting_requirements', messages: [],
+    requirements: emptyWritingRequirements(), proposal: null, selectedSkill: null, projectId: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  }
+}
+
+function writingSessionPublic(session) {
+  if (!session) return null
+  return {
+    id: session.id, phase: session.phase, messages: session.messages || [],
+    requirements: { ...emptyWritingRequirements(), ...(session.requirements || {}) },
+    proposal: session.proposal || null, selectedSkill: session.selectedSkill || null,
+    projectId: session.projectId || null, createdAt: session.createdAt, updatedAt: session.updatedAt,
+  }
+}
+
+function appendWritingMessage(session, role, text) {
+  const message = { id: crypto.randomUUID(), role, text, createdAt: new Date().toISOString() }
+  session.messages = [...(session.messages || []), message].slice(-20)
+  session.updatedAt = message.createdAt
+  return message
+}
+
+function mergeWritingRequirements(current, message) {
+  const requirements = { ...emptyWritingRequirements(), ...(current || {}) }
+  const text = message.trim()
+  const expected = missingWritingRequirements(requirements)[0]
+  if (!requirements.type) {
+    if (/短篇/.test(text)) requirements.type = '短篇'
+    else if (/长篇/.test(text)) requirements.type = '长篇'
+  }
+  if (!requirements.genre) {
+    const suggestion = GENRE_SUGGESTIONS.find((item) => text.includes(item))
+    if (suggestion) requirements.genre = suggestion
+  }
+  if (!requirements.style) {
+    const suggestion = STYLE_SUGGESTIONS.find((item) => text.includes(item))
+    if (suggestion) requirements.style = suggestion
+  }
+  if (expected === 'genre' && !requirements.genre) requirements.genre = text.slice(0, 30)
+  if (expected === 'style' && !requirements.style) requirements.style = text.slice(0, 80)
+  if (!requirements.platform) {
+    const platform = text.match(/(?:平台|发布|发在)\s*[:：]?\s*(番茄|起点|知乎盐言|晋江|通用网文)/)?.[1]
+    if (platform) requirements.platform = platform
+  }
+  if (expected === 'premise' && !requirements.premise) {
+    requirements.premise = text.slice(0, 2000)
+  }
+  return requirements
+}
+
+function missingWritingRequirements(requirements) {
+  return WRITING_REQUIREMENTS.filter((field) => !String(requirements?.[field] || '').trim())
+}
+
+function writingQuestion(missing) {
+  const questions = {
+    type: '你想写短篇还是长篇？也可以直接说预计篇幅。',
+    genre: `想写什么题材？例如：${GENRE_SUGGESTIONS.slice(0, 5).join('、')}。`,
+    style: `想采用什么流派或核心爽点？例如：${STYLE_SUGGESTIONS.slice(0, 5).join('、')}，也可以自由描述。`,
+    premise: '故事的核心设定是什么？用一两句话告诉我主角、目标和主要冲突即可。',
+  }
+  return questions[missing[0]] || '再告诉我一点你想写的故事。'
+}
+
+function validateSmartProposal(input, defaultType = '长篇') {
+  const title = cleanText(input?.title, '作品名', 80)
+  const type = cleanEnum(input?.type || defaultType, '篇幅', PROJECT_TYPES)
+  const genre = cleanText(input?.genre, '题材', 30)
+  const style = cleanOptionalText(input?.style, '流派', 80)
+  const tone = cleanText(input?.tone || input?.premise, '故事主线', 2000)
+  if (!Array.isArray(input?.chapters) || !input.chapters.length) throw Object.assign(new Error('智能创建结果至少需要一个章节大纲'), { status: 400 })
+  if (input.chapters.length > 100) throw Object.assign(new Error('智能创建结果最多包含 100 个章节'), { status: 400 })
+  const chapters = input.chapters.map((chapter, index) => ({
+    title: cleanText(chapter?.title || `第 ${index + 1} 章`, '章节标题', 100),
+    content: cleanText(chapter?.content, '章节大纲', 5000),
+  }))
+  return { title, type, genre, style, tone, chapters }
+}
+
+function createProjectWithOutline(db, { userId, proposal, timestamp = new Date().toISOString() }) {
+  const project = createProjectBase({ userId, title: proposal.title, type: proposal.type, genre: proposal.genre, style: proposal.style, tone: proposal.tone, timestamp })
+  db.projects = [project, ...db.projects.map((item) => item.userId === userId ? { ...item, isActive: false } : item)]
+  db.chapters[project.id] = []
+  db.drafts[project.id] = {}
+  db.editHistory[project.id] = {}
+  for (const item of proposal.chapters) {
+    const chapter = createChapterRecord(db, project, item.title)
+    chapter.outline = item.content
+    chapter.updatedAt = timestamp
+  }
+  recalculateProject(db, project)
+  touchProject(project, timestamp)
+  return { project, chapters: db.chapters[project.id] }
 }
 
 function dashboardStats(db, userId) {
@@ -295,7 +528,7 @@ async function authenticate(req, _res, next) {
 app.get('/api/health', async (_req, res, next) => {
   try {
     const db = await loadDb()
-    res.json({ ok: true, users: db.users.length, projects: db.projects.length })
+    res.json({ ok: true, users: db.users.length, projects: db.projects.length, storage: storeInfo() })
   } catch (error) {
     next(error)
   }
@@ -323,7 +556,7 @@ app.post('/api/auth/register', async (req, res, next) => {
         const timestamp = new Date().toISOString()
         const project = {
           id: crypto.randomUUID(), userId: user.id, title: '我的第一本书', type: '长篇', genre: '现代言情', status: '构思中', progress: 0,
-          words: '0', updated: '刚刚', chapters: 0, tone: '等待你的第一笔设定', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
+          words: '0', updated: '刚刚', chapters: 0, style: '', tone: '等待你的第一笔设定', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
         }
         db.projects.push(project)
         db.chapters[project.id] = []
@@ -398,7 +631,7 @@ app.use('/api', authenticate)
 function sanitizeSettings(input, existing) {
   const settings = { ...(existing || {}) }
   if (input.apiBaseUrl !== undefined) {
-    settings.apiBaseUrl = typeof input.apiBaseUrl === 'string' ? input.apiBaseUrl.trim().replace(/\/$/, '') : ''
+    settings.apiBaseUrl = cleanModelBaseUrl(input.apiBaseUrl)
   }
   if (input.model !== undefined) {
     settings.model = typeof input.model === 'string' ? input.model.trim().slice(0, 80) : ''
@@ -437,15 +670,133 @@ async function getUserModelConfig(user) {
   if (!user?.settings) return null
   const s = user.settings
   const apiKey = decryptSecret(s.apiKeyEnc)
-  if (!apiKey && !process.env.OPENAI_API_KEY) return null
   return {
-    apiBaseUrl: s.apiBaseUrl || undefined,
-    apiKey,
+    api_base_url: s.apiBaseUrl || undefined,
+    api_key: apiKey || undefined,
     model: s.model || undefined,
     temperature: s.temperature ?? undefined,
-    maxTokens: s.maxTokens ?? undefined,
-    contextWindow: s.contextWindow ?? undefined,
+    max_tokens: s.maxTokens ?? undefined,
+    context_window: s.contextWindow ?? undefined,
   }
+}
+
+function validateStoryAgentInput(input) {
+  const message = cleanText(input?.message, '智能体指令', 4000)
+  const skill = input?.skill === undefined || input?.skill === null ? null : cleanText(input.skill, 'Skill 名称', 80)
+  if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
+  const payload = input?.payload && typeof input.payload === 'object' && !Array.isArray(input.payload) ? input.payload : {}
+  if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
+  return { message, skill, payload }
+}
+
+async function enrichStoryAgentPayload(userId, payload) {
+  const projectId = payload.project_id || payload.projectId
+  const chapterId = payload.chapter_id || payload.chapterId
+  if (!projectId) return payload
+  const db = await loadDb()
+  const project = findOr404(db, projectId, userId)
+  const chapter = chapterId ? chapterOr404(db, project, chapterId) : null
+  const writingContext = chapter
+    ? buildWritingContext(db, project, chapter)
+    : { version: 1, project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' } }
+  return { ...payload, writing_context: writingContext }
+}
+
+async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000)) {
+  const validated = validateStoryAgentInput(input)
+  const payload = await enrichStoryAgentPayload(user.id, validated.payload)
+  const modelConfig = await getUserModelConfig(user)
+  const body = { message: validated.message, skill: validated.skill, payload }
+  if (modelConfig) body.model_config = modelConfig
+  const response = await fetch(`${aiServiceUrl}/v1/agents/story`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+    body: JSON.stringify(body),
+    signal,
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok) throw Object.assign(new Error(result?.detail || 'Story Agent 处理失败'), { status: response.status >= 500 ? 502 : response.status })
+  return result
+}
+
+function writingTaskPublic(task) {
+  return {
+    id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
+    skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
+    statusMessage: task.statusMessage || '', result: task.result || null, error: task.error || null,
+    cancelRequested: task.cancelRequested === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
+  }
+}
+
+async function executeWritingTask(taskId, userId) {
+  const controller = new AbortController()
+  writingTaskControllers.set(taskId, controller)
+  try {
+    const prepared = await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId && item.userId === userId)
+      const user = db.users.find((item) => item.id === userId)
+      if (!task || !user || task.status === 'cancelled' || task.cancelRequested) return null
+      task.status = 'running'
+      task.progress = 15
+      task.statusMessage = '正在构建写作上下文'
+      task.updatedAt = new Date().toISOString()
+      return { input: task.input, user }
+    })
+    if (!prepared) return
+    await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId)
+      if (task && task.status === 'running') {
+        task.progress = 35
+        task.statusMessage = '正在执行 AI Skill'
+        task.updatedAt = new Date().toISOString()
+      }
+    })
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])
+    const result = await invokeStoryAgent(prepared.user, prepared.input, signal)
+    await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId)
+      if (!task || task.status === 'cancelled' || task.cancelRequested) return
+      task.status = 'completed'
+      task.progress = 100
+      task.statusMessage = 'AI Skill 执行完成'
+      task.result = result
+      task.updatedAt = new Date().toISOString()
+    })
+  } catch (error) {
+    await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId)
+      if (!task) return
+      if (controller.signal.aborted || task.cancelRequested) {
+        task.status = 'cancelled'
+        task.statusMessage = '任务已取消'
+      } else {
+        task.status = 'failed'
+        task.statusMessage = 'AI Skill 执行失败'
+        task.error = isNetworkError(error) ? 'AI 服务暂不可用' : error.message || 'AI Skill 执行失败'
+      }
+      task.updatedAt = new Date().toISOString()
+    }).catch(() => undefined)
+  } finally {
+    writingTaskControllers.delete(taskId)
+  }
+}
+
+async function requestWritingProposal(user, session) {
+  const modelConfig = await getUserModelConfig(user)
+  const body = {
+    requirements: session.requirements,
+    messages: (session.messages || []).map(({ role, text }) => ({ role, text })),
+  }
+  if (modelConfig) body.model_config = modelConfig
+  const response = await fetch(`${aiServiceUrl}/v1/assistants/writing/proposal`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) throw Object.assign(new Error(payload?.detail || '写作助手生成方案失败'), { status: response.status >= 500 ? 502 : response.status })
+  return payload
 }
 
 app.get('/api/settings', async (req, res, next) => {
@@ -488,7 +839,7 @@ app.post('/api/ai/models', async (req, res, next) => {
     const models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     res.json({ models })
   } catch (error) {
-    if (error.name === 'TimeoutError' || error.cause?.code === 'ECONNREFUSED') {
+    if (isNetworkError(error)) {
       next(Object.assign(new Error('模型服务暂不可用'), { status: 503 }))
       return
     }
@@ -506,7 +857,7 @@ app.get('/api/ai/skills', async (req, res, next) => {
     if (!response.ok) throw Object.assign(new Error(payload?.detail || 'Skill 目录读取失败'), { status: response.status >= 500 ? 502 : response.status })
     res.json(payload)
   } catch (error) {
-    if (error.name === 'TimeoutError' || error.cause?.code === 'ECONNREFUSED') {
+    if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
       return
     }
@@ -516,27 +867,85 @@ app.get('/api/ai/skills', async (req, res, next) => {
 
 app.post('/api/ai/agent/runs', async (req, res, next) => {
   try {
-    const message = cleanText(req.body?.message, '智能体指令', 4000)
-    const skill = req.body?.skill === undefined || req.body?.skill === null ? null : cleanText(req.body.skill, 'Skill 名称', 80)
-    if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
-    const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
-    const modelConfig = await getUserModelConfig(req.user)
-    const body = { message, skill, payload }
-    if (modelConfig) body.model_config = modelConfig
-    const response = await fetch(`${aiServiceUrl}/v1/agents/story`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
-    })
-    const result = await response.json().catch(() => null)
-    if (!response.ok) throw Object.assign(new Error(result?.detail || 'Story Agent 处理失败'), { status: response.status >= 500 ? 502 : response.status })
-    res.json(result)
+    res.json(await invokeStoryAgent(req.user, req.body || {}))
   } catch (error) {
-    if (error.name === 'TimeoutError' || error.cause?.code === 'ECONNREFUSED') {
+    if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
       return
     }
+    next(error)
+  }
+})
+
+app.get('/api/ai/tasks', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const projectId = req.query.projectId ? String(req.query.projectId) : ''
+    if (projectId) findOr404(db, projectId, req.user.id)
+    const tasks = db.writingTasks
+      .filter((task) => task.userId === req.user.id && (!projectId || task.projectId === projectId))
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+      .slice(0, 50)
+      .map(writingTaskPublic)
+    res.json({ tasks })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/ai/tasks/:taskId', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const task = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
+    if (!task) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
+    res.json({ task: writingTaskPublic(task) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/tasks', async (req, res, next) => {
+  try {
+    const input = validateStoryAgentInput(req.body || {})
+    const projectId = input.payload.project_id || input.payload.projectId || null
+    const chapterId = input.payload.chapter_id || input.payload.chapterId || null
+    if (projectId) {
+      const db = await loadDb()
+      const project = findOr404(db, projectId, req.user.id)
+      if (chapterId) chapterOr404(db, project, chapterId)
+    }
+    const timestamp = new Date().toISOString()
+    const task = {
+      id: crypto.randomUUID(), userId: req.user.id, projectId, chapterId: chapterId == null ? null : String(chapterId),
+      skill: input.skill, message: input.message, input, status: 'queued', progress: 0,
+      statusMessage: '任务已排队', result: null, error: null, cancelRequested: false,
+      createdAt: timestamp, updatedAt: timestamp,
+    }
+    await updateDb((db) => {
+      db.writingTasks = [task, ...db.writingTasks].slice(0, 500)
+    })
+    queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
+    res.status(202).json({ task: writingTaskPublic(task) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/tasks/:taskId/cancel', async (req, res, next) => {
+  try {
+    const task = await updateDb((db) => {
+      const current = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
+      if (!current) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) return current
+      current.cancelRequested = true
+      current.status = 'cancelled'
+      current.statusMessage = '任务已取消'
+      current.updatedAt = new Date().toISOString()
+      return current
+    })
+    writingTaskControllers.get(task.id)?.abort()
+    res.json({ task: writingTaskPublic(task) })
+  } catch (error) {
     next(error)
   }
 })
@@ -571,10 +980,125 @@ app.post('/api/ai/reviews/chapter', async (req, res, next) => {
     }
     res.json(payload)
   } catch (error) {
-    if (error.name === 'TimeoutError' || error.cause?.code === 'ECONNREFUSED') {
+    if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
       return
     }
+    next(error)
+  }
+})
+
+app.get('/api/writing-assistant/session', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    res.json({ session: writingSessionPublic(db.writingSessions[req.user.id]) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/writing-assistant/messages', async (req, res, next) => {
+  try {
+    const message = cleanText(req.body?.message, '助手消息', 4000)
+    const prepared = await updateDb((db) => {
+      let session = db.writingSessions[req.user.id]
+      if (!session || session.userId !== req.user.id || req.body?.restart === true) {
+        session = createWritingSession(req.user.id)
+        db.writingSessions[req.user.id] = session
+      }
+      if (session.phase === 'writing') {
+        session = createWritingSession(req.user.id)
+        db.writingSessions[req.user.id] = session
+      }
+      appendWritingMessage(session, 'user', message)
+      if (session.phase === 'awaiting_confirmation') {
+        const reply = '建书方案已经准备好，请先确认创建，或取消后重新开始。'
+        appendWritingMessage(session, 'assistant', reply)
+        return { session: writingSessionPublic(session), reply, missing: [] }
+      }
+      session.requirements = mergeWritingRequirements(session.requirements, message)
+      session.selectedSkill = session.requirements.type === '短篇' ? 'story-short-write' : session.requirements.type === '长篇' ? 'story-long-write' : null
+      const missing = missingWritingRequirements(session.requirements)
+      if (missing.length) {
+        const reply = writingQuestion(missing)
+        appendWritingMessage(session, 'assistant', reply)
+        return { session: writingSessionPublic(session), reply, missing }
+      }
+      return { session: writingSessionPublic(session), reply: '', missing: [] }
+    })
+
+    if (prepared.session.phase === 'awaiting_confirmation') {
+      res.json({ status: 'completed', phase: prepared.session.phase, reply: prepared.reply, missing: [], selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: prepared.session.proposal, session: prepared.session })
+      return
+    }
+    if (prepared.missing.length) {
+      res.json({ status: 'needs_input', phase: 'collecting_requirements', reply: prepared.reply, missing: prepared.missing, selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: null, session: prepared.session })
+      return
+    }
+
+    const generated = await requestWritingProposal(req.user, prepared.session)
+    const updated = await updateDb((db) => {
+      const session = db.writingSessions[req.user.id]
+      if (!session || session.id !== prepared.session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
+      const reply = cleanOptionalText(generated.reply, '助手回复', 4000)
+        || (generated.status === 'needs_model' ? '请先在设置中配置模型，当前创作需求已经保存。' : generated.status === 'failed' ? '方案生成失败，请检查模型配置后重试。' : '建书方案已经准备好，请确认后创建作品。')
+      if (generated.status === 'completed' && generated.proposal) {
+        session.proposal = validateSmartProposal(generated.proposal, session.requirements.type)
+        session.phase = 'awaiting_confirmation'
+      }
+      appendWritingMessage(session, 'assistant', reply)
+      return { session: writingSessionPublic(session), reply }
+    })
+    res.json({
+      status: generated.status,
+      phase: updated.session.phase,
+      reply: updated.reply,
+      missing: generated.missing || [],
+      selectedSkill: updated.session.selectedSkill,
+      requirements: updated.session.requirements,
+      proposal: updated.session.proposal,
+      session: updated.session,
+    })
+  } catch (error) {
+    if (isNetworkError(error)) {
+      next(Object.assign(new Error('AI 服务暂不可用，创作需求已保存'), { status: 503 }))
+      return
+    }
+    next(error)
+  }
+})
+
+app.post('/api/writing-assistant/confirm', async (req, res, next) => {
+  try {
+    const sessionId = cleanText(req.body?.sessionId, '创作会话 ID', 80)
+    const result = await updateDb((db) => {
+      const session = db.writingSessions[req.user.id]
+      if (!session || session.id !== sessionId) throw Object.assign(new Error('创作会话不存在或已过期'), { status: 404 })
+      if (session.projectId) {
+        const project = findOr404(db, session.projectId, req.user.id)
+        return { project, chapters: db.chapters[project.id] || [], duplicate: true }
+      }
+      if (session.phase !== 'awaiting_confirmation' || !session.proposal) throw Object.assign(new Error('建书方案尚未生成，不能确认创建'), { status: 409 })
+      const proposal = validateSmartProposal(req.body?.proposal || session.proposal, session.requirements?.type || '长篇')
+      const created = createProjectWithOutline(db, { userId: req.user.id, proposal })
+      session.phase = 'writing'
+      session.proposal = proposal
+      session.projectId = created.project.id
+      session.selectedSkill = proposal.type === '短篇' ? 'story-short-write' : 'story-long-write'
+      appendWritingMessage(session, 'assistant', `《${created.project.title}》已经创建，可以进入编辑器继续写作。`)
+      return { ...created, duplicate: false }
+    })
+    res.status(result.duplicate ? 200 : 201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/writing-assistant/session', async (req, res, next) => {
+  try {
+    await updateDb((db) => { delete db.writingSessions[req.user.id] })
+    res.status(204).end()
+  } catch (error) {
     next(error)
   }
 })
@@ -609,17 +1133,16 @@ app.get('/api/projects/:projectId', async (req, res, next) => {
 app.post('/api/projects', async (req, res, next) => {
   try {
     const title = cleanText(req.body?.title, '作品名', 80)
-    const type = cleanText(req.body?.type || '长篇', '篇幅', 20)
+    const type = cleanEnum(req.body?.type || '长篇', '篇幅', PROJECT_TYPES)
     const genre = cleanText(req.body?.genre || '现代言情', '题材', 30)
+    const style = cleanOptionalText(req.body?.style, '流派', 80)
     const timestamp = new Date().toISOString()
-    const project = {
-      id: crypto.randomUUID(), userId: req.user.id, title, type, genre, status: '构思中', progress: 0, words: '0', updated: '刚刚', chapters: 0,
-      tone: '等待你的第一笔设定', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
-    }
+    const project = createProjectBase({ userId: req.user.id, title, type, genre, style, tone: '等待你的第一笔设定', timestamp })
     const result = await updateDb((db) => {
       db.projects = [project, ...db.projects.map((item) => item.userId === req.user.id ? { ...item, isActive: false } : item)]
       db.chapters[project.id] = []
       db.drafts[project.id] = {}
+      db.editHistory[project.id] = {}
       createChapterRecord(db, project, '第一章')
       return project
     })
@@ -629,10 +1152,20 @@ app.post('/api/projects', async (req, res, next) => {
   }
 })
 
+app.post('/api/projects/smart', async (req, res, next) => {
+  try {
+    const proposal = validateSmartProposal(req.body, req.body?.type || '长篇')
+    const result = await updateDb((db) => createProjectWithOutline(db, { userId: req.user.id, proposal }))
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.post('/api/projects/import', async (req, res, next) => {
   try {
     const title = cleanText(req.body?.title, '作品名', 80)
-    const type = cleanText(req.body?.type || '长篇', '篇幅', 20)
+    const type = cleanEnum(req.body?.type || '长篇', '篇幅', PROJECT_TYPES)
     const genre = cleanText(req.body?.genre || '未分类', '题材', 30)
     if (!Array.isArray(req.body?.chapters) || !req.body.chapters.length) {
       throw Object.assign(new Error('至少需要一个章节'), { status: 400 })
@@ -651,14 +1184,12 @@ app.post('/api/projects/import', async (req, res, next) => {
     if (totalCharacters > 10_000_000) throw Object.assign(new Error('单次导入正文不能超过 10,000,000 个字符'), { status: 400 })
 
     const timestamp = new Date().toISOString()
-    const project = {
-      id: crypto.randomUUID(), userId: req.user.id, title, type, genre, status: '构思中', progress: 0, words: '0', updated: '刚刚', chapters: 0,
-      tone: '由本地文稿导入，可继续补充设定与创作基调', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
-    }
+    const project = createProjectBase({ userId: req.user.id, title, type, genre, tone: '由本地文稿导入，可继续补充设定与创作基调', timestamp })
     const result = await updateDb((db) => {
       db.projects = [project, ...db.projects.map((item) => item.userId === req.user.id ? { ...item, isActive: false } : item)]
       db.chapters[project.id] = []
       db.drafts[project.id] = {}
+      db.editHistory[project.id] = {}
       for (const imported of importedChapters) {
         const chapter = createChapterRecord(db, project, imported.title)
         db.drafts[project.id][String(chapter.id)] = imported.content
@@ -680,9 +1211,10 @@ app.patch('/api/projects/:projectId', async (req, res, next) => {
     const result = await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       if (req.body.title !== undefined) project.title = cleanText(req.body.title, '作品名', 80)
-      if (req.body.type !== undefined) project.type = cleanText(req.body.type, '篇幅', 20)
+      if (req.body.type !== undefined) project.type = cleanEnum(req.body.type, '篇幅', PROJECT_TYPES)
       if (req.body.genre !== undefined) project.genre = cleanText(req.body.genre, '题材', 30)
-      if (req.body.status !== undefined) project.status = cleanText(req.body.status, '状态', 20)
+      if (req.body.style !== undefined) project.style = cleanOptionalText(req.body.style, '流派', 80)
+      if (req.body.status !== undefined) project.status = cleanEnum(req.body.status, '状态', PROJECT_STATUSES)
       if (req.body.tone !== undefined) project.tone = cleanText(req.body.tone, '创作基调', 160)
       if (req.body.progress !== undefined) {
         const progress = Number(req.body.progress)
@@ -706,7 +1238,10 @@ app.delete('/api/projects/:projectId', async (req, res, next) => {
       db.projects = db.projects.filter((project) => project.id !== req.params.projectId)
       delete db.chapters[req.params.projectId]
       delete db.drafts[req.params.projectId]
+      delete db.editHistory[req.params.projectId]
       db.ideas = db.ideas.filter((idea) => idea.projectId !== req.params.projectId)
+      db.foreshadows = db.foreshadows.filter((item) => item.projectId !== req.params.projectId)
+      db.writingTasks = db.writingTasks.filter((item) => item.projectId !== req.params.projectId)
       db.writingLog = db.writingLog.filter((entry) => entry.projectId !== req.params.projectId)
     })
     res.status(204).end()
@@ -745,7 +1280,7 @@ app.patch('/api/projects/:projectId/chapters/:chapterId', async (req, res, next)
       const chapter = (db.chapters[project.id] || []).find((item) => String(item.id) === req.params.chapterId)
       if (!chapter) throw Object.assign(new Error('章节不存在'), { status: 404 })
       if (req.body.title !== undefined) chapter.title = cleanText(req.body.title, '章节标题', 100)
-      if (req.body.state !== undefined) chapter.state = cleanText(req.body.state, '章节状态', 20)
+      if (req.body.state !== undefined) chapter.state = cleanEnum(req.body.state, '章节状态', CHAPTER_STATES)
       chapter.updatedAt = new Date().toISOString()
       touchProject(project, chapter.updatedAt)
       return chapter
@@ -767,6 +1302,26 @@ app.delete('/api/projects/:projectId/chapters/:chapterId', async (req, res, next
       const [deleted] = chapters.splice(chapterIndex, 1)
       const drafts = draftMapFor(db, project.id)
       delete drafts[String(deleted.id)]
+      if (db.editHistory[project.id]) delete db.editHistory[project.id][String(deleted.id)]
+      const deletedChapterId = String(deleted.id)
+      for (const foreshadow of db.foreshadows.filter((item) => item.projectId === project.id)) {
+        let changed = false
+        if (String(foreshadow.plantChapterId || '') === deletedChapterId) {
+          foreshadow.plantChapterId = null
+          if (foreshadow.status === 'planted') foreshadow.status = 'planned'
+          changed = true
+        }
+        if (String(foreshadow.targetChapterId || '') === deletedChapterId) {
+          foreshadow.targetChapterId = null
+          changed = true
+        }
+        if (String(foreshadow.resolvedChapterId || '') === deletedChapterId) {
+          foreshadow.resolvedChapterId = null
+          if (foreshadow.status === 'resolved') foreshadow.status = foreshadow.plantChapterId ? 'planted' : 'planned'
+          changed = true
+        }
+        if (changed) foreshadow.updatedAt = new Date().toISOString()
+      }
       db.writingLog = db.writingLog.filter((entry) => !(entry.projectId === project.id && String(entry.chapterId) === String(deleted.id)))
       recalculateProject(db, project)
       touchProject(project)
@@ -818,6 +1373,44 @@ app.get('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, n
   }
 })
 
+app.get('/api/projects/:projectId/chapters/:chapterId/history', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const project = findOr404(db, req.params.projectId, req.user.id)
+    const chapter = chapterOr404(db, project, req.params.chapterId)
+    const snapshots = db.editHistory[project.id]?.[String(chapter.id)] || []
+    res.json({ snapshots })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/projects/:projectId/chapters/:chapterId/context', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const project = findOr404(db, req.params.projectId, req.user.id)
+    const chapter = chapterOr404(db, project, req.params.chapterId)
+    res.json({ context: buildWritingContext(db, project, chapter) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/projects/:projectId/chapters/:chapterId/history', async (req, res, next) => {
+  try {
+    if (typeof req.body?.content !== 'string') throw Object.assign(new Error('历史正文必须是文本'), { status: 400 })
+    if (req.body.content.length > 500000) throw Object.assign(new Error('历史正文不能超过 500,000 个字符'), { status: 400 })
+    const result = await updateDb((db) => {
+      const project = findOr404(db, req.params.projectId, req.user.id)
+      const chapter = chapterOr404(db, project, req.params.chapterId)
+      return recordEditSnapshot(db, project.id, chapter.id, req.body.content)
+    })
+    res.status(result.duplicate ? 200 : 201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.put('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, next) => {
   try {
     if (typeof req.body?.content !== 'string') throw Object.assign(new Error('正文必须是文本'), { status: 400 })
@@ -828,6 +1421,91 @@ app.put('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, n
       return { ...saveChapterContent(db, project, chapter, req.body.content, req.user.id), stats: dashboardStats(db, req.user.id) }
     })
     res.json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/foreshadows', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const projectId = req.query.projectId ? String(req.query.projectId) : ''
+    if (projectId) findOr404(db, projectId, req.user.id)
+    const status = req.query.status ? String(req.query.status) : ''
+    if (status && !FORESHADOW_STATUSES.has(status)) throw Object.assign(new Error('伏笔状态无效'), { status: 400 })
+    const foreshadows = db.foreshadows
+      .filter((item) => item.userId === req.user.id && (!projectId || item.projectId === projectId) && (!status || item.status === status))
+      .sort((left, right) => Number(right.importance || 0) - Number(left.importance || 0) || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+    res.json({ foreshadows })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/foreshadows', async (req, res, next) => {
+  try {
+    const title = cleanText(req.body?.title, '伏笔标题', 120)
+    const content = cleanText(req.body?.content, '伏笔内容', 2000)
+    const result = await updateDb((db) => {
+      const project = findOr404(db, req.body?.projectId, req.user.id)
+      const plantChapterId = req.body?.plantChapterId == null || req.body?.plantChapterId === '' ? null : String(chapterOr404(db, project, req.body.plantChapterId).id)
+      const targetChapterId = req.body?.targetChapterId == null || req.body?.targetChapterId === '' ? null : String(chapterOr404(db, project, req.body.targetChapterId).id)
+      const resolvedChapterId = req.body?.resolvedChapterId == null || req.body?.resolvedChapterId === '' ? null : String(chapterOr404(db, project, req.body.resolvedChapterId).id)
+      const status = req.body?.status || 'planned'
+      if (!FORESHADOW_STATUSES.has(status)) throw Object.assign(new Error('伏笔状态无效'), { status: 400 })
+      const timestamp = new Date().toISOString()
+      const foreshadow = {
+        id: crypto.randomUUID(), userId: req.user.id, projectId: project.id, title, content,
+        status, category: cleanOptionalText(req.body?.category, '伏笔分类', 40),
+        importance: cleanIntegerRange(req.body?.importance, '重要性', 1, 5, 3),
+        plantChapterId, targetChapterId, resolvedChapterId: status === 'resolved' ? resolvedChapterId : null,
+        createdAt: timestamp, updatedAt: timestamp,
+      }
+      db.foreshadows = [foreshadow, ...db.foreshadows]
+      return foreshadow
+    })
+    res.status(201).json({ foreshadow: result })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.patch('/api/foreshadows/:foreshadowId', async (req, res, next) => {
+  try {
+    const result = await updateDb((db) => {
+      const foreshadow = db.foreshadows.find((item) => item.id === req.params.foreshadowId && item.userId === req.user.id)
+      if (!foreshadow) throw Object.assign(new Error('伏笔不存在'), { status: 404 })
+      const project = findOr404(db, foreshadow.projectId, req.user.id)
+      if (req.body.title !== undefined) foreshadow.title = cleanText(req.body.title, '伏笔标题', 120)
+      if (req.body.content !== undefined) foreshadow.content = cleanText(req.body.content, '伏笔内容', 2000)
+      if (req.body.category !== undefined) foreshadow.category = cleanOptionalText(req.body.category, '伏笔分类', 40)
+      if (req.body.importance !== undefined) foreshadow.importance = cleanIntegerRange(req.body.importance, '重要性', 1, 5, 3)
+      if (req.body.status !== undefined) {
+        if (!FORESHADOW_STATUSES.has(req.body.status)) throw Object.assign(new Error('伏笔状态无效'), { status: 400 })
+        foreshadow.status = req.body.status
+      }
+      if (req.body.plantChapterId !== undefined) foreshadow.plantChapterId = req.body.plantChapterId == null || req.body.plantChapterId === '' ? null : String(chapterOr404(db, project, req.body.plantChapterId).id)
+      if (req.body.targetChapterId !== undefined) foreshadow.targetChapterId = req.body.targetChapterId == null || req.body.targetChapterId === '' ? null : String(chapterOr404(db, project, req.body.targetChapterId).id)
+      if (req.body.resolvedChapterId !== undefined) foreshadow.resolvedChapterId = req.body.resolvedChapterId == null || req.body.resolvedChapterId === '' ? null : String(chapterOr404(db, project, req.body.resolvedChapterId).id)
+      if (foreshadow.status === 'resolved' && !foreshadow.resolvedChapterId && req.body.chapterId !== undefined) foreshadow.resolvedChapterId = String(chapterOr404(db, project, req.body.chapterId).id)
+      if (foreshadow.status !== 'resolved') foreshadow.resolvedChapterId = null
+      foreshadow.updatedAt = new Date().toISOString()
+      return foreshadow
+    })
+    res.json({ foreshadow: result })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/foreshadows/:foreshadowId', async (req, res, next) => {
+  try {
+    await updateDb((db) => {
+      const exists = db.foreshadows.some((item) => item.id === req.params.foreshadowId && item.userId === req.user.id)
+      if (!exists) throw Object.assign(new Error('伏笔不存在'), { status: 404 })
+      db.foreshadows = db.foreshadows.filter((item) => item.id !== req.params.foreshadowId)
+    })
+    res.status(204).end()
   } catch (error) {
     next(error)
   }
@@ -925,7 +1603,23 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: status >= 500 ? '服务器内部错误' : error.message })
 })
 
-const server = app.listen(port, host, () => {
+await updateDb((db) => {
+  const timestamp = new Date().toISOString()
+  for (const task of db.writingTasks) {
+    if (!['queued', 'running'].includes(task.status)) continue
+    task.status = 'failed'
+    task.error = '服务曾在任务执行期间重启，请重新提交任务'
+    task.statusMessage = '任务因服务重启中断'
+    task.updatedAt = timestamp
+  }
+})
+
+const server = app.listen(port, host, (error) => {
+  if (error) {
+    console.error(`Story API failed to listen on ${host}:${port}: ${error.message}`)
+    process.exitCode = 1
+    return
+  }
   const address = server.address()
   const actualPort = typeof address === 'object' && address ? address.port : port
   console.log(`Story API listening on http://${host}:${actualPort}`)

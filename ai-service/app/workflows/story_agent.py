@@ -77,7 +77,12 @@ def invoke_skill_tool(state: AgentState) -> dict[str, Any]:
         )
         result_status = result.get('status') if isinstance(result, dict) else None
         invocation_status = result_status if result_status in {'needs_model', 'failed', 'needs_input'} else 'completed'
-        return {'invocation_status': invocation_status, 'tool_result': result}
+        update: dict[str, Any] = {'invocation_status': invocation_status, 'tool_result': result}
+        routed_skill = result.get('skill') if isinstance(result, dict) else None
+        if state['selected_skill'] == 'story' and isinstance(routed_skill, str):
+            update['selected_skill'] = routed_skill
+            update['route'] = f"story-router -> {routed_skill}"
+        return update
     except SkillNotReadyError as error:
         return {
             'invocation_status': 'needs_adapter',

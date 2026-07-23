@@ -4,5 +4,10 @@ export const seed = {
   projects: [],
   chapters: {},
   drafts: {},
+  editHistory: {},
+  writingSessions: {},
+  writingTasks: [],
+  foreshadows: [],
+  storyMemories: [],
   ideas: [],
 }

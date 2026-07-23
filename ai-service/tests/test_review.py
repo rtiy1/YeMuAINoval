@@ -183,6 +183,45 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'needs_model')
 
+    async def test_writing_assistant_proposal_preserves_short_skill_mapping(self):
+        response = await self.client.post(
+            '/v1/assistants/writing/proposal',
+            headers={'x-service-token': 'test-service-token'},
+            json={
+                'requirements': {
+                    'type': '短篇',
+                    'genre': '悬疑推理',
+                    'style': '克苏鲁悬疑',
+                    'premise': '失踪记者留下三封来自未来的信。',
+                },
+                'messages': [{'role': 'user', 'text': '我想写一个短篇悬疑故事。'}],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'needs_model')
+        self.assertEqual(payload['selected_skill'], 'story-short-write')
+        self.assertEqual(payload['phase'], 'collecting_requirements')
+
+    async def test_story_router_uses_current_project_length(self):
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={
+                'message': '继续写当前章节',
+                'skill': 'story',
+                'payload': {
+                    'preferred_writing_skill': 'story-short-write',
+                    'project_type': '短篇',
+                    'content': '',
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['selected_skill'], 'story-short-write')
+        self.assertEqual(payload['status'], 'needs_model')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -105,6 +105,9 @@ def route_story_intent(message: str) -> str:
 def _execute_story_router(invocation: SkillInvocation) -> dict[str, Any]:
     capability = get_story_skill_capability()
     target = route_story_intent(invocation.instruction)
+    preferred = invocation.payload.get('preferred_writing_skill')
+    if preferred in {'story-long-write', 'story-short-write'} and target in {'story', 'story-long-write', 'story-short-write'}:
+        target = preferred
     if target == 'story':
         return {
             'status': 'needs_input',

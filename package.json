@@ -12,6 +12,9 @@
     "test:api": "node server/smoke-test.mjs",
     "test:ai": "node server/ai-task.mjs test",
     "test:integration": "node server/ai-gateway-test.mjs",
+    "db:status": "node server/db-cli.mjs status",
+    "db:import-json": "node server/db-cli.mjs import",
+    "db:export-json": "node server/db-cli.mjs export",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -24,9 +27,9 @@
     "helmet": "latest",
     "jose": "latest",
     "lucide-react": "latest",
-    "vite": "latest",
+    "pg": "^8.22.0",
     "react": "latest",
-    "react-dom": "latest"
-  },
-  "devDependencies": {}
+    "react-dom": "latest",
+    "vite": "latest"
+  }
 }

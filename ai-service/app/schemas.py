@@ -83,3 +83,46 @@ class StoryAgentResponse(BaseModel):
     selected_skill: str
     route: str
     result: dict[str, Any]
+
+
+class WritingAssistantMessage(BaseModel):
+    role: Literal['user', 'assistant']
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class WritingRequirements(BaseModel):
+    type: Literal['长篇', '短篇']
+    genre: str = Field(min_length=1, max_length=30)
+    style: str = Field(min_length=1, max_length=80)
+    premise: str = Field(min_length=1, max_length=2000)
+    platform: str = Field(default='通用网文', max_length=40)
+    title: str = Field(default='', max_length=80)
+
+
+class WritingProposalChapter(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=5000)
+
+
+class WritingProposal(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+    type: Literal['长篇', '短篇']
+    genre: str = Field(min_length=1, max_length=30)
+    style: str = Field(min_length=1, max_length=80)
+    tone: str = Field(min_length=1, max_length=2000)
+    chapters: list[WritingProposalChapter] = Field(min_length=1, max_length=100)
+
+
+class WritingProposalRequest(BaseModel):
+    requirements: WritingRequirements
+    messages: list[WritingAssistantMessage] = Field(default_factory=list, max_length=20)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
+
+
+class WritingProposalResponse(BaseModel):
+    status: Literal['completed', 'needs_model', 'failed']
+    phase: Literal['collecting_requirements', 'awaiting_confirmation']
+    reply: str
+    missing: list[str] = Field(default_factory=list)
+    selected_skill: Literal['story-long-write', 'story-short-write']
+    proposal: WritingProposal | None = None
