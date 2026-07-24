@@ -67,6 +67,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { api } from './api'
+import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
@@ -236,6 +237,7 @@ function App() {
   const [activeChapterId, setActiveChapterId] = useState(null)
   const [ideas, setIdeas] = useState([])
   const [foreshadows, setForeshadows] = useState([])
+  const [storyMemories, setStoryMemories] = useState([])
   const [dashboard, setDashboard] = useState(null)
   const [showNew, setShowNew] = useState(false)
   const [importProjectOpen, setImportProjectOpen] = useState(false)
@@ -262,6 +264,7 @@ function App() {
   const [runnerLoading, setRunnerLoading] = useState(false)
   const [runnerResult, setRunnerResult] = useState(null)
   const [editorApplyRequest, setEditorApplyRequest] = useState(null)
+  const [lastAiRestore, setLastAiRestore] = useState(null)
   const [deslopLoading, setDeslopLoading] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -280,6 +283,7 @@ function App() {
   const savedDraftRef = useRef('')
   const activeDraftKeyRef = useRef('')
   const saveQueueRef = useRef(Promise.resolve())
+  const skillSubmissionRef = useRef(null)
 
   useEffect(() => {
     let mounted = true
@@ -303,14 +307,15 @@ function App() {
   useEffect(() => {
     if (!user) return undefined
     let mounted = true
-    Promise.all([api.getProjects(), api.getIdeas(), api.getForeshadows(), api.getDashboard()])
-      .then(([projectResponse, ideaResponse, foreshadowResponse, dashboardResponse]) => {
+    Promise.all([api.getProjects(), api.getIdeas(), api.getForeshadows(), api.getStoryMemories(), api.getDashboard()])
+      .then(([projectResponse, ideaResponse, foreshadowResponse, memoryResponse, dashboardResponse]) => {
         if (!mounted) return
         const nextProjects = projectResponse.projects || []
         setProjects(nextProjects)
         setActiveProject((current) => nextProjects.find((project) => project.id === current?.id) || nextProjects.find((project) => project.isActive) || nextProjects[0])
         if (ideaResponse.ideas) setIdeas(ideaResponse.ideas)
         setForeshadows(foreshadowResponse.foreshadows || [])
+        setStoryMemories(memoryResponse.memories || [])
         setDashboard(dashboardResponse.stats || null)
       })
       .catch(() => {
@@ -892,9 +897,49 @@ function App() {
     }
   }
 
-  function createHistorySnapshot(content) {
-    if (!currentProject?.id || activeChapterId == null || typeof content !== 'string') return
-    void api.createChapterHistory(currentProject.id, activeChapterId, content).catch(() => undefined)
+  async function deleteStoryMemory(memory) {
+    try {
+      await api.deleteStoryMemory(memory.id)
+      setStoryMemories((current) => current.filter((item) => item.id !== memory.id))
+      setToast('作品记忆已删除')
+      return true
+    } catch (error) {
+      setToast(error.message || '删除作品记忆失败')
+      return false
+    }
+  }
+
+  async function updateStoryMemory(memory, updates) {
+    try {
+      const response = await api.updateStoryMemory(memory.id, updates)
+      setStoryMemories((current) => current.map((item) => item.id === memory.id ? response.memory : item))
+      setToast(response.memory.status === 'archived' ? '作品记忆已归档' : '作品记忆已更新')
+      return response.memory
+    } catch (error) {
+      setToast(error.message || '更新作品记忆失败')
+      return null
+    }
+  }
+
+  async function confirmStoryMemories(candidates) {
+    if (!currentProject?.id || !candidates.length) return false
+    try {
+      const response = await api.confirmStoryMemories(currentProject.id, candidates.map((candidate) => ({ ...candidate, characterName: candidate.characterName ?? candidate.character_name ?? '', replacesMemoryId: candidate.replacesMemoryId ?? candidate.replaces_memory_id ?? null, sourceChapterId: activeChapterId })))
+      setStoryMemories((current) => [...response.created, ...response.updated, ...current.filter((item) => !response.updated.some((updated) => updated.id === item.id))])
+      setToast(`已确认 ${response.created.length + response.updated.length} 条作品记忆`)
+      return true
+    } catch (error) {
+      setToast(error.message || '确认作品记忆失败')
+      return false
+    }
+  }
+
+  async function createHistorySnapshot(content, options = {}) {
+    if (!currentProject?.id || activeChapterId == null || typeof content !== 'string') return null
+    const request = api.createChapterHistory(currentProject.id, activeChapterId, content)
+    if (options.awaitSave) return request
+    void request.catch(() => undefined)
+    return null
   }
 
   async function reviewChapter(title = '未命名章节') {
@@ -928,22 +973,36 @@ function App() {
     setRunnerOpen(true)
   }
 
-  function applySkillOutput(content, mode) {
+  function applySkillOutput(content, mode, meta = {}) {
     const output = String(content || '').trim()
     if (!output || activeSection !== 'editor' || !currentProject?.id || activeChapterId == null) {
       setToast('当前没有可写入的章节')
       return
     }
-    setEditorApplyRequest({ id: `${Date.now()}-${Math.random()}`, content: output, mode, context: runnerContext })
+    const selectionStart = Number(runnerContext?.selectionStart)
+    const selectionEnd = Number(runnerContext?.selectionEnd)
+    const hasSelection = runnerContext?.selectedText && Number.isFinite(selectionStart) && Number.isFinite(selectionEnd) && selectionEnd > selectionStart
+    const sourceMatches = hasSelection
+      ? draft.slice(selectionStart, selectionEnd) === runnerContext.selectedText
+      : draft === (runnerContext?.sourceText ?? draft)
+    if (String(runnerContext?.chapterId ?? '') !== String(activeChapterId) || !sourceMatches) {
+      setToast('正文已发生变化，这份 AI 建议已过期，请重新运行 Skill')
+      return
+    }
+    setEditorApplyRequest({ id: `${Date.now()}-${Math.random()}`, content: output, mode, context: runnerContext, meta })
     setRunnerOpen(false)
   }
 
   async function runSkill(skill, message, payload = {}) {
-    setRunnerLoading(true)
+    if (skillSubmissionRef.current) return skillSubmissionRef.current
+    const idempotencyKey = `${skill}:${payload.project_id || ''}:${payload.chapter_id || ''}:${Date.now()}`
+    const request = (async () => {
+      setRunnerLoading(true)
     setRunnerResult(null)
     setToast(`已提交 ${skillMeta[skill]?.label || skill} 任务`)
     try {
-      const created = await api.createAiTask({ message, skill, payload })
+      const created = await api.createAiTask({ message, skill, payload, idempotencyKey })
+      if (created.task.reused) setToast('已复用进行中的相同任务')
       setAiTasks((current) => [created.task, ...current.filter((task) => task.id !== created.task.id)].slice(0, 50))
       let task = created.task
       for (let attempt = 0; attempt < 240 && ['queued', 'running'].includes(task.status); attempt += 1) {
@@ -953,7 +1012,7 @@ function App() {
         setAiTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].slice(0, 50))
       }
       if (task.status === 'completed' && task.result) {
-        setRunnerResult(task.result)
+        setRunnerResult({ ...task.result, taskId: task.id })
         setToast(`${skillMeta[skill]?.label || skill} 执行完成 · ${task.result.status}`)
       } else {
         setRunnerResult({ status: task.status === 'cancelled' ? 'failed' : 'failed', result: { message: task.error || task.statusMessage || 'AI 任务未完成' }, selected_skill: skill, route: 'task' })
@@ -964,6 +1023,23 @@ function App() {
       setToast(error.message)
     } finally {
       setRunnerLoading(false)
+    }
+    })()
+    skillSubmissionRef.current = request
+    try {
+      return await request
+    } finally {
+      skillSubmissionRef.current = null
+    }
+  }
+
+  async function retryAiTask(taskId) {
+    try {
+      const response = await api.retryAiTask(taskId)
+      setAiTasks((current) => [response.task, ...current.filter((task) => task.id !== response.task.id)].slice(0, 50))
+      setToast(`已重新提交任务 · 第 ${response.task.attempt || 2} 次`)
+    } catch (error) {
+      setToast(error.message || '重新提交 AI 任务失败')
     }
   }
 
@@ -1137,7 +1213,7 @@ function App() {
         <div className="content-wrap">
           {activeSection === 'overview' && <Overview projects={projects} stats={dashboard} onOpen={openProject} onNew={() => setShowNew(true)} onNavigate={selectSection} />}
           {activeSection === 'assistant' && <WritingAssistantPage session={writingAssistantSession} loading={writingAssistantLoading} skills={skillCatalog} onSend={sendWritingAssistant} onClear={clearWritingAssistant} onReviewProposal={() => writingAssistantSession?.proposal && setSmartProposal({ ...writingAssistantSession.proposal, assistantSessionId: writingAssistantSession.id })} onOpenSettings={() => setSettingsOpen(true)} onNotify={notify} onOpenProject={(projectId) => { const project = projects.find((item) => item.id === projectId); if (project) openProject(project); else selectSection('works') }} />}
-          {activeSection === 'editor' && currentProject && <Editor project={currentProject} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} onBack={() => selectSection('overview')} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenSkill={openSkillRunner} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
+          {activeSection === 'editor' && currentProject && <Editor project={currentProject} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onBack={() => selectSection('overview')} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenSkill={openSkillRunner} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>没有打开的作品</h2><p>从「我的作品」中选择一个作品开始写作。</p><button className="primary-button" onClick={() => selectSection('works')}><BookOpen size={17} />前往我的作品</button></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onSmartCreate={() => selectSection('assistant')} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
@@ -1160,16 +1236,16 @@ function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} onNotify={notify} />}
       {searchOpen && <SearchModal projects={projects} chapters={chapters} ideas={ideas} onClose={() => setSearchOpen(false)} onOpenProject={openProject} onSelectChapter={selectChapter} onNavigate={selectSection} />}
       {editProjectTarget && <EditProjectModal project={editProjectTarget} onClose={() => setEditProjectTarget(null)} onSave={(updates) => { editProject(editProjectTarget, updates); setEditProjectTarget(null) }} />}
-      <AiTaskTray tasks={aiTasks} onCancel={cancelAiTask} />
+      <AiTaskTray tasks={aiTasks} onCancel={cancelAiTask} onRetry={retryAiTask} />
       {toast && <div className={`toast ${toastKind(toast)}`} role="status" aria-live="polite">{toastKind(toast) === 'loading' ? <LoaderCircle size={16} className="spin" /> : toastKind(toast) === 'error' ? <Info size={16} /> : <Check size={16} />}{toast}</div>}
     </div>
   )
 }
 
-function AiTaskTray({ tasks, onCancel }) {
+function AiTaskTray({ tasks, onCancel, onRetry }) {
   const visible = tasks.filter((task) => ['queued', 'running'].includes(task.status) || task.createdAt && Date.now() - new Date(task.createdAt).getTime() < 90_000).slice(0, 4)
   if (!visible.length) return null
-  return <aside className="ai-task-tray" aria-label="AI 任务"><div className="ai-task-tray-heading"><span><Clock3 size={14} />AI 任务</span><small>{visible.filter((task) => ['queued', 'running'].includes(task.status)).length} 进行中</small></div>{visible.map((task) => <div className="ai-task-item" key={task.id}><div className="ai-task-item-top"><strong>{task.skill || '智能路由'}</strong><span>{task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : `${task.progress || 0}%`}</span></div><p>{task.statusMessage || task.message}</p>{['queued', 'running'].includes(task.status) && <button type="button" className="icon-button small" aria-label="取消 AI 任务" title="取消 AI 任务" onClick={() => onCancel(task.id)}><X size={13} /></button>}<div className="ai-task-progress"><span style={{ width: `${Math.max(3, Number(task.progress) || 0)}%` }} /></div></div>)}</aside>
+  return <aside className="ai-task-tray" aria-label="AI 任务"><div className="ai-task-tray-heading"><span><Clock3 size={14} />AI 任务</span><small>{visible.filter((task) => ['queued', 'running'].includes(task.status)).length} 进行中</small></div>{visible.map((task) => <div className="ai-task-item" key={task.id}><div className="ai-task-item-top"><strong>{task.skill || '智能路由'}</strong><span>{task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : `${task.progress || 0}%`}</span></div><p>{task.statusMessage || task.message}</p>{['queued', 'running'].includes(task.status) && <button type="button" className="icon-button small" aria-label="取消 AI 任务" title="取消 AI 任务" onClick={() => onCancel(task.id)}><X size={13} /></button>}{['failed', 'cancelled'].includes(task.status) && <button type="button" className="icon-button small task-retry-button" aria-label="重试 AI 任务" title="使用原参数重新提交" onClick={() => onRetry(task.id)}><Redo2 size={13} /></button>}<div className="ai-task-progress"><span style={{ width: `${Math.max(3, Number(task.progress) || 0)}%` }} /></div></div>)}</aside>
 }
 
 function AuthScreen({ mode, error, onModeChange, onSubmit }) {
@@ -1494,7 +1570,7 @@ function ProjectCard({ project, onOpen }) {
   return <button className="project-card" onClick={() => onOpen(project)}><div className={`card-cover ${project.cover}`}><span>{project.title.slice(0, 1)}</span></div><div className="card-content"><div className="card-topline"><span>{project.type}</span><MoreHorizontal size={15} /></div><h3>{project.title}</h3><p>{project.genre}</p><div className="card-footer"><span>{project.words} 字</span><span>{project.progress}%</span></div><div className="mini-progress"><span style={{ width: `${project.progress}%` }} /></div></div></button>
 }
 
-function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, onBack, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenSkill, applyRequest, onApplyRequestHandled }) {
+function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onBack, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenSkill, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
   const [renameValue, setRenameValue] = useState('')
@@ -1518,6 +1594,10 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
   const [splitPosition, setSplitPosition] = useState(0)
   const [splitTitle, setSplitTitle] = useState('')
   const [splitLoading, setSplitLoading] = useState(false)
+  const [memoryReviewOpen, setMemoryReviewOpen] = useState(false)
+  const [memoryCandidates, setMemoryCandidates] = useState([])
+  const [memoryLoading, setMemoryLoading] = useState(false)
+  const [memoryEditing, setMemoryEditing] = useState(null)
   const [exportingBook, setExportingBook] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState([])
@@ -1582,28 +1662,52 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
       onApplyRequestHandled?.()
       return
     }
-    const contextMatches = String(applyRequest.context?.chapterId ?? '') === String(displayChapter.id)
-    const requestedStart = contextMatches ? Number(applyRequest.context?.selectionStart) : draft.length
-    const requestedEnd = contextMatches ? Number(applyRequest.context?.selectionEnd) : requestedStart
-    const start = Number.isFinite(requestedStart) ? Math.min(Math.max(0, requestedStart), draft.length) : draft.length
-    const end = Number.isFinite(requestedEnd) ? Math.min(Math.max(start, requestedEnd), draft.length) : start
-    let next = content
-    let cursor = content.length
-    if (applyRequest.mode !== 'replace') {
-      const insertingAtEnd = start === draft.length && end === draft.length
-      const separator = insertingAtEnd && draft.trim() && !draft.endsWith('\n') ? '\n\n' : ''
-      next = `${draft.slice(0, start)}${separator}${content}${draft.slice(end)}`
-      cursor = start + separator.length + content.length
+    let cancelled = false
+    async function apply() {
+      const contextMatches = String(applyRequest.context?.chapterId ?? '') === String(displayChapter.id)
+      const requestedStart = contextMatches ? Number(applyRequest.context?.selectionStart) : draft.length
+      const requestedEnd = contextMatches ? Number(applyRequest.context?.selectionEnd) : requestedStart
+      const start = Number.isFinite(requestedStart) ? Math.min(Math.max(0, requestedStart), draft.length) : draft.length
+      const end = Number.isFinite(requestedEnd) ? Math.min(Math.max(start, requestedEnd), draft.length) : start
+      const hasSelection = end > start && Boolean(applyRequest.context?.selectedText)
+      const sourceMatches = contextMatches && (hasSelection
+        ? draft.slice(start, end) === applyRequest.context.selectedText
+        : draft === (applyRequest.context?.sourceText ?? draft))
+      if (!sourceMatches) {
+        onApplyRequestHandled?.()
+        onNotify('正文已发生变化，这份 AI 建议已过期')
+        return
+      }
+      try {
+        await onCreateHistory?.(draft, { awaitSave: true })
+      } catch {
+        onNotify('应用前快照保存失败，已取消修改')
+        onApplyRequestHandled?.()
+        return
+      }
+      if (cancelled) return
+      let next = content
+      let cursor = content.length
+      if (applyRequest.mode !== 'replace') {
+        const insertingAtEnd = start === draft.length && end === draft.length
+        const separator = insertingAtEnd && draft.trim() && !draft.endsWith('\n') ? '\n\n' : ''
+        next = `${draft.slice(0, start)}${separator}${content}${draft.slice(end)}`
+        cursor = start + separator.length + content.length
+      }
+      const before = draft
+      commitDraftChange(next)
+      onAiApplied?.({ chapterId: displayChapter.id, content: before, taskId: applyRequest.meta?.taskId || null })
+      onApplyRequestHandled?.()
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.focus()
+        textarea.setSelectionRange(cursor, cursor)
+      })
+      onNotify(applyRequest.mode === 'replace' ? 'AI 结果已替换当前正文，可一键恢复' : end > start ? 'AI 修改已应用，可一键恢复' : 'AI 结果已插入正文，可一键恢复')
     }
-    commitDraftChange(next)
-    onApplyRequestHandled?.()
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current
-      if (!textarea) return
-      textarea.focus()
-      textarea.setSelectionRange(cursor, cursor)
-    })
-    onNotify(applyRequest.mode === 'replace' ? 'AI 结果已替换当前正文' : end > start ? 'AI 结果已替换选中内容' : 'AI 结果已插入正文')
+    void apply()
+    return () => { cancelled = true }
   }, [applyRequest?.id, draftLoading])
 
   function startRename(chapter) {
@@ -1885,6 +1989,43 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
     })
   }
 
+  async function extractMemories() {
+    if (!project?.id || !displayChapter?.id || !draft.trim() || memoryLoading) {
+      if (!draft.trim()) onNotify('先写一点正文，再整理本章记忆')
+      return
+    }
+    setMemoryLoading(true)
+    try {
+      const response = await api.extractChapterMemories(project.id, displayChapter.id)
+      if (response.status !== 'completed') {
+        onNotify(response.message || '作品记忆整理未完成')
+        return
+      }
+      setMemoryCandidates((response.candidates || []).map((candidate, index) => ({ ...candidate, id: `candidate-${index}`, selected: true })))
+      setMemoryReviewOpen(true)
+    } catch (error) {
+      onNotify(error.message || '作品记忆整理失败')
+    } finally {
+      setMemoryLoading(false)
+    }
+  }
+
+  async function saveMemoryCandidates() {
+    const selected = memoryCandidates.filter((candidate) => candidate.selected).map(({ id, selected, ...candidate }) => candidate)
+    if (!selected.length) {
+      onNotify('请至少选择一条候选记忆')
+      return
+    }
+    setMemoryLoading(true)
+    const saved = await onConfirmStoryMemories?.(selected)
+    setMemoryLoading(false)
+    if (saved) setMemoryReviewOpen(false)
+  }
+
+  function updateMemoryCandidate(id, field, value) {
+    setMemoryCandidates((current) => current.map((candidate) => candidate.id === id ? { ...candidate, [field]: value } : candidate))
+  }
+
   function openEditorSkill(skill, command) {
     const textarea = textareaRef.current
     const selectionStart = textarea?.selectionStart ?? draft.length
@@ -1901,6 +2042,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
       selectionStart,
       selectionEnd,
       selectedText: draft.slice(selectionStart, selectionEnd).slice(0, 20000),
+      sourceText: draft,
     })
   }
 
@@ -1968,6 +2110,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
     <div className={`page editor-page ${readingMode ? 'reading-mode' : ''} ${assistantOpen ? '' : 'assistant-hidden'}`}>
       <div className="editor-topline">
         <button className="back-button" onClick={onBack}><ArrowLeft size={17} />返回工作台</button>
+        {lastAiRestore && String(lastAiRestore.chapterId) === String(displayChapter.id) && <button className="ai-restore-button" onClick={() => { commitDraftChange(lastAiRestore.content); onAiRestored?.(); onNotify('已恢复应用 AI 修改前的正文') }}><Undo2 size={14} />恢复 AI 修改前正文</button>}
         <button className="editor-status" onClick={() => draftStatus === 'error' && onSave()} title={draftStatus === 'error' ? '点击重试保存' : statusText}>
           <span className={draftStatus === 'saved' ? 'saved-dot' : 'unsaved-dot'} />{draftLoading ? '正在载入章节' : statusText}
         </button>
@@ -2001,10 +2144,11 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
               { label: '大纲', icon: BookMarked },
               { label: '人物', icon: UsersRound },
               { label: '词条', icon: Tags },
+              { label: '记忆', icon: BrainCircuit },
               { label: '伏笔', icon: Pin },
             ].map(({ label, icon: Icon }) => <button key={label} role="tab" aria-selected={railTab === label} className={railTab === label ? 'active' : ''} onClick={() => setRailTab(label)}><Icon size={13} /><span>{label}</span></button>)}
           </div>
-          <div className="rail-header"><strong>{railTab === '目录' ? `章节目录 · ${chapters.length}` : railTab === '伏笔' ? `伏笔 · ${projectForeshadows.length}` : railTab}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className="icon-button small" aria-label="打开章节大纲" title="打开章节大纲" onClick={() => setOutlineOpen(true)}><BookOpen size={15} /></button><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : setIdeaPickerOpen(true)}><Plus size={16} /></button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
+          <div className="rail-header"><strong>{railTab === '目录' ? `章节目录 · ${chapters.length}` : railTab === '伏笔' ? `伏笔 · ${projectForeshadows.length}` : railTab === '记忆' ? `作品记忆 · ${storyMemories.filter((item) => item.status !== 'archived').length}` : railTab}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className="icon-button small" aria-label="打开章节大纲" title="打开章节大纲" onClick={() => setOutlineOpen(true)}><BookOpen size={15} /></button><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : railTab === '记忆' ? extractMemories() : setIdeaPickerOpen(true)}>{railTab === '记忆' && memoryLoading ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}</button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
           {railTab === '目录' && <div className="chapter-list">
             {visibleChapters.map((chapter) => {
               const current = String(chapter.id) === String(displayChapter.id)
@@ -2022,6 +2166,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
           {railTab === '大纲' && <div className="rail-outline-list">{chapters.length ? chapters.map((chapter) => <button key={chapter.id} onClick={() => selectEditorChapter(chapter)}><span>{String(chapter.id).padStart(2, '0')}</span><strong>{chapter.title}</strong><small>{chapter.words} 字</small></button>) : <p className="rail-empty">还没有章节大纲。</p>}</div>}
           {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
           {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
+          {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={extractMemories} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
           {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}
         </aside>
@@ -2100,9 +2245,23 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
     {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setHistoryOpen(false)}><div className="modal history-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">编辑器</span><h2>历史记录</h2></div><button className="icon-button" aria-label="关闭历史记录" onClick={() => setHistoryOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">选择一个快照恢复到正文，当前内容会保留在重做栈中。</p><div className="history-list">{historyLoading ? <div className="history-empty"><LoaderCircle size={22} className="spin" /><p>正在读取历史快照</p></div> : historyRef.current.past.length ? historyRef.current.past.slice().reverse().map((snapshot, index) => { const version = historyRef.current.past.length - index; const preview = snapshot.replace(/\s+/g, ' ').trim(); return <button type="button" className="history-item" key={`${version}-${index}`} onClick={() => restoreHistory(snapshot)}><span className="history-item-version">版本 {version}</span><span className="history-item-copy"><strong>{formatNumber(snapshot.replace(/\s/g, '').length)} 字</strong><small>{preview || '（空正文）'}</small></span><ChevronRight size={16} /></button> }) : <div className="history-empty"><History size={22} /><p>还没有可恢复的编辑快照</p><small>继续输入一会儿，历史记录会自动生成。</small></div>}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setHistoryOpen(false)}>关闭</button></div></div></div>}
     {frequencyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setFrequencyOpen(false)}><div className="modal frequency-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">正文分析</span><h2>高频词</h2></div><button className="icon-button" aria-label="关闭高频词" onClick={() => setFrequencyOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">统计当前章节中重复出现的词语，点击词语可回到正文定位第一次出现的位置。</p><div className="frequency-cloud">{frequentWords.map(([word, count]) => <button type="button" className="frequency-chip" key={word} onClick={() => locateFrequentWord(word)}><strong>{word}</strong><small>{count} 次</small></button>)}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setFrequencyOpen(false)}>关闭</button></div></div></div>}
     {splitOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !splitLoading && setSplitOpen(false)}><div className="modal split-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">本地章节操作</span><h2>按光标拆章</h2></div><button className="icon-button" aria-label="关闭拆分章节" disabled={splitLoading} onClick={() => setSplitOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">以当前光标位置为分界，在本地拆分正文并保存为新章节；此操作不调用 AI。</p><form onSubmit={confirmSplit}><label>新章节标题<input autoFocus value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} maxLength={100} placeholder="例如：潮声之后" /></label><div className="split-preview"><div><span>当前章节保留</span><strong>{formatNumber(splitBefore.length)} 字</strong><p>{splitBefore.slice(-90) || '拆分位置之前暂无正文'}</p></div><ChevronRight size={17} /><div><span>新章节内容</span><strong>{formatNumber(splitAfter.length)} 字</strong><p>{splitAfter.slice(0, 90) || '拆分位置之后暂无正文'}</p></div></div><div className="modal-actions"><button type="button" className="secondary-button" disabled={splitLoading} onClick={() => setSplitOpen(false)}>取消</button><button type="submit" className="dark-button" disabled={splitLoading || !splitTitle.trim()}>{splitLoading ? <LoaderCircle size={16} className="spin" /> : <Split size={16} />}{splitLoading ? '拆分中' : '确认拆分'}</button></div></form></div></div>}
+    {memoryReviewOpen && <MemoryReviewModal candidates={memoryCandidates} loading={memoryLoading} onChange={updateMemoryCandidate} onClose={() => setMemoryReviewOpen(false)} onSave={saveMemoryCandidates} />}
+    {memoryEditing && <MemoryEditModal memory={memoryEditing} onClose={() => setMemoryEditing(null)} onSave={async (updates) => { const saved = await onUpdateStoryMemory?.(memoryEditing, updates); if (saved) setMemoryEditing(null) }} onDelete={async () => { const deleted = await onDeleteStoryMemory?.(memoryEditing); if (deleted) setMemoryEditing(null) }} />}
     {foreshadowOpen && <ForeshadowModal project={project} chapters={chapters} target={foreshadowTarget} onClose={() => { setForeshadowOpen(false); setForeshadowTarget(null) }} onCreate={onCreateForeshadow} onUpdate={onUpdateForeshadow} onDelete={onDeleteForeshadow} />}
     {ideaPickerOpen && <MaterialPicker ideas={ideas} projectId={project?.id} onClose={() => setIdeaPickerOpen(false)} onInsert={insertMaterial} />}
   </>
+}
+
+const memoryTypeLabels = { character_state: '角色状态', event: '已发生事件', world_rule: '世界规则', chapter_summary: '章节摘要', canon_fact: '不可违背事实', voice_habit: '语言习惯' }
+
+function MemoryReviewModal({ candidates, loading, onChange, onClose, onSave }) {
+  return <div className="modal-backdrop memory-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal memory-review-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">夜雨 · 作品记忆</span><h2>确认本章长期事实</h2><p className="modal-subtitle">以下只是候选项，勾选并修订后才会进入作品记忆。</p></div><button className="icon-button" disabled={loading} onClick={onClose}><X size={18} /></button></div><div className="memory-candidate-list">{candidates.map((candidate) => <article className={`memory-candidate ${candidate.selected ? 'selected' : ''}`} key={candidate.id}><label className="memory-candidate-toggle"><input type="checkbox" checked={candidate.selected} onChange={(event) => onChange(candidate.id, 'selected', event.target.checked)} /><span>{memoryTypeLabels[candidate.type] || candidate.type}</span><small>重要性 {candidate.importance || 3}</small></label><div className="form-row"><label>类型<select value={candidate.type} onChange={(event) => onChange(candidate.id, 'type', event.target.value)}>{Object.entries(memoryTypeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>标题<input value={candidate.title} maxLength={160} onChange={(event) => onChange(candidate.id, 'title', event.target.value)} /></label></div><label>内容<textarea rows={3} maxLength={4000} value={candidate.content} onChange={(event) => onChange(candidate.id, 'content', event.target.value)} /></label><div className="form-row"><label>角色<input value={candidate.character_name || ''} maxLength={80} onChange={(event) => onChange(candidate.id, 'character_name', event.target.value)} placeholder="可选" /></label><label>重要性<select value={candidate.importance || 3} onChange={(event) => onChange(candidate.id, 'importance', Number(event.target.value))}>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div>{candidate.reason && <p className="memory-candidate-reason"><Info size={13} />{candidate.reason}</p>}</article>)}</div><div className="modal-actions"><button className="secondary-button" disabled={loading} onClick={onClose}>取消</button><button className="dark-button" disabled={loading || !candidates.some((item) => item.selected)} onClick={onSave}>{loading ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{loading ? '写入中' : `确认 ${candidates.filter((item) => item.selected).length} 条`}</button></div></div></div>
+}
+
+function MemoryEditModal({ memory, onClose, onSave, onDelete }) {
+  const [form, setForm] = useState({ type: memory.type, title: memory.title, content: memory.content, characterName: memory.characterName || '', importance: memory.importance || 3, status: memory.status || 'active' })
+  function update(field, value) { setForm((current) => ({ ...current, [field]: value })) }
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal memory-edit-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">作品记忆</span><h2>编辑长期事实</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></div><div className="form-row"><label>类型<select value={form.type} onChange={(event) => update('type', event.target.value)}>{Object.entries(memoryTypeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>重要性<select value={form.importance} onChange={(event) => update('importance', Number(event.target.value))}>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}</option>)}</select></label></div><label>标题<input value={form.title} maxLength={160} onChange={(event) => update('title', event.target.value)} /></label><label>内容<textarea rows={5} value={form.content} maxLength={4000} onChange={(event) => update('content', event.target.value)} /></label><label>角色<input value={form.characterName} maxLength={80} onChange={(event) => update('characterName', event.target.value)} placeholder="可选" /></label><div className="modal-actions"><button className="danger-text-button" onClick={onDelete}><Trash2 size={15} />删除</button><button className="secondary-button" onClick={() => onSave({ status: form.status === 'archived' ? 'active' : 'archived' })}>{form.status === 'archived' ? '恢复' : '归档'}</button><button className="dark-button" onClick={() => onSave(form)}><Check size={15} />保存</button></div></div></div>
 }
 
 const foreshadowStatusLabels = { planned: '计划中', planted: '已埋入', resolved: '已回收', abandoned: '已放弃' }
@@ -2529,11 +2688,13 @@ function SkillRunnerModal({ skill, skills, loading, result, onClose, onRun, draf
     preferred_writing_skill: context.preferredWritingSkill || '',
     chapter_title: context.chapterTitle || '',
     selected_text: context.selectedText || '',
+    source_text: context.sourceText || draft,
     selection_start: context.selectionStart,
     selection_end: context.selectionEnd,
   } : {}
   const payload = needsContent ? { ...contextPayload, content: useDraft ? draft : customContent } : context ? { ...contextPayload, content: draft } : contextPayload
   if (context?.selectedText) payload.rewrite_mode = rewriteMode
+  if (canApplyToDraft && skill !== 'story-review') payload.reviewable_edit = true
 
   function handleRun(event) {
     event.preventDefault()
@@ -2589,8 +2750,19 @@ function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, 
   const r = result.result || {}
   const statusLabel = { completed: '完成', needs_model: '需模型', needs_input: '需输入', needs_adapter: '需适配', failed: '失败' }[result.status] || result.status
   const isCompleted = result.status === 'completed'
-  const outputText = typeof r.output === 'string' ? r.output : r.output ? JSON.stringify(r.output, null, 2) : ''
+  const proposal = r.edit_proposal || null
+  const outputText = typeof (proposal?.revised_text ?? r.output) === 'string' ? (proposal?.revised_text ?? r.output) : r.output ? JSON.stringify(r.output, null, 2) : ''
   const [copied, setCopied] = useState(false)
+  const [hunks, setHunks] = useState(() => buildEditHunks(originalText, outputText, proposal?.blocks || []))
+
+  useEffect(() => {
+    setHunks(buildEditHunks(originalText, outputText, proposal?.blocks || []))
+  }, [originalText, outputText, proposal])
+
+  const changedHunks = hunks.filter((hunk) => hunk.type !== 'equal')
+  const reviewedText = changedHunks.length ? composeAcceptedText(hunks) : outputText
+  function setAllHunks(accepted) { setHunks((current) => current.map((hunk) => hunk.type === 'equal' ? hunk : { ...hunk, accepted })) }
+  function toggleHunk(id, accepted) { setHunks((current) => current.map((hunk) => hunk.id === id ? { ...hunk, accepted } : hunk)) }
 
   async function copyOutput() {
     if (!outputText) return
@@ -2647,8 +2819,9 @@ function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, 
 
     {outputText && (
       <div className="skill-result-output">
-        <div className="skill-result-output-heading"><span className="skill-result-output-label">{isCompleted ? '输出' : '执行详情'}</span>{isCompleted && <div className="skill-result-output-actions"><button type="button" onClick={copyOutput}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制结果'}</button>{smartCreateMode && onUseSmartResult && <button type="button" className="smart-result-button" onClick={() => onUseSmartResult(result)}><BookPlus size={14} />使用方案创建</button>}{canApplyToDraft && onApplyOutput && <><button type="button" onClick={() => onApplyOutput(outputText, 'insert')}><PenLine size={14} />{hasSelection ? '替换选中内容' : '插入正文'}</button><button type="button" className="replace-output" onClick={() => onApplyOutput(outputText, 'replace')}><Wand2 size={14} />替换全文</button></>}</div>}</div>
-        {originalText ? <div className="skill-result-comparison"><div><span>原文选区</span><pre>{originalText}</pre></div><div><span>AI 新内容</span><pre>{outputText}</pre></div></div> : <pre className="skill-result-output-text">{outputText}</pre>}
+        <div className="skill-result-output-heading"><span className="skill-result-output-label">{proposal ? '可审阅修改建议' : isCompleted ? '输出' : '执行详情'}</span>{isCompleted && <div className="skill-result-output-actions"><button type="button" onClick={copyOutput}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制结果'}</button>{proposal && changedHunks.length > 0 && <><button type="button" onClick={() => setAllHunks(true)}>全部接受</button><button type="button" onClick={() => setAllHunks(false)}>全部拒绝</button></>}{smartCreateMode && onUseSmartResult && <button type="button" className="smart-result-button" onClick={() => onUseSmartResult(result)}><BookPlus size={14} />使用方案创建</button>}{canApplyToDraft && onApplyOutput && <><button type="button" onClick={() => onApplyOutput(reviewedText, 'insert', { taskId: result.taskId, summary: proposal?.summary || '' })}><PenLine size={14} />{hasSelection ? '应用已接受修改' : '插入正文'}</button><button type="button" className="replace-output" onClick={() => onApplyOutput(reviewedText, 'replace', { taskId: result.taskId, summary: proposal?.summary || '' })}><Wand2 size={14} />替换全文</button></>}</div>}</div>
+        {proposal && proposal.summary && <p className="edit-proposal-summary"><Info size={14} />{proposal.summary}。以下内容尚未修改正文。</p>}
+        {proposal && changedHunks.length > 0 ? <div className="edit-hunk-list">{changedHunks.map((hunk, index) => <article className={`edit-hunk ${hunk.accepted ? 'accepted' : 'rejected'}`} key={hunk.id}><header><strong>修改 {index + 1}</strong><span>{hunk.type === 'insert' ? '新增' : hunk.type === 'delete' ? '删除' : '替换'}</span><div><button className={hunk.accepted ? 'active' : ''} onClick={() => toggleHunk(hunk.id, true)}><Check size={13} />接受</button><button className={!hunk.accepted ? 'active' : ''} onClick={() => toggleHunk(hunk.id, false)}><X size={13} />拒绝</button></div></header>{hunk.original && <div className="edit-hunk-copy original"><span>原文</span><pre>{hunk.original}</pre></div>}{hunk.replacement && <div className="edit-hunk-copy replacement"><span>建议</span><pre>{hunk.replacement}</pre></div>}<p><Info size={13} />{hunk.reason}</p></article>)}</div> : originalText ? <div className="skill-result-comparison"><div><span>原文选区</span><pre>{originalText}</pre></div><div><span>AI 新内容</span><pre>{outputText}</pre></div></div> : <pre className="skill-result-output-text">{outputText}</pre>}
       </div>
     )}
 

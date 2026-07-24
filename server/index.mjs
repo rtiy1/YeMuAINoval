@@ -36,6 +36,9 @@ const PROJECT_TYPES = new Set(['长篇', '短篇', '参考书'])
 const PROJECT_STATUSES = new Set(['构思中', '连载中', '已完结', '已拆文'])
 const CHAPTER_STATES = new Set(['draft', 'current', 'done'])
 const FORESHADOW_STATUSES = new Set(['planned', 'planted', 'resolved', 'abandoned'])
+const STORY_MEMORY_TYPES = new Set(['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit'])
+const STORY_MEMORY_STATUSES = new Set(['active', 'archived'])
+const STORY_MEMORY_ORDER = new Map(['canon_fact', 'world_rule', 'character_state', 'voice_habit', 'event', 'chapter_summary'].map((type, index) => [type, index]))
 const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
 const GENRE_SUGGESTIONS = ['现代言情', '古代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世', '历史架空']
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
@@ -277,6 +280,29 @@ function saveChapterContent(db, project, chapter, content, userId) {
   return { content, chapter, project }
 }
 
+function cleanStoryMemoryInput(input, { partial = false } = {}) {
+  const memory = {}
+  if (!partial || input?.type !== undefined) memory.type = cleanEnum(input?.type, '记忆类型', STORY_MEMORY_TYPES)
+  if (!partial || input?.title !== undefined) memory.title = cleanText(input?.title, '记忆标题', 160)
+  if (!partial || input?.content !== undefined) memory.content = cleanText(input?.content, '记忆内容', 4000)
+  if (!partial || input?.status !== undefined) memory.status = cleanEnum(input?.status || 'active', '记忆状态', STORY_MEMORY_STATUSES)
+  if (!partial || input?.importance !== undefined) memory.importance = cleanIntegerRange(input?.importance, '记忆重要性', 1, 5, 3)
+  if (!partial || input?.characterName !== undefined) memory.characterName = cleanOptionalText(input?.characterName, '角色名', 80)
+  if (!partial || input?.tags !== undefined) memory.tags = cleanTags(input?.tags)
+  return memory
+}
+
+function createStoryMemoryRecord(db, userId, project, input, timestamp = new Date().toISOString()) {
+  const values = cleanStoryMemoryInput(input)
+  const sourceChapterId = input?.sourceChapterId == null || input?.sourceChapterId === ''
+    ? null
+    : String(chapterOr404(db, project, input.sourceChapterId).id)
+  return {
+    id: crypto.randomUUID(), userId, projectId: project.id, ...values, sourceChapterId,
+    createdAt: timestamp, updatedAt: timestamp,
+  }
+}
+
 function contextExcerpt(value, maxLength = 1600) {
   const text = typeof value === 'string' ? value.trim() : ''
   if (text.length <= maxLength) return text
@@ -305,11 +331,28 @@ function buildWritingContext(db, project, chapter) {
     .sort((left, right) => Number(right.importance || 0) - Number(left.importance || 0))
     .slice(0, 20)
     .map((item) => ({ title: item.title, content: contextExcerpt(item.content, 700), status: item.status, targetChapterId: item.targetChapterId || null }))
+  const storyMemory = db.storyMemories
+    .filter((item) => item.userId === project.userId && item.projectId === project.id && item.status !== 'archived')
+    .sort((left, right) => (STORY_MEMORY_ORDER.get(left.type) ?? 99) - (STORY_MEMORY_ORDER.get(right.type) ?? 99)
+      || Number(right.importance || 0) - Number(left.importance || 0)
+      || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+    .slice(0, 60)
+    .map((item) => ({
+      id: item.id,
+      type: item.type,
+      title: item.title,
+      content: contextExcerpt(item.content, 900),
+      importance: item.importance || 3,
+      characterName: item.characterName || '',
+      sourceChapterId: item.sourceChapterId || null,
+      tags: item.tags || [],
+    }))
   return {
-    version: 1,
+    version: 2,
     project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
     chapter: { id: chapter.id, title: chapter.title, outline: contextExcerpt(chapter.outline, 2400), state: chapter.state },
     previousChapters,
+    storyMemory,
     materials,
     unresolvedForeshadows,
   }
@@ -720,11 +763,40 @@ async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_00
   return result
 }
 
+function taskRequestKey(userId, input, idempotencyKey = '') {
+  const stable = JSON.stringify({ userId, skill: input.skill || null, message: input.message, payload: input.payload })
+  return crypto.createHash('sha256').update(idempotencyKey ? `${userId}:${idempotencyKey}` : stable).digest('hex')
+}
+
+function classifyTaskError(error, cancelled = false) {
+  if (cancelled) return { errorCode: 'cancelled', retryable: true, message: '任务已取消，可重新提交' }
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return { errorCode: 'timeout', retryable: true, message: '模型响应超时，可重试此任务' }
+  if (isNetworkError(error) || error?.status === 502 || error?.status === 503) return { errorCode: 'service_unavailable', retryable: true, message: 'AI 服务暂不可用，可稍后重试' }
+  if (error?.status === 400 && /模型|API Key|密钥|model/i.test(error?.message || '')) return { errorCode: 'model_config', retryable: false, message: '模型配置无效，请在设置中检查地址、密钥和模型名' }
+  if (/上下文|字符|token|length/i.test(error?.message || '')) return { errorCode: 'context_too_large', retryable: false, message: '输入上下文过长，请缩短正文或素材后重试' }
+  return { errorCode: 'unknown', retryable: true, message: error?.message || 'AI Skill 执行失败' }
+}
+
+function createWritingTask({ userId, input, requestKey, parentTaskId = null, attempt = 1 }) {
+  const projectId = input.payload.project_id || input.payload.projectId || null
+  const chapterId = input.payload.chapter_id || input.payload.chapterId || null
+  const timestamp = new Date().toISOString()
+  return {
+    id: crypto.randomUUID(), userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
+    skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt,
+    status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
+    result: null, error: null, errorCode: null, retryable: false, cancelRequested: false,
+    createdAt: timestamp, updatedAt: timestamp,
+  }
+}
+
 function writingTaskPublic(task) {
   return {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
     skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
     statusMessage: task.statusMessage || '', result: task.result || null, error: task.error || null,
+    errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
+    parentTaskId: task.parentTaskId || null, reused: task.reused === true,
     cancelRequested: task.cancelRequested === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
   }
 }
@@ -767,14 +839,17 @@ async function executeWritingTask(taskId, userId) {
     await updateDb((db) => {
       const task = db.writingTasks.find((item) => item.id === taskId)
       if (!task) return
-      if (controller.signal.aborted || task.cancelRequested) {
+      const classified = classifyTaskError(error, controller.signal.aborted || task.cancelRequested)
+      if (classified.errorCode === 'cancelled') {
         task.status = 'cancelled'
-        task.statusMessage = '任务已取消'
+        task.statusMessage = classified.message
       } else {
         task.status = 'failed'
-        task.statusMessage = 'AI Skill 执行失败'
-        task.error = isNetworkError(error) ? 'AI 服务暂不可用' : error.message || 'AI Skill 执行失败'
+        task.statusMessage = classified.message
+        task.error = classified.message
       }
+      task.errorCode = classified.errorCode
+      task.retryable = classified.retryable
       task.updatedAt = new Date().toISOString()
     }).catch(() => undefined)
   } finally {
@@ -936,17 +1011,45 @@ app.post('/api/ai/tasks', async (req, res, next) => {
       const project = findOr404(db, projectId, req.user.id)
       if (chapterId) chapterOr404(db, project, chapterId)
     }
-    const timestamp = new Date().toISOString()
-    const task = {
-      id: crypto.randomUUID(), userId: req.user.id, projectId, chapterId: chapterId == null ? null : String(chapterId),
-      skill: input.skill, message: input.message, input, status: 'queued', progress: 0,
-      statusMessage: '任务已排队', result: null, error: null, cancelRequested: false,
-      createdAt: timestamp, updatedAt: timestamp,
-    }
-    await updateDb((db) => {
-      db.writingTasks = [task, ...db.writingTasks].slice(0, 500)
+    const idempotencyKey = cleanOptionalText(req.body?.idempotencyKey, '幂等键', 160)
+    const requestKey = taskRequestKey(req.user.id, input, idempotencyKey)
+    let reused = null
+    const task = await updateDb((db) => {
+      const existing = db.writingTasks.find((item) => item.userId === req.user.id && item.requestKey === requestKey && ['queued', 'running'].includes(item.status))
+      if (existing) {
+        reused = existing
+        return existing
+      }
+      const created = createWritingTask({ userId: req.user.id, input, requestKey })
+      db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
+      return created
     })
-    queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
+    if (!reused) queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
+    res.status(reused ? 200 : 202).json({ task: { ...writingTaskPublic(task), reused: Boolean(reused) } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/tasks/:taskId/retry', async (req, res, next) => {
+  try {
+    const task = await updateDb((db) => {
+      const original = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
+      if (!original) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
+      if (!['failed', 'cancelled'].includes(original.status)) throw Object.assign(new Error('只有失败或已取消任务可以重试'), { status: 409 })
+      const existing = db.writingTasks.find((item) => item.parentTaskId === original.id && ['queued', 'running'].includes(item.status))
+      if (existing) return existing
+      const created = createWritingTask({
+        userId: req.user.id,
+        input: original.input,
+        requestKey: `${original.requestKey || taskRequestKey(req.user.id, original.input)}:retry:${(original.attempt || 1) + 1}`,
+        parentTaskId: original.id,
+        attempt: (original.attempt || 1) + 1,
+      })
+      db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
+      return created
+    })
+    if (task.status === 'queued') queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
     res.status(202).json({ task: writingTaskPublic(task) })
   } catch (error) {
     next(error)
@@ -961,7 +1064,9 @@ app.post('/api/ai/tasks/:taskId/cancel', async (req, res, next) => {
       if (['completed', 'failed', 'cancelled'].includes(current.status)) return current
       current.cancelRequested = true
       current.status = 'cancelled'
-      current.statusMessage = '任务已取消'
+      current.statusMessage = '任务已取消，可重新提交'
+      current.errorCode = 'cancelled'
+      current.retryable = true
       current.updatedAt = new Date().toISOString()
       return current
     })
@@ -1268,6 +1373,7 @@ app.delete('/api/projects/:projectId', async (req, res, next) => {
       delete db.editHistory[req.params.projectId]
       db.ideas = db.ideas.filter((idea) => idea.projectId !== req.params.projectId)
       db.foreshadows = db.foreshadows.filter((item) => item.projectId !== req.params.projectId)
+      db.storyMemories = db.storyMemories.filter((item) => item.projectId !== req.params.projectId)
       db.writingTasks = db.writingTasks.filter((item) => item.projectId !== req.params.projectId)
       db.writingLog = db.writingLog.filter((entry) => entry.projectId !== req.params.projectId)
     })
@@ -1348,6 +1454,10 @@ app.delete('/api/projects/:projectId/chapters/:chapterId', async (req, res, next
           changed = true
         }
         if (changed) foreshadow.updatedAt = new Date().toISOString()
+      }
+      for (const memory of db.storyMemories.filter((item) => item.projectId === project.id && String(item.sourceChapterId || '') === deletedChapterId)) {
+        memory.sourceChapterId = null
+        memory.updatedAt = new Date().toISOString()
       }
       db.writingLog = db.writingLog.filter((entry) => !(entry.projectId === project.id && String(entry.chapterId) === String(deleted.id)))
       recalculateProject(db, project)
@@ -1448,6 +1558,122 @@ app.put('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, n
       return { ...saveChapterContent(db, project, chapter, req.body.content, req.user.id), stats: dashboardStats(db, req.user.id) }
     })
     res.json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/story-memories', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const projectId = req.query.projectId ? String(req.query.projectId) : ''
+    if (projectId) findOr404(db, projectId, req.user.id)
+    const memories = db.storyMemories
+      .filter((item) => item.userId === req.user.id && (!projectId || item.projectId === projectId))
+      .sort((left, right) => (STORY_MEMORY_ORDER.get(left.type) ?? 99) - (STORY_MEMORY_ORDER.get(right.type) ?? 99)
+        || Number(right.importance || 0) - Number(left.importance || 0)
+        || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+    res.json({ memories })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/story-memories', async (req, res, next) => {
+  try {
+    const memory = await updateDb((db) => {
+      const project = findOr404(db, req.body?.projectId, req.user.id)
+      const created = createStoryMemoryRecord(db, req.user.id, project, req.body)
+      db.storyMemories = [created, ...db.storyMemories]
+      return created
+    })
+    res.status(201).json({ memory })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/story-memories/batch', async (req, res, next) => {
+  try {
+    if (!Array.isArray(req.body?.memories) || !req.body.memories.length) throw Object.assign(new Error('至少需要一条候选记忆'), { status: 400 })
+    if (req.body.memories.length > 40) throw Object.assign(new Error('单次最多确认 40 条记忆'), { status: 400 })
+    const result = await updateDb((db) => {
+      const project = findOr404(db, req.body?.projectId, req.user.id)
+      const created = []
+      const updated = []
+      const timestamp = new Date().toISOString()
+      for (const input of req.body.memories) {
+        const replacingId = input?.replacesMemoryId || input?.replaces_memory_id
+        const existing = replacingId ? db.storyMemories.find((item) => item.id === replacingId && item.userId === req.user.id && item.projectId === project.id) : null
+        if (existing) {
+          Object.assign(existing, cleanStoryMemoryInput(input), {
+            sourceChapterId: input?.sourceChapterId == null || input?.sourceChapterId === '' ? existing.sourceChapterId : String(chapterOr404(db, project, input.sourceChapterId).id),
+            updatedAt: timestamp,
+          })
+          updated.push(existing)
+        } else {
+          const memory = createStoryMemoryRecord(db, req.user.id, project, input, timestamp)
+          db.storyMemories.unshift(memory)
+          created.push(memory)
+        }
+      }
+      return { created, updated }
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.patch('/api/story-memories/:memoryId', async (req, res, next) => {
+  try {
+    const memory = await updateDb((db) => {
+      const current = db.storyMemories.find((item) => item.id === req.params.memoryId && item.userId === req.user.id)
+      if (!current) throw Object.assign(new Error('作品记忆不存在'), { status: 404 })
+      const project = findOr404(db, current.projectId, req.user.id)
+      Object.assign(current, cleanStoryMemoryInput(req.body, { partial: true }))
+      if (req.body.sourceChapterId !== undefined) current.sourceChapterId = req.body.sourceChapterId == null || req.body.sourceChapterId === '' ? null : String(chapterOr404(db, project, req.body.sourceChapterId).id)
+      current.updatedAt = new Date().toISOString()
+      return current
+    })
+    res.json({ memory })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/story-memories/:memoryId', async (req, res, next) => {
+  try {
+    await updateDb((db) => {
+      const exists = db.storyMemories.some((item) => item.id === req.params.memoryId && item.userId === req.user.id)
+      if (!exists) throw Object.assign(new Error('作品记忆不存在'), { status: 404 })
+      db.storyMemories = db.storyMemories.filter((item) => item.id !== req.params.memoryId)
+    })
+    res.status(204).end()
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/projects/:projectId/chapters/:chapterId/memory-candidates', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const project = findOr404(db, req.params.projectId, req.user.id)
+    const chapter = chapterOr404(db, project, req.params.chapterId)
+    const content = draftMapFor(db, project.id)[String(chapter.id)] || ''
+    if (!content.trim()) throw Object.assign(new Error('当前章节还没有正文'), { status: 400 })
+    const modelConfig = await getUserModelConfig(req.user)
+    const body = { chapter_title: chapter.title, content, writing_context: buildWritingContext(db, project, chapter) }
+    if (modelConfig) body.model_config = modelConfig
+    const response = await fetch(`${aiServiceUrl}/v1/memories/extract`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) throw Object.assign(new Error(payload?.detail || '作品记忆整理失败'), { status: response.status >= 500 ? 502 : response.status })
+    res.json(payload)
   } catch (error) {
     next(error)
   }

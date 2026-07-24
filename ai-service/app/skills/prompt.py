@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from app.config import get_settings
+from app.schemas import EditProposal
 from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
 from app.skills.reference_loader import format_references_block, load_referenced
@@ -59,7 +60,9 @@ def execute_prompt_skill(invocation: SkillInvocation) -> dict[str, Any]:
     writing_context = invocation.payload.get('writing_context')
     if writing_context:
         system_parts.append(
-            '\n\nWRITING CONTEXT (可信的服务端上下文，只能据此保持连续性，不要擅自改写项目设定)：\n'
+            '\n\nWRITING CONTEXT（服务端确认的连续性上下文）：\n'
+            '事实优先级：用户本轮明确要求 > 已确认的 canon_fact/world_rule/character_state 与项目设定 > 当前章节正文和大纲 > 其他记忆、素材与未回收伏笔 > 最近对话 > 一般创作知识。'
+            '冲突时必须指出或提问，不能静默覆盖；未知信息不得补成既定事实。分析报告只能描述为建议，不得声称已修改正文。\n'
             + truncate_for_context(json.dumps(writing_context, ensure_ascii=False, default=str), context_window, override.max_tokens if override else None, 60_000)
         )
     rewrite_mode = invocation.payload.get('rewrite_mode')
@@ -72,13 +75,28 @@ def execute_prompt_skill(invocation: SkillInvocation) -> dict[str, Any]:
         system_parts.append(f'\n\nLOCAL REWRITE MODE:\n{rewrite_instruction} 只返回可直接替换正文的内容，不要加解释。')
     if references_block:
         system_parts.append(f'\n\n{truncate_for_context(references_block, context_window, override.max_tokens if override else None, 200_000)}')
+    reviewable_edit = invocation.payload.get('reviewable_edit') is True and invocation.skill_name != 'story-review'
+    if reviewable_edit:
+        system_parts.append('\n\nEDIT PROPOSAL MODE:\n返回可审阅的结构化修改建议。revised_text 是完整建议稿；blocks 只列发生变化的段落，每项包含 original、replacement 和具体 reason。不要声称建议已经应用到正文。')
     system_prompt = ''.join(system_parts)
 
     try:
-        response = model.invoke([
+        messages = [
             ('system', system_prompt),
             ('human', f'''用户指令：{invocation.instruction}\n\n结构化输入：\n{json.dumps(invocation.payload, ensure_ascii=False, default=str)[:120_000]}'''),
-        ])
+        ]
+        if reviewable_edit:
+            proposal = model.with_structured_output(EditProposal).invoke(messages)
+            return {
+                'status': 'completed',
+                'skill': invocation.skill_name,
+                'execution_scope': 'prompt-only',
+                'references_loaded': references_loaded,
+                'references_truncated': ref_result.truncated,
+                'output': proposal.revised_text,
+                'edit_proposal': proposal.model_dump(),
+            }
+        response = model.invoke(messages)
     except Exception:
         logger.exception('prompt Skill execution failed: %s', invocation.skill_name)
         return {

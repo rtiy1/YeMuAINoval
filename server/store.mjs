@@ -122,6 +122,17 @@ function normalizeDb(db) {
     if (!Object.hasOwn(foreshadow, 'createdAt')) foreshadow.createdAt = null
     if (!Object.hasOwn(foreshadow, 'updatedAt')) foreshadow.updatedAt = foreshadow.createdAt
   }
+  for (const memory of db.storyMemories) {
+    if (!Object.hasOwn(memory, 'userId')) memory.userId = null
+    if (!Object.hasOwn(memory, 'type')) memory.type = 'canon_fact'
+    if (!Object.hasOwn(memory, 'status')) memory.status = 'active'
+    if (!Object.hasOwn(memory, 'importance')) memory.importance = 3
+    if (!Object.hasOwn(memory, 'characterName')) memory.characterName = ''
+    if (!Object.hasOwn(memory, 'sourceChapterId')) memory.sourceChapterId = null
+    if (!Object.hasOwn(memory, 'tags')) memory.tags = []
+    if (!Object.hasOwn(memory, 'createdAt')) memory.createdAt = null
+    if (!Object.hasOwn(memory, 'updatedAt')) memory.updatedAt = memory.createdAt
+  }
   for (const user of db.users) {
     if (!Object.hasOwn(user, 'settings')) user.settings = null
   }

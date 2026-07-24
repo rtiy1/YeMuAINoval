@@ -1,5 +1,47 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700&display=swap');
 
+.ai-restore-button { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; padding: 7px 10px; color: #8a5545; background: #f0ddd4; border-radius: 5px; font-size: 11px; }
+.edit-proposal-summary { display: flex; align-items: flex-start; gap: 7px; margin: 10px 0; padding: 10px; color: #655f57; background: #f0ece3; border-radius: 5px; font-size: 11px; }
+.edit-hunk-list { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
+.edit-hunk { border: 1px solid #ddd8cd; border-radius: 6px; overflow: hidden; background: #faf8f3; }
+.edit-hunk.accepted { border-color: #aebdad; }
+.edit-hunk.rejected { opacity: .66; }
+.edit-hunk header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #ebe7de; }
+.edit-hunk header strong { font-size: 11px; }
+.edit-hunk header > span { color: #898c85; font-size: 9px; }
+.edit-hunk header > div { margin-left: auto; display: flex; gap: 5px; }
+.edit-hunk header button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; color: #777b73; background: transparent; border-radius: 4px; font-size: 9px; }
+.edit-hunk header button.active { color: #fff; background: #4f6555; }
+.edit-hunk header button:last-child.active { background: #8b5b52; }
+.edit-hunk-copy { padding: 9px 11px; }
+.edit-hunk-copy + .edit-hunk-copy { border-top: 1px solid #e3dfd6; }
+.edit-hunk-copy span { color: #92958d; font-size: 9px; }
+.edit-hunk-copy pre { margin: 5px 0 0; white-space: pre-wrap; font-family: 'Noto Serif SC', serif; font-size: 12px; line-height: 1.75; }
+.edit-hunk-copy.original { background: #f7e9e5; }
+.edit-hunk-copy.replacement { background: #eaf1e9; }
+.edit-hunk > p { display: flex; gap: 6px; margin: 0; padding: 8px 11px; color: #777a73; font-size: 10px; border-top: 1px solid #e3dfd6; }
+
+.rail-memory-list { display: flex; flex-direction: column; gap: 6px; padding: 8px; overflow-y: auto; }
+.rail-memory-item { width: 100%; display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 9px; text-align: left; color: #464b45; background: #f0ede5; border-radius: 5px; }
+.rail-memory-item:hover { background: #e6e1d7; }
+.rail-memory-item span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rail-memory-item strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-memory-item small { color: #8a8e86; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-memory-item em { color: #9a6c56; font-family: 'DM Mono', monospace; font-size: 9px; font-style: normal; }
+.memory-type-dot { width: 7px; height: 7px; border-radius: 50%; background: #8b8373; }
+.memory-type-dot.canon_fact { background: #b35d50; }
+.memory-type-dot.world_rule { background: #507d77; }
+.memory-type-dot.character_state, .memory-type-dot.voice_habit { background: #725f99; }
+.memory-type-dot.event { background: #b18445; }
+.memory-type-dot.chapter_summary { background: #71808d; }
+.memory-review-modal { width: min(820px, calc(100vw - 32px)); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; }
+.memory-candidate-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 2px; }
+.memory-candidate { padding: 13px; background: #f2efe8; border: 1px solid transparent; border-radius: 6px; opacity: .68; }
+.memory-candidate.selected { border-color: #c8a98d; opacity: 1; }
+.memory-candidate-toggle { display: flex; flex-direction: row; align-items: center; gap: 8px; margin-bottom: 10px; }
+.memory-candidate-toggle small { margin-left: auto; color: #8a8e86; }
+.memory-candidate-reason { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: #777b74; font-size: 11px; }
+
 :root { font-family: 'DM Sans', 'Noto Sans SC', sans-serif; color: #1b1d1c; background: #f4f2ed; font-synthesis: none; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
