@@ -21,6 +21,7 @@ import {
   FileText,
   FolderOpen,
   Gem,
+  Globe,
   Grid2X2,
   Highlighter,
   History,
@@ -1398,6 +1399,7 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
 function WritingAssistantPage({ session, loading, skills, onSend, onClear, onReviewProposal, onOpenSettings, onNotify, onOpenProject }) {
   const [input, setInput] = useState('')
   const [selectedSkill, setSelectedSkill] = useState('')
+  const [webSearch, setWebSearch] = useState(false)
   const [model, setModel] = useState('')
   const [modelList, setModelList] = useState([])
   const [modelLoading, setModelLoading] = useState(false)
@@ -1460,7 +1462,10 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
   }
 
   function send(message) {
-    onSend(message, selectedSkill ? { skill: selectedSkill } : {})
+    const options = {}
+    if (selectedSkill) options.skill = selectedSkill
+    if (webSearch) options.web_search = true
+    onSend(message, options)
   }
 
   function submit(event) {
@@ -1545,6 +1550,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
                 <button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button>
               </form>
               <div className="assistant-composer-tools">
+                <button type="button" className={`composer-toggle ${webSearch ? 'active' : ''}`} aria-pressed={webSearch} title={webSearch ? '已开启联网搜索：夜雨会先检索再回答' : '开启后夜雨会先联网检索再回答'} onClick={() => setWebSearch((value) => !value)}><Globe size={13} /><span>联网搜索</span></button>
                 <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{skillMeta[item.name]?.label || item.name}</option>)}</select></label>
                 <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               </div>

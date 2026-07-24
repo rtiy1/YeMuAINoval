@@ -14,7 +14,7 @@ from app.schemas import (
     WritingRequirements,
     WritingRequirementsPatch,
 )
-from app.skills.capability import get_story_skill_capability, route_story_intent
+from app.skills.capability import SkillInvocation, get_story_skill_capability, route_story_intent
 from app.skills.model_helper import create_chat_model, has_api_key
 from app.workflows.story_agent import run_story_agent
 from app.workflows.writing_assistant import generate_writing_proposal
@@ -23,6 +23,38 @@ from app.workflows.writing_assistant import generate_writing_proposal
 logger = logging.getLogger(__name__)
 WRITING_SKILLS = {'story-long-write', 'story-short-write'}
 REQUIRED_WRITING_FIELDS = ('type', 'genre', 'style', 'premise')
+
+
+def _web_search_turn(request: WritingAssistantTurnRequest) -> WritingAssistantTurnResponse:
+    """联网搜索开关打开时：先检索，再用结果回答，不进入建书流程。"""
+    from app.skills.search import execute_search_skill
+
+    invocation = SkillInvocation(
+        skill_name='story-search',
+        instruction=request.message,
+        payload={},
+        model_config_override=request.model_config_override,
+    )
+    result = execute_search_skill(invocation)
+    results = result.get('results') or []
+    if result.get('status') == 'failed' or (not results and not result.get('summary')):
+        reply = result.get('message') or '联网搜索失败，请稍后重试或配置 TAVILY_API_KEY。'
+    elif result.get('summary'):
+        reply = result['summary']
+    else:
+        lines = [f'已检索到 {len(results)} 条结果：']
+        for index, item in enumerate(results[:8], 1):
+            lines.append(f"[{index}] {item.get('title', '')}\n{item.get('url', '')}")
+        reply = '\n'.join(lines)
+    return WritingAssistantTurnResponse(
+        status='completed',
+        phase='collecting_requirements',
+        reply=reply,
+        selected_skill='story-search',
+        route='web-search',
+        requirements=request.requirements,
+        result=result,
+    )
 
 ASSISTANT_SYSTEM_PROMPT = '''你是“夜雨”，叙事工坊里克制、敏锐、有文学判断力的创作搭档。你不靠空泛鼓励取悦作者，不堆叠网络流行语；发现设定矛盾、人物动机不足或定位含混时应给出明确意见，但最终决定权始终属于作者。
 
@@ -171,6 +203,8 @@ def _plan_turn(request: WritingAssistantTurnRequest) -> AssistantDecision:
 
 
 def run_writing_assistant_turn(request: WritingAssistantTurnRequest) -> WritingAssistantTurnResponse:
+    if request.web_search:
+        return _web_search_turn(request)
     decision = _plan_turn(request)
     requirements = _merged_requirements(request.requirements, decision.requirements)
     selected_skill = decision.selected_skill

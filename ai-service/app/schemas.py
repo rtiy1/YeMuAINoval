@@ -166,6 +166,7 @@ class WritingAssistantTurnRequest(BaseModel):
     requirements: WritingRequirementsPatch = Field(default_factory=WritingRequirementsPatch)
     skill: str | None = Field(default=None, pattern=r'^[a-z0-9-]+$')
     payload: dict[str, Any] = Field(default_factory=dict)
+    web_search: bool = False
     model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
 
 

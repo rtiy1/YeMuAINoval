@@ -655,6 +655,9 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .assistant-plan-question button strong { font-size: 12px; font-weight: 650; }
 .assistant-plan-question button small { color: #8b9189; font-size: 10px; }
 .assistant-composer-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; }
+.composer-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; color: #858b84; background: #efece4; border: 1px solid #e0dcd3; border-radius: 999px; font-size: 10px; transition: .18s ease; }
+.composer-toggle:hover { color: #5a605a; background: #e7e3da; }
+.composer-toggle.active { color: #fff; background: #3d746a; border-color: #3d746a; }
 .assistant-composer-tools label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: #858b84; }
 .assistant-composer-tools select { max-width: 190px; padding: 4px 22px 4px 4px; color: #697169; background: transparent; border: 0; outline: none; font-size: 10px; cursor: pointer; }
 .assistant-composer-tools select:disabled { opacity: .55; cursor: wait; }
