@@ -67,20 +67,19 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 
-const navItems = [
+const primaryNavItems = [
   { id: 'overview', label: '总览', icon: LayoutDashboard },
+  { id: 'assistant', label: '创作助手', icon: MessageCircle },
   { id: 'works', label: '我的作品', icon: BookOpen },
   { id: 'library', label: '素材库', icon: Library },
-  { id: 'deconstruct', label: '拆文台', icon: BookOpenCheck },
-  { id: 'toolkit', label: '工具箱', icon: Grid2X2 },
 ]
 
-const workflow = [
-  { icon: Target, index: '01', title: '扫榜选题', text: '看见正在发生的热度', tone: 'coral' },
-  { icon: BookOpenCheck, index: '02', title: '拆文学习', text: '把好故事拆成可复用的结构', tone: 'teal' },
-  { icon: PenLine, index: '03', title: '落笔创作', text: '从大纲到正文，保持每章推进', tone: 'yellow' },
-  { icon: WandSparkles, index: '04', title: '去味审查', text: '让文字更像你，而不是模型', tone: 'purple' },
+const moreNavItems = [
+  { id: 'toolkit', label: '高级工具', icon: Grid2X2 },
+  { id: 'deconstruct', label: '拆文台', icon: BookOpenCheck },
 ]
+
+const navItems = [...primaryNavItems, ...moreNavItems]
 
 const editorFeatureActions = [
   { key: 'write', label: 'AI写作', tone: 'violet', icon: WandSparkles, skill: 'story', command: '结合当前作品设定，帮我继续规划并写作下一段。' },
@@ -1038,11 +1037,21 @@ function App() {
 
         <div className="sidebar-section-label">工作台</div>
         <nav className="primary-nav" aria-label="主导航">
-          {navItems.map(({ id, label, icon: Icon }) => (
+          {primaryNavItems.map(({ id, label, icon: Icon }) => (
             <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} onClick={() => selectSection(id)}>
               <Icon size={17} strokeWidth={1.8} />
               <span>{label}</span>
               {id === 'library' && <span className="nav-count">{ideas.length}</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-section-label more-label">更多</div>
+        <nav className="primary-nav secondary-nav" aria-label="更多功能">
+          {moreNavItems.map(({ id, label, icon: Icon }) => (
+            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} onClick={() => selectSection(id)}>
+              <Icon size={17} strokeWidth={1.8} />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
@@ -1079,24 +1088,25 @@ function App() {
           </div>
           <div className="topbar-actions">
             <button className="search-button" onClick={() => setSearchOpen(true)}><Search size={17} /><span>搜索</span><kbd>⌘ K</kbd></button>
-            <button className="icon-button" aria-label="帮助" onClick={() => selectSection('toolkit')} title="帮助"><CircleHelp size={18} /></button>
+            <button className="icon-button" aria-label="高级工具" onClick={() => selectSection('toolkit')} title="高级工具"><Grid2X2 size={18} /></button>
             <button className="primary-button top-new-button" onClick={() => setShowNew(true)}><Plus size={17} />新建作品</button>
           </div>
         </header>
 
         <div className="content-wrap">
-          {activeSection === 'overview' && <Overview projects={projects} stats={dashboard} onOpen={openProject} onNew={() => setShowNew(true)} onNavigate={selectSection} writingSession={writingAssistantSession} writingLoading={writingAssistantLoading} onSendWriting={sendWritingAssistant} onClearWriting={clearWritingAssistant} onReviewProposal={() => writingAssistantSession?.proposal && setSmartProposal({ ...writingAssistantSession.proposal, assistantSessionId: writingAssistantSession.id })} onOpenSettings={() => setSettingsOpen(true)} />}
+          {activeSection === 'overview' && <Overview projects={projects} stats={dashboard} onOpen={openProject} onNew={() => setShowNew(true)} onNavigate={selectSection} />}
+          {activeSection === 'assistant' && <WritingAssistantPage session={writingAssistantSession} loading={writingAssistantLoading} skills={skillCatalog} onSend={sendWritingAssistant} onClear={clearWritingAssistant} onReviewProposal={() => writingAssistantSession?.proposal && setSmartProposal({ ...writingAssistantSession.proposal, assistantSessionId: writingAssistantSession.id })} onOpenSettings={() => setSettingsOpen(true)} onNotify={notify} onOpenProject={(projectId) => { const project = projects.find((item) => item.id === projectId); if (project) openProject(project); else selectSection('works') }} />}
           {activeSection === 'editor' && currentProject && <Editor project={currentProject} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} onBack={() => selectSection('overview')} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenSkill={openSkillRunner} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>没有打开的作品</h2><p>从「我的作品」中选择一个作品开始写作。</p><button className="primary-button" onClick={() => selectSection('works')}><BookOpen size={17} />前往我的作品</button></div></div>}
-          {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onSmartCreate={() => openSkillRunner('story-long-write', '请只返回 JSON：{"title":"书名","genre":"题材","tone":"故事主线","chapters":[{"title":"第一章标题","content":"章节大纲"}]}。根据我的想法智能创建作品，并给出至少前三章大纲。', { purpose: 'smart-create' })} onImport={() => setImportProjectOpen(true)} />}
+          {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onSmartCreate={() => selectSection('assistant')} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
           {activeSection === 'deconstruct' && <Deconstruct onNotify={notify} onRunSkill={openSkillRunner} />}
-          {activeSection === 'toolkit' && <Toolkit onNotify={notify} skills={skillCatalog} onRunSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} />}
+          {activeSection === 'toolkit' && <Toolkit onNotify={notify} skills={skillCatalog} onRunSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} onNavigate={selectSection} />}
         </div>
       </main>
 
       <div className="mobile-nav">
-        {navItems.slice(0, 4).map(({ id, label, icon: Icon }) => (
+        {primaryNavItems.map(({ id, label, icon: Icon }) => (
           <button key={id} className={activeSection === id ? 'active' : ''} onClick={() => selectSection(id)}><Icon size={18} /><span>{label}</span></button>
         ))}
       </div>
@@ -1199,7 +1209,7 @@ function AuthScreen({ mode, error, onModeChange, onSubmit }) {
   )
 }
 
-function Overview({ projects, stats, onOpen, onNew, onNavigate, writingSession, writingLoading, onSendWriting, onClearWriting, onReviewProposal, onOpenSettings }) {
+function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
   const active = projects.find((project) => project.isActive) || projects[0]
   const today = new Date()
   const weekday = ['日', '一', '二', '三', '四', '五', '六'][today.getDay()]
@@ -1213,10 +1223,11 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate, writingSession, 
           <h1>{projects.length ? `${greeting}，继续写下去。` : `${greeting}，从第一本书开始。`}</h1>
           <p className="welcome-copy">{projects.length ? '今天的故事，想从哪一幕开始？' : '新建一个作品，写下你的第一行。'}</p>
         </div>
-        <button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button>
+        <div className="welcome-actions">
+          <button className="secondary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />创作助手</button>
+          <button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button>
+        </div>
       </section>
-
-      <GlobalWritingAssistant session={writingSession} loading={writingLoading} onSend={onSendWriting} onClear={onClearWriting} onReviewProposal={onReviewProposal} onOpenSettings={onOpenSettings} />
 
       <section className="dashboard-summary" aria-label="创作数据概览">
         <div className="summary-card"><span className="summary-icon coral"><FileText size={17} /></span><div><small>累计字数</small><strong>{formatNumber(stats?.totalWords)}</strong></div><em>全部作品</em></div>
@@ -1225,33 +1236,21 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate, writingSession, 
         <div className="summary-card"><span className="summary-icon purple"><Clock3 size={17} /></span><div><small>本周活跃</small><strong>{formatNumber(stats?.activeDays)}</strong></div><em>近 7 天</em></div>
       </section>
 
-      <section className="dashboard-quick-actions" aria-label="作品快捷入口">
-        <button onClick={() => onNavigate('works')}><span className="quick-action-icon coral"><BookOpen size={17} /></span><span><strong>作品管理</strong><small>分类、进度与状态</small></span><ChevronRight size={15} /></button>
-        <button onClick={() => onNavigate('library')}><span className="quick-action-icon teal"><UsersRound size={17} /></span><span><strong>角色库</strong><small>人物卡与关系素材</small></span><ChevronRight size={15} /></button>
-        <button onClick={() => onNavigate('library')}><span className="quick-action-icon yellow"><Tags size={17} /></span><span><strong>词条库</strong><small>世界观与设定资料</small></span><ChevronRight size={15} /></button>
-        <button onClick={() => onNavigate('toolkit')}><span className="quick-action-icon purple"><BrainCircuit size={17} /></span><span><strong>智能创作</strong><small>写作、润色与审稿</small></span><ChevronRight size={15} /></button>
+      <section className="dashboard-quick-actions compact-actions" aria-label="快捷入口">
+        <button onClick={() => onNavigate('works')}><span className="quick-action-icon coral"><BookOpen size={17} /></span><span><strong>我的作品</strong><small>管理进度与状态</small></span><ChevronRight size={15} /></button>
+        <button onClick={() => onNavigate('assistant')}><span className="quick-action-icon purple"><MessageCircle size={17} /></span><span><strong>创作助手</strong><small>从想法到建书方案</small></span><ChevronRight size={15} /></button>
       </section>
 
       {!projects.length ? (
-        <>
         <section className="empty-state hero-empty">
           <div className="empty-state-icon"><BookOpen size={28} /></div>
           <h2>开始你的第一本书</h2>
-          <p>新建一个作品，从第一行开始记录属于你的故事。也可以先用工具箱扫榜选题，或去拆文台学习一本参考书。</p>
+          <p>打开创作助手，先说清你想写什么；也可以手动新建作品，直接进入编辑器。</p>
           <div className="empty-state-actions">
-            <button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button>
-            <button className="secondary-button" onClick={() => onNavigate('toolkit')}><Grid2X2 size={16} />打开工具箱</button>
+            <button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={17} />打开创作助手</button>
+            <button className="secondary-button" onClick={onNew}><BookPlus size={16} />手动新建</button>
           </div>
         </section>
-        <section className="dashboard-grid">
-          <div className="workflow-panel">
-            <div className="section-heading compact"><div><span className="section-overline">创作路径</span><h2>从灵感到成稿</h2></div><span className="tiny-meta">4 个阶段</span></div>
-            <div className="workflow-list">
-              {workflow.map(({ icon: Icon, index, title, text, tone }) => <button className="workflow-item" key={title} onClick={() => onNavigate(title === '落笔创作' ? 'works' : title === '拆文学习' ? 'deconstruct' : title === '扫榜选题' ? 'toolkit' : 'toolkit')}><span className={`workflow-icon ${tone}`}><Icon size={18} /></span><span className="workflow-index">{index}</span><span className="workflow-copy"><strong>{title}</strong><small>{text}</small></span><ArrowUpRight size={16} className="workflow-arrow" /></button>)}
-            </div>
-          </div>
-        </section>
-        </>
       ) : (
         <>
         <section className="focus-section">
@@ -1270,14 +1269,16 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate, writingSession, 
         </div>
       </section>
 
-      <section className="dashboard-grid">
-        <div className="workflow-panel">
-          <div className="section-heading compact"><div><span className="section-overline">创作路径</span><h2>从灵感到成稿</h2></div><span className="tiny-meta">4 个阶段</span></div>
-          <div className="workflow-list">
-              {workflow.map(({ icon: Icon, index, title, text, tone }) => <button className="workflow-item" key={title} onClick={() => onNavigate(title === '落笔创作' ? 'editor' : title === '拆文学习' ? 'deconstruct' : title === '扫榜选题' ? 'toolkit' : 'toolkit')}><span className={`workflow-icon ${tone}`}><Icon size={18} /></span><span className="workflow-index">{index}</span><span className="workflow-copy"><strong>{title}</strong><small>{text}</small></span><ArrowUpRight size={16} className="workflow-arrow" /></button>)}
-          </div>
-        </div>
+      <section className="dashboard-grid overview-pulse-grid">
         <WritingPulse stats={stats} />
+        <section className="overview-secondary-links" aria-label="辅助能力">
+          <div className="section-heading compact"><div><span className="section-overline">辅助</span><h2>需要时再打开</h2></div></div>
+          <div className="overview-link-list">
+            <button onClick={() => onNavigate('library')}><span className="quick-action-icon teal"><Library size={16} /></span><span><strong>素材库</strong><small>人物、设定与灵感</small></span><ChevronRight size={15} /></button>
+            <button onClick={() => onNavigate('toolkit')}><span className="quick-action-icon yellow"><Target size={16} /></span><span><strong>高级工具</strong><small>扫榜、去 AI 味、审稿</small></span><ChevronRight size={15} /></button>
+            <button onClick={() => onNavigate('deconstruct')}><span className="quick-action-icon purple"><BookOpenCheck size={16} /></span><span><strong>拆文台</strong><small>拆解参考书结构</small></span><ChevronRight size={15} /></button>
+          </div>
+        </section>
       </section>
 
       <section className="recent-section">
@@ -1290,48 +1291,162 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate, writingSession, 
   )
 }
 
-function GlobalWritingAssistant({ session, loading, onSend, onClear, onReviewProposal, onOpenSettings }) {
+function WritingAssistantPage({ session, loading, skills, onSend, onClear, onReviewProposal, onOpenSettings, onNotify, onOpenProject }) {
   const [input, setInput] = useState('')
+  const [selectedSkill, setSelectedSkill] = useState('')
+  const [model, setModel] = useState('')
+  const [modelList, setModelList] = useState([])
+  const [modelLoading, setModelLoading] = useState(false)
+  const [modelSaving, setModelSaving] = useState(false)
+  const conversationRef = useRef(null)
   const requirements = session?.requirements || {}
-  const missing = ['type', 'genre', 'style', 'premise'].find((field) => !String(requirements[field] || '').trim())
-  const suggestions = missing === 'type'
-    ? ['长篇', '短篇']
-    : missing === 'genre'
-      ? ['现代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世']
-      : missing === 'style'
-        ? ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长']
-        : []
   const messages = session?.messages || []
+  const questions = session?.questions || []
+  const hasStarted = messages.length > 0
   const needsModel = messages.at(-1)?.role === 'assistant' && messages.at(-1)?.text?.includes('配置模型')
+  const availableSkills = (skills || []).filter((item) => item.name !== 'story')
+  const starterPrompts = [
+    '我想写一本小说',
+    '我想写一个现代都市故事',
+    '帮我构思一个悬疑短篇',
+  ]
+
+  useEffect(() => {
+    let mounted = true
+    api.getSettings()
+      .then((response) => { if (mounted) setModel(response.settings?.model || '') })
+      .catch(() => undefined)
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    const node = conversationRef.current
+    if (!node) return
+    node.scrollTop = node.scrollHeight
+  }, [messages, loading, session?.phase])
+
+  async function loadModels() {
+    if (modelLoading || modelList.length) return
+    setModelLoading(true)
+    try {
+      const response = await api.getModels()
+      setModelList(response.models || [])
+    } catch (error) {
+      onNotify(error.message || '获取模型列表失败')
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
+  async function changeModel(nextModel) {
+    setModel(nextModel)
+    setModelSaving(true)
+    try {
+      await api.updateSettings({ model: nextModel })
+      onNotify(`已切换全局模型：${nextModel}`)
+    } catch (error) {
+      onNotify(error.message || '切换模型失败')
+    } finally {
+      setModelSaving(false)
+    }
+  }
+
+  function send(message) {
+    onSend(message, selectedSkill ? { skill: selectedSkill } : {})
+  }
 
   function submit(event) {
     event?.preventDefault()
     const message = input.trim()
     if (!message || loading) return
     setInput('')
-    onSend(message)
+    send(message)
   }
 
-  return <section className="global-writing-assistant" aria-labelledby="global-assistant-title">
-    <div className="global-assistant-heading">
-      <div className="global-assistant-title"><span><Bot size={19} /></span><div><small>AI 创作入口</small><h2 id="global-assistant-title">从一个想法开始写书</h2></div></div>
-      {session && <button className="text-button" disabled={loading} onClick={onClear}>{session.phase === 'writing' ? '开始另一本' : '清除会话'}</button>}
-    </div>
-    <div className="global-assistant-body">
-      <div className="global-assistant-conversation" aria-live="polite">
-        {!messages.length && <div className="global-assistant-message assistant"><Bot size={14} /><p>告诉我你想写什么。我会确认篇幅、题材、流派和核心设定，再给你一份可编辑的建书方案。</p></div>}
-        {messages.slice(-8).map((message) => <div className={`global-assistant-message ${message.role}`} key={message.id}><span>{message.role === 'assistant' ? <Bot size={14} /> : <UserRound size={14} />}</span><p>{message.text}</p></div>)}
-        {loading && <div className="global-assistant-message assistant loading"><LoaderCircle size={14} className="spin" /><p>{missing ? '正在整理你的回答' : '正在生成建书方案'}</p></div>}
+  function handleKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      submit(event)
+    }
+  }
+
+  return (
+    <div className="page assistant-page">
+      <div className="assistant-chat-shell">
+        <header className="assistant-chat-header">
+          <div className="assistant-chat-title">
+            <span className="assistant-chat-mark"><Bot size={18} /></span>
+            <div>
+              <small>统一 AI 创作入口</small>
+              <h1>创作助手</h1>
+            </div>
+          </div>
+          <div className="assistant-chat-actions">
+            {session && <button className="text-button" disabled={loading} onClick={onClear}>{session.phase === 'writing' ? '开始另一本' : '新对话'}</button>}
+          </div>
+        </header>
+
+        <div className="assistant-chat-stream" ref={conversationRef} aria-live="polite">
+          {!hasStarted && !loading && (
+            <div className="assistant-chat-empty">
+              <div className="assistant-chat-empty-icon"><Bot size={28} /></div>
+              <h2>从一个想法开始</h2>
+              <p>描述你的目标。我会自动选择合适的 Skill；信息不足时，会像计划模式一样只确认真正影响下一步的内容。</p>
+              <div className="assistant-chat-starters">
+                {starterPrompts.map((item) => <button type="button" key={item} disabled={loading} onClick={() => send(item)}>{item}</button>)}
+              </div>
+            </div>
+          )}
+
+          {messages.map((message) => (
+            <div className={`assistant-chat-message ${message.role}`} key={message.id}>
+              <div className="assistant-chat-avatar" aria-hidden="true">{message.role === 'assistant' ? <Bot size={15} /> : <UserRound size={15} />}</div>
+              <div className="assistant-chat-bubble"><p>{message.text}</p></div>
+            </div>
+          ))}
+
+          {questions.length > 0 && !loading && session?.phase !== 'awaiting_confirmation' && (
+            <div className="assistant-plan-questions">
+              {questions.map((question) => (
+                <section className="assistant-plan-question" key={question.id}>
+                  <span>需要确认</span>
+                  <h3>{question.question}</h3>
+                  {question.options?.length > 0 && <div>{question.options.map((option) => <button type="button" key={option.value} onClick={() => send(option.value)}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</button>)}</div>}
+                </section>
+              ))}
+            </div>
+          )}
+
+          {loading && (
+            <div className="assistant-chat-message assistant loading">
+              <div className="assistant-chat-avatar" aria-hidden="true"><LoaderCircle size={15} className="spin" /></div>
+              <div className="assistant-chat-bubble"><p>正在理解目标并规划下一步…</p></div>
+            </div>
+          )}
+        </div>
+
+        <div className="assistant-chat-composer">
+          {session?.phase === 'awaiting_confirmation' && session.proposal && <button type="button" className="dark-button assistant-chat-proposal" onClick={onReviewProposal}><BookOpenCheck size={16} />查看并确认建书方案</button>}
+          {needsModel && <button type="button" className="secondary-button assistant-chat-settings" onClick={onOpenSettings}><Settings2 size={15} />配置模型</button>}
+          {session?.phase === 'writing' && session.projectId && <div className="assistant-chat-complete"><p><Check size={15} />作品已创建，可以进入编辑器继续写作。</p><button type="button" className="primary-button" onClick={() => onOpenProject(session.projectId)}><PenLine size={15} />打开作品</button></div>}
+
+          {session?.phase !== 'writing' && (
+            <>
+              <form className="assistant-chat-form" onSubmit={submit}>
+                <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} rows={1} maxLength={4000} disabled={loading || session?.phase === 'awaiting_confirmation'} placeholder={hasStarted ? '继续补充，或直接提出新的创作任务…' : '描述你的创作目标…'} aria-label="输入创作想法" />
+                <button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button>
+              </form>
+              <div className="assistant-composer-tools">
+                <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{skillMeta[item.name]?.label || item.name}</option>)}</select></label>
+                <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              </div>
+            </>
+          )}
+          <p className="assistant-chat-hint">Enter 发送 · Shift+Enter 换行 · 模型切换同步全局设置</p>
+        </div>
       </div>
-      <div className="global-assistant-controls">
-        {suggestions.length > 0 && <div className="global-assistant-suggestions">{suggestions.map((item) => <button type="button" key={item} disabled={loading} onClick={() => onSend(item)}>{item}</button>)}</div>}
-        {session?.phase === 'awaiting_confirmation' && session.proposal && <button type="button" className="dark-button global-proposal-button" onClick={onReviewProposal}><BookOpenCheck size={16} />查看并确认建书方案</button>}
-        {needsModel && <button type="button" className="secondary-button global-settings-button" onClick={onOpenSettings}><Settings2 size={15} />配置模型</button>}
-        {session?.phase !== 'writing' && <form className="global-assistant-form" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} rows={2} maxLength={4000} disabled={loading || session?.phase === 'awaiting_confirmation'} placeholder={missing === 'premise' ? '例如：失踪记者收到一封来自未来的信…' : '输入你的小说想法…'} aria-label="输入创作想法" /><button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button></form>}
-        {session?.phase === 'writing' && <p className="global-assistant-complete"><Check size={15} />作品已创建，可从最近作品继续写作。</p>}
-      </div>
     </div>
-  </section>
+  )
 }
 
 function WritingPulse({ stats }) {
@@ -2166,45 +2281,42 @@ function Deconstruct({ onNotify, onRunSkill }) {
   return <div className="page inner-page"><div className="page-heading"><div><span className="section-overline">结构工作室</span><h1>拆文台</h1><p>把读过的故事，变成下一本书的养分。</p></div><button className="primary-button" onClick={() => setImportOpen(true)}><FolderOpen size={17} />导入参考书</button></div><div className="empty-state"><div className="empty-state-icon"><BookOpenCheck size={28} /></div><h2>拆解一本参考书</h2><p>粘贴一本你合法持有的小说正文，AI 会拆解黄金三章、人设架构、爽点设计与节奏控制。</p><button className="primary-button" onClick={() => setImportOpen(true)}><FolderOpen size={17} />导入参考书</button></div><div className="analysis-grid"><div className="analysis-card"><span className="analysis-number">01</span><FileText size={20} /><h3>故事概要</h3><p>全书主线、章节索引与关键转折</p></div><div className="analysis-card"><span className="analysis-number">02</span><Users size={20} /><h3>人物图谱</h3><p>角色关系、动机链与状态变化</p></div><div className="analysis-card"><span className="analysis-number">03</span><Clock3 size={20} /><h3>节奏报告</h3><p>情绪触发、信息递进与爽点密度</p></div></div>{importOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setImportOpen(false)}><div className="modal deconstruct-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">导入参考书</span><h2>拆解一本小说</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setImportOpen(false)}><X size={18} /></button></div><form onSubmit={runAnalyze}><label>书名<input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="例如：剑道独尊" maxLength={80} /></label><label>篇幅<select value={form.length} onChange={(e) => setForm((f) => ({ ...f, length: e.target.value }))}><option>长篇</option><option>短篇</option></select></label><label>正文<textarea value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))} placeholder="粘贴小说正文（至少黄金三章）…" rows={8} /></label><div className="modal-note"><Info size={16} /><span>请确保你合法持有该作品的使用权。拆文仅用于学习与文学批评。</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setImportOpen(false)}>取消</button><button type="submit" className="dark-button" disabled={loading}>{loading ? <LoaderCircle size={16} className="spin" /> : <BookOpenCheck size={16} />}{loading ? '拆文中' : '开始拆文'}</button></div></form></div></div>}{resultOpen && result && <SkillRunnerModal skill={result.selected_skill} skills={[]} loading={false} result={result} onClose={() => setResultOpen(false)} onRun={() => {}} draft="" />}</div>
 }
 
-// 工具箱里展示的 Skill 分组（拆文类归拆文台，不在此重复）
+// 高级工具：只保留作者真正会单独打开的低频/专项能力
 const toolkitSkillGroups = [
   {
-    label: '写作',
-    skills: ['story-long-write', 'story-short-write'],
-  },
-  {
-    label: '扫榜',
+    label: '选题扫榜',
     skills: ['story-long-scan', 'story-short-scan'],
   },
   {
-    label: '润色',
+    label: '润色审稿',
     skills: ['story-deslop', 'story-review'],
-  },
-  {
-    label: '其他',
-    skills: ['story-setup', 'story'],
   },
 ]
 
 // 每个 skill 卡片的展示信息
 const skillCardMeta = {
-  'story': { label: '智能路由', desc: '描述需求，自动选择合适的 Skill', tone: 'coral', icon: 'BrainCircuit' },
-  'story-long-write': { label: '长篇写作', desc: '开书、写大纲、日更续写', tone: 'yellow', icon: 'PenLine' },
-  'story-short-write': { label: '短篇写作', desc: '写一篇完整的短篇故事', tone: 'yellow', icon: 'PenLine' },
   'story-long-scan': { label: '长篇扫榜', desc: '追踪长篇热门题材与趋势', tone: 'coral', icon: 'Target' },
   'story-short-scan': { label: '短篇扫榜', desc: '追踪短篇热门题材与趋势', tone: 'coral', icon: 'Target' },
   'story-deslop': { label: '去 AI 味', desc: '去除确定性套话与 AI 句式痕迹', tone: 'teal', icon: 'WandSparkles' },
   'story-review': { label: '章节审稿', desc: '结构化审查章节并给出评分', tone: 'teal', icon: 'BrainCircuit' },
-  'story-setup': { label: '环境部署', desc: '准备写作工程与配置', tone: 'blue', icon: 'Settings2' },
 }
 
-function Toolkit({ onNotify, skills, onRunSkill, onOpenSettings }) {
+function Toolkit({ onNotify, skills, onRunSkill, onOpenSettings, onNavigate }) {
   const [guideOpen, setGuideOpen] = useState(false)
   const skillMap = useMemo(() => Object.fromEntries(skills.map((s) => [s.name, s])), [skills])
   const callable = (skill) => skill.status === 'ready' || skill.status === 'needs_model'
-  const readyCount = skills.filter((s) => s.status === 'ready').length
-  const needsModelCount = skills.filter((s) => s.status === 'needs_model').length
-  return <><div className="page inner-page"><div className="page-heading"><div><span className="section-overline">辅助工具</span><h1>工具箱</h1><p>每个 Skill 都是一个可直接调用的功能。</p></div><div className="page-heading-actions"><button className="text-button" onClick={onOpenSettings}><Settings2 size={15} />模型设置</button><button className="text-button" onClick={() => setGuideOpen(true)}><CircleHelp size={15} />使用指南</button></div></div>
+  const listedSkills = toolkitSkillGroups.flatMap((group) => group.skills.map((name) => skillMap[name]).filter(Boolean))
+  const readyCount = listedSkills.filter((s) => s.status === 'ready').length
+  const needsModelCount = listedSkills.filter((s) => s.status === 'needs_model').length
+  return <><div className="page inner-page"><div className="page-heading"><div><span className="section-overline">低频专项</span><h1>高级工具</h1><p>写作请走创作助手与编辑器；这里只放扫榜、去 AI 味和审稿。</p></div><div className="page-heading-actions"><button className="text-button" onClick={onOpenSettings}><Settings2 size={15} />模型设置</button><button className="text-button" onClick={() => setGuideOpen(true)}><CircleHelp size={15} />使用指南</button></div></div>
+  <div className="toolkit-redirect-card">
+    <div><span className="section-overline">主路径</span><h2>想开书或继续写？</h2><p>建书方案用创作助手，正文续写和润色在编辑器里更顺手。</p></div>
+    <div className="toolkit-redirect-actions">
+      <button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />创作助手</button>
+      <button className="secondary-button" onClick={() => onNavigate('works')}><BookOpen size={16} />我的作品</button>
+      <button className="secondary-button" onClick={() => onNavigate('deconstruct')}><BookOpenCheck size={16} />拆文台</button>
+    </div>
+  </div>
   <div className="toolkit-status-bar"><span className={`skill-status ${readyCount ? 'ready' : ''}`}>{readyCount} 可调用</span><span className="skill-status needs_model">{needsModelCount} 需模型</span><span className="tiny-meta">未配置模型时部分功能不可用，点击「模型设置」配置 LLM API</span></div>
   {toolkitSkillGroups.map((group) => {
     const groupSkills = group.skills.map((name) => skillMap[name]).filter(Boolean)
@@ -2220,7 +2332,7 @@ function Toolkit({ onNotify, skills, onRunSkill, onOpenSettings }) {
 }
 
 function GuideModal({ onClose }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal guide-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">使用指南</span><h2>叙事工坊怎么用</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><div className="guide-content"><h3>开始创作</h3><p>在「我的作品」新建一本书，进入编辑器写下第一章。正文会自动保存到后端。</p><h3>章节管理</h3><p>编辑器左侧可新建、切换、重命名、删除章节，也可查看大纲和导出 TXT。</p><h3>灵感库</h3><p>随时记录人物、场景、冲突等灵感卡，可关联到具体作品。</p><h3>拆文台</h3><p>粘贴一本参考书正文，AI 会拆解黄金三章、人设架构与节奏设计。</p><h3>工具箱</h3><p>每个 Skill 都是一个功能按钮，点击即可调用。写作、扫榜、润色等能力按分组排列。需先在「模型设置」配置 LLM API。</p><h3>设置</h3><p>在左下角「设置」中配置 OpenAI 兼容的 API Base URL、Key 和模型名，所有 Skill 调用会使用此配置。</p></div><div className="modal-actions"><button type="button" className="dark-button" onClick={onClose}>知道了</button></div></div></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal guide-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">使用指南</span><h2>叙事工坊怎么用</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><div className="guide-content"><h3>开始创作</h3><p>优先打开「创作助手」，先描述想法，再确认篇幅、题材和设定，生成建书方案。也可以在「我的作品」手动新建。</p><h3>章节写作</h3><p>进入编辑器后，续写、润色、审稿和素材插入都在当前章节上下文中完成，正文会自动保存。</p><h3>素材库</h3><p>集中管理人物、设定、剧情锚点与灵感卡，可关联到具体作品。</p><h3>高级工具</h3><p>扫榜、去 AI 味、章节审稿放在这里；拆文台用于拆解你合法持有的参考书。写作主流程不必绕路到这里。</p><h3>设置</h3><p>在左下角「设置」中配置 OpenAI 兼容的 API Base URL、Key 和模型名，所有 AI 调用会使用此配置。</p></div><div className="modal-actions"><button type="button" className="dark-button" onClick={onClose}>知道了</button></div></div></div>
 }
 
 function ReviewReport({ report, onClose }) {
