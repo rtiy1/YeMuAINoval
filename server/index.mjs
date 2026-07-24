@@ -21,6 +21,7 @@ import {
   verifyPassword,
 } from './auth.mjs'
 import { countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
+import * as chatMemory from './chat-memory.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -419,6 +420,29 @@ function appendWritingMessage(session, role, text) {
   return message
 }
 
+async function loadWritingSession(userId) {
+  const fromRedis = await chatMemory.getSession(userId)
+  if (fromRedis) return fromRedis
+  const db = await loadDb()
+  const dbSession = db.writingSessions[userId]
+  if (!dbSession) return null
+  const normalized = chatMemory.normalizeWritingSession(dbSession, userId) || dbSession
+  if (chatMemory.isRedisEnabled()) void chatMemory.setSession(userId, normalized)
+  return normalized
+}
+
+async function saveWritingSession(userId, session) {
+  if (chatMemory.isRedisEnabled()) await chatMemory.setSession(userId, session)
+  await updateDb((db) => {
+    db.writingSessions[userId] = session
+  })
+}
+
+async function deleteWritingSession(userId) {
+  await chatMemory.deleteSession(userId)
+  await updateDb((db) => { delete db.writingSessions[userId] })
+}
+
 function mergeWritingRequirements(current, message) {
   const requirements = { ...emptyWritingRequirements(), ...(current || {}) }
   const text = message.trim()
@@ -677,6 +701,9 @@ function sanitizeSettings(input, existing) {
   if (input.apiBaseUrl !== undefined) {
     settings.apiBaseUrl = cleanModelBaseUrl(input.apiBaseUrl)
   }
+  if (input.provider !== undefined) {
+    settings.provider = input.provider === 'anthropic' ? 'anthropic' : 'openai'
+  }
   if (input.model !== undefined) {
     settings.model = typeof input.model === 'string' ? input.model.trim().slice(0, 80) : ''
   }
@@ -699,8 +726,9 @@ function sanitizeSettings(input, existing) {
 }
 
 function publicSettings(settings) {
-  if (!settings) return { apiBaseUrl: '', apiKeyMask: null, model: '', temperature: null, maxTokens: null, contextWindow: null }
+  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', temperature: null, maxTokens: null, contextWindow: null }
   return {
+    provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
     apiBaseUrl: settings.apiBaseUrl || '',
     apiKeyMask: maskKey(decryptSecret(settings.apiKeyEnc)),
     model: settings.model || '',
@@ -715,6 +743,7 @@ async function getUserModelConfig(user) {
   const s = user.settings
   const apiKey = decryptSecret(s.apiKeyEnc)
   return {
+    provider: s.provider === 'anthropic' ? 'anthropic' : 'openai',
     api_base_url: s.apiBaseUrl || undefined,
     api_key: apiKey || undefined,
     model: s.model || undefined,
@@ -923,17 +952,27 @@ app.post('/api/ai/models', async (req, res, next) => {
     const s = req.user.settings || {}
     const apiKey = decryptSecret(s.apiKeyEnc)
     if (!apiKey) throw Object.assign(new Error('请先在设置中配置 API Key'), { status: 400 })
-    const baseUrl = (s.apiBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
-    const response = await fetch(`${baseUrl}/models`, {
-      headers: { authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(15_000),
-    })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw Object.assign(new Error(`拉取模型列表失败（${response.status}）`), { status: 502 })
+    const provider = s.provider === 'anthropic' ? 'anthropic' : 'openai'
+    let models = []
+    if (provider === 'anthropic') {
+      const baseUrl = (s.apiBaseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '')
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) throw Object.assign(new Error(`拉取模型列表失败（${response.status}）`), { status: 502 })
+      const data = await response.json().catch(() => null)
+      models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
+    } else {
+      const baseUrl = (s.apiBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) throw Object.assign(new Error(`拉取模型列表失败（${response.status}）`), { status: 502 })
+      const data = await response.json().catch(() => null)
+      models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     }
-    const data = await response.json().catch(() => null)
-    const models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     res.json({ models })
   } catch (error) {
     if (isNetworkError(error)) {
@@ -1117,8 +1156,8 @@ app.post('/api/ai/reviews/chapter', async (req, res, next) => {
 
 app.get('/api/writing-assistant/session', async (req, res, next) => {
   try {
-    const db = await loadDb()
-    res.json({ session: writingSessionPublic(db.writingSessions[req.user.id]) })
+    const session = await loadWritingSession(req.user.id)
+    res.json({ session: writingSessionPublic(session) })
   } catch (error) {
     next(error)
   }
@@ -1135,61 +1174,57 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
     if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
 
-    prepared = await updateDb((db) => {
-      let session = db.writingSessions[req.user.id]
-      if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
-        session = createWritingSession(req.user.id)
-        db.writingSessions[req.user.id] = session
-      }
-      appendWritingMessage(session, 'user', message)
-      if (session.phase === 'awaiting_confirmation') {
-        const reply = '建书方案已经准备好，请先确认创建，或开始新对话。'
-        appendWritingMessage(session, 'assistant', reply)
-        return { blocked: true, reply, session: writingSessionPublic(session) }
-      }
-      session.questions = []
-      return { blocked: false, session: writingSessionPublic(session) }
-    })
-
-    if (prepared.blocked) {
-      res.json({ status: 'completed', phase: prepared.session.phase, reply: prepared.reply, missing: [], questions: [], selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: prepared.session.proposal, session: prepared.session })
+    let session = await loadWritingSession(req.user.id)
+    if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
+      session = createWritingSession(req.user.id)
+    }
+    appendWritingMessage(session, 'user', message)
+    if (session.phase === 'awaiting_confirmation') {
+      const reply = '建书方案已经准备好，请先确认创建，或开始新对话。'
+      appendWritingMessage(session, 'assistant', reply)
+      await saveWritingSession(req.user.id, session)
+      const publicSession = writingSessionPublic(session)
+      res.json({ status: 'completed', phase: publicSession.phase, reply, missing: [], questions: [], selectedSkill: publicSession.selectedSkill, requirements: publicSession.requirements, proposal: publicSession.proposal, session: publicSession })
       return
     }
+    session.questions = []
+    await saveWritingSession(req.user.id, session)
+    prepared = { session }
 
-    const generated = await requestWritingAssistantTurn(req.user, prepared.session, message, skill, payload)
-    const updated = await updateDb((db) => {
-      const session = db.writingSessions[req.user.id]
-      if (!session || session.id !== prepared.session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
-      session.requirements = { ...emptyWritingRequirements(), ...(generated.requirements || session.requirements || {}) }
-      session.selectedSkill = generated.selected_skill || skill || session.selectedSkill || null
-      session.questions = Array.isArray(generated.questions) ? generated.questions.slice(0, 2) : []
-      session.lastResult = generated.result || null
-      const reply = cleanOptionalText(generated.reply, '助手回复', 4000)
-        || (generated.status === 'needs_model' ? '请先在设置中配置模型，当前创作需求已经保存。' : generated.status === 'failed' ? '处理失败，请检查模型配置后重试。' : '我已经处理好这个请求。')
-      if (generated.proposal) {
-        session.proposal = validateSmartProposal(generated.proposal, session.requirements.type || '长篇')
-        session.phase = 'awaiting_confirmation'
-      } else if (generated.phase === 'completed') {
-        session.phase = 'collecting_requirements'
-      } else {
-        session.phase = generated.phase || 'collecting_requirements'
-      }
-      appendWritingMessage(session, 'assistant', reply)
-      return { session: writingSessionPublic(session), reply }
-    })
+    const generated = await requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload)
+    const reloaded = await loadWritingSession(req.user.id)
+    if (!reloaded || reloaded.id !== session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
+    session = reloaded
+    session.requirements = { ...emptyWritingRequirements(), ...(generated.requirements || session.requirements || {}) }
+    session.selectedSkill = generated.selected_skill || skill || session.selectedSkill || null
+    session.questions = Array.isArray(generated.questions) ? generated.questions.slice(0, 2) : []
+    session.lastResult = generated.result || null
+    const reply = cleanOptionalText(generated.reply, '助手回复', 4000)
+      || (generated.status === 'needs_model' ? '请先在设置中配置模型，当前创作需求已经保存。' : generated.status === 'failed' ? '处理失败，请检查模型配置后重试。' : '我已经处理好这个请求。')
+    if (generated.proposal) {
+      session.proposal = validateSmartProposal(generated.proposal, session.requirements.type || '长篇')
+      session.phase = 'awaiting_confirmation'
+    } else if (generated.phase === 'completed') {
+      session.phase = 'collecting_requirements'
+    } else {
+      session.phase = generated.phase || 'collecting_requirements'
+    }
+    appendWritingMessage(session, 'assistant', reply)
+    await saveWritingSession(req.user.id, session)
+    const publicSession = writingSessionPublic(session)
 
     res.json({
       status: generated.status,
-      phase: updated.session.phase,
-      reply: updated.reply,
+      phase: publicSession.phase,
+      reply,
       missing: generated.missing || [],
-      questions: updated.session.questions,
-      selectedSkill: updated.session.selectedSkill,
+      questions: publicSession.questions,
+      selectedSkill: publicSession.selectedSkill,
       route: generated.route || '',
-      requirements: updated.session.requirements,
-      result: updated.session.lastResult,
-      proposal: updated.session.proposal,
-      session: updated.session,
+      requirements: publicSession.requirements,
+      result: publicSession.lastResult,
+      proposal: publicSession.proposal,
+      session: publicSession,
     })
   } catch (error) {
     if (isNetworkError(error)) {
@@ -1203,24 +1238,24 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
 app.post('/api/writing-assistant/confirm', async (req, res, next) => {
   try {
     const sessionId = cleanText(req.body?.sessionId, '创作会话 ID', 80)
-    const result = await updateDb((db) => {
-      const session = db.writingSessions[req.user.id]
-      if (!session || session.id !== sessionId) throw Object.assign(new Error('创作会话不存在或已过期'), { status: 404 })
-      if (session.projectId) {
-        const project = findOr404(db, session.projectId, req.user.id)
-        return { project, chapters: db.chapters[project.id] || [], duplicate: true }
-      }
-      if (session.phase !== 'awaiting_confirmation' || !session.proposal) throw Object.assign(new Error('建书方案尚未生成，不能确认创建'), { status: 409 })
-      const proposal = validateSmartProposal(req.body?.proposal || session.proposal, session.requirements?.type || '长篇')
-      const created = createProjectWithOutline(db, { userId: req.user.id, proposal })
-      session.phase = 'writing'
-      session.proposal = proposal
-      session.projectId = created.project.id
-      session.selectedSkill = proposal.type === '短篇' ? 'story-short-write' : 'story-long-write'
-      appendWritingMessage(session, 'assistant', `《${created.project.title}》已经创建，可以进入编辑器继续写作。`)
-      return { ...created, duplicate: false }
-    })
-    res.status(result.duplicate ? 200 : 201).json(result)
+    const session = await loadWritingSession(req.user.id)
+    if (!session || session.id !== sessionId) throw Object.assign(new Error('创作会话不存在或已过期'), { status: 404 })
+    if (session.projectId) {
+      const db = await loadDb()
+      const project = findOr404(db, session.projectId, req.user.id)
+      res.status(200).json({ project, chapters: db.chapters[project.id] || [], duplicate: true })
+      return
+    }
+    if (session.phase !== 'awaiting_confirmation' || !session.proposal) throw Object.assign(new Error('建书方案尚未生成，不能确认创建'), { status: 409 })
+    const proposal = validateSmartProposal(req.body?.proposal || session.proposal, session.requirements?.type || '长篇')
+    const created = await updateDb((db) => createProjectWithOutline(db, { userId: req.user.id, proposal }))
+    session.phase = 'writing'
+    session.proposal = proposal
+    session.projectId = created.project.id
+    session.selectedSkill = proposal.type === '短篇' ? 'story-short-write' : 'story-long-write'
+    appendWritingMessage(session, 'assistant', `《${created.project.title}》已经创建，可以进入编辑器继续写作。`)
+    await saveWritingSession(req.user.id, session)
+    res.status(201).json({ ...created, duplicate: false })
   } catch (error) {
     next(error)
   }
@@ -1228,7 +1263,7 @@ app.post('/api/writing-assistant/confirm', async (req, res, next) => {
 
 app.delete('/api/writing-assistant/session', async (req, res, next) => {
   try {
-    await updateDb((db) => { delete db.writingSessions[req.user.id] })
+    await deleteWritingSession(req.user.id)
     res.status(204).end()
   } catch (error) {
     next(error)

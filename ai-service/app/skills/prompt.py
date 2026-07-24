@@ -38,20 +38,7 @@ def execute_prompt_skill(invocation: SkillInvocation) -> dict[str, Any]:
 
     context_window = resolve_context_window(override, settings)
 
-    model_kwargs = {
-        'model': (override.model if override and override.model else None) or settings.openai_model,
-        'api_key': (override.api_key if override and override.api_key else None) or settings.openai_api_key,
-        'temperature': override.temperature if override and override.temperature is not None else 0.2,
-    }
-    if override and override.api_base_url:
-        model_kwargs['base_url'] = override.api_base_url
-    elif settings.openai_base_url:
-        model_kwargs['base_url'] = settings.openai_base_url
-    if override and override.max_tokens:
-        model_kwargs['max_tokens'] = int(override.max_tokens)
-
-    from langchain_openai import ChatOpenAI
-    model = ChatOpenAI(**model_kwargs)
+    model = create_chat_model(override, settings, default_temperature=0.2)
 
     system_parts = [
         '你正在执行项目内的 Story Skill。遵守下面的 Skill 契约，只完成用户请求，不声称执行了当前环境没有提供的浏览器、图片、文件写入或外部网络能力。当前适配范围是 prompt-only：需要落盘或工具调用时，输出清晰的下一步结构化计划。',

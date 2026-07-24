@@ -94,6 +94,7 @@ def route_story_intent(message: str) -> str:
         (('写短篇', '盐言故事'), 'story-short-write'),
         (('写长篇', '开书', '写大纲', '续写'), 'story-long-write'),
         (('配置', '搭环境', '准备写书'), 'story-setup'),
+        (('搜一下', '搜索一下', '联网搜索', '查一下', '帮我查', '搜搜', '最新排行', '搜索'), 'story-search'),
     ]
     normalized = message.lower()
     for keywords, skill_name in routes:
@@ -121,11 +122,13 @@ def get_story_skill_capability() -> StorySkillCapability:
     from app.workflows.review import execute_review_skill
     from app.skills.deslop import execute_deslop_skill
     from app.skills.prompt import execute_prompt_skill
+    from app.skills.search import execute_search_skill
 
     capability = StorySkillCapability(get_skill_registry())
     capability.register('story', 'router-v1', _execute_story_router)
     capability.register('story-review', 'langgraph-solo-v1', execute_review_skill)
     capability.register('story-deslop', 'deslop-v1', execute_deslop_skill, requires_model=True)
+    capability.register('story-search', 'search-v1', execute_search_skill)
     for skill_name in (
         'story-import',
         'story-long-analyze',

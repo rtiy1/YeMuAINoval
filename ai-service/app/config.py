@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_model: str = 'gpt-4o-mini'
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str | None = None
+    anthropic_model: str | None = None
+    tavily_api_key: str | None = None
     story_skills_root: str = str(PROJECT_ROOT / 'skills')
     story_node_bin: str = 'node'
 

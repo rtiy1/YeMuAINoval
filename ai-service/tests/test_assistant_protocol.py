@@ -2,12 +2,15 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 service_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(service_root))
 os.environ.setdefault('AI_SERVICE_TOKEN', 'test-token')
 
-from app.schemas import EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest
+from app.schemas import EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest, ModelConfig
+from app.skills.model_helper import resolve_model_kwargs
+from app.skills.capability import SkillInvocation
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
 from app.workflows.memory import extract_story_memories
@@ -34,6 +37,55 @@ class AssistantProtocolTests(unittest.TestCase):
         response = extract_story_memories(StoryMemoryExtractRequest(chapter_title='第一章', content='她推开门。', writing_context={}))
         self.assertEqual(response.status, 'needs_model')
         self.assertEqual(response.candidates, [])
+
+    def test_anthropic_kwargs_default_max_tokens_and_base_url(self):
+        kwargs = resolve_model_kwargs(ModelConfig(provider='anthropic', model='claude-3-5-sonnet-latest', api_key='k', api_base_url='https://proxy.example/v1'), get_settings := __import__('app.config', fromlist=['get_settings']).get_settings())
+        self.assertEqual(kwargs['provider'], 'anthropic')
+        self.assertEqual(kwargs['max_tokens'], 4096)
+        self.assertEqual(kwargs['anthropic_api_url'], 'https://proxy.example/v1')
+        self.assertNotIn('base_url', kwargs)
+
+    def test_openai_kwargs_unchanged(self):
+        kwargs = resolve_model_kwargs(ModelConfig(provider='openai', model='gpt-4o-mini', api_key='k', max_tokens=1024), __import__('app.config', fromlist=['get_settings']).get_settings())
+        self.assertEqual(kwargs['provider'], 'openai')
+        self.assertEqual(kwargs['max_tokens'], 1024)
+        self.assertNotIn('anthropic_api_url', kwargs)
+
+
+class SearchSkillTests(unittest.TestCase):
+    def test_search_parses_ddg_html_and_marks_searched(self):
+        from app.skills.search import execute_search_skill, _parse_ddg_html
+        # DuckDuckGo lite 页：单引号 class、直链、td 摘要
+        html = (
+            "<a rel='nofollow' href='https://example.com/a' class='result-link'>示例链接</a>"
+            "<td class='result-snippet'>这是摘要片段。</td>"
+        )
+        parsed = _parse_ddg_html(html)
+        self.assertEqual(parsed[0]['url'], 'https://example.com/a')
+        self.assertEqual(parsed[0]['snippet'], '这是摘要片段。')
+
+        invocation = SkillInvocation(skill_name='story-search', instruction='搜一下 悬疑短篇趋势')
+        with mock.patch('app.skills.search._search_ddg', return_value=parsed):
+            result = execute_search_skill(invocation)
+        self.assertEqual(result['status'], 'completed')
+        self.assertTrue(result['searched'])
+        self.assertEqual(result['provider'], 'duckduckgo')
+        self.assertEqual(result['results'][0]['title'], '示例链接')
+
+    def test_search_returns_failed_without_faking_results(self):
+        from app.skills.search import execute_search_skill
+        invocation = SkillInvocation(skill_name='story-search', instruction='搜一下 不存在的词')
+        with mock.patch('app.skills.search._search_ddg', side_effect=Exception('network down')):
+            result = execute_search_skill(invocation)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['searched'])
+        self.assertEqual(result['results'], [])
+
+    def test_search_needs_input_when_no_query(self):
+        from app.skills.search import execute_search_skill
+        result = execute_search_skill(SkillInvocation(skill_name='story-search', instruction='   '))
+        self.assertEqual(result['status'], 'needs_input')
+        self.assertFalse(result['searched'])
 
 
 if __name__ == '__main__':

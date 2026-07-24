@@ -50,5 +50,6 @@
 ## 后续数据库演进
 
 - [ ] 将 `users`、`sessions`、`projects`、`chapters`、`drafts` 和 `ideas` 从 JSONB 状态逐表拆为关系表，保留现有 HTTP API。
+- [x] 用 Redis 持久化夜雨写作助手聊天记忆（AOF），不可用时回退 JSON/Postgres。
 - [ ] 将 AI 任务执行从 Node 进程迁移到 Redis 队列和独立 worker，支持多副本扩展。
 - [ ] 增加 PostgreSQL Compose 集成测试和备份恢复演练。
