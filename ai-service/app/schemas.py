@@ -79,7 +79,7 @@ class StoryAgentRequest(BaseModel):
 
 class StoryAgentResponse(BaseModel):
     run_id: str
-    status: Literal['completed', 'needs_model', 'needs_adapter', 'failed']
+    status: Literal['completed', 'needs_input', 'needs_model', 'needs_adapter', 'failed']
     selected_skill: str
     route: str
     result: dict[str, Any]
@@ -99,6 +99,39 @@ class WritingRequirements(BaseModel):
     title: str = Field(default='', max_length=80)
 
 
+class WritingRequirementsPatch(BaseModel):
+    type: Literal['长篇', '短篇'] | None = None
+    genre: str | None = Field(default=None, max_length=30)
+    style: str | None = Field(default=None, max_length=80)
+    premise: str | None = Field(default=None, max_length=2000)
+    platform: str | None = Field(default=None, max_length=40)
+    title: str | None = Field(default=None, max_length=80)
+
+
+class AssistantQuestionOption(BaseModel):
+    label: str = Field(min_length=1, max_length=50)
+    value: str = Field(min_length=1, max_length=100)
+    description: str = Field(default='', max_length=160)
+
+
+class AssistantPlanQuestion(BaseModel):
+    id: str = Field(min_length=1, max_length=40, pattern=r'^[a-z0-9_-]+$')
+    field: Literal['type', 'genre', 'style', 'premise', 'platform', 'title', 'intent', 'context']
+    question: str = Field(min_length=1, max_length=300)
+    options: list[AssistantQuestionOption] = Field(default_factory=list, max_length=6)
+    allow_custom: bool = True
+    multiple: bool = False
+
+
+class WritingAssistantTurnRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    messages: list[WritingAssistantMessage] = Field(default_factory=list, max_length=20)
+    requirements: WritingRequirementsPatch = Field(default_factory=WritingRequirementsPatch)
+    skill: str | None = Field(default=None, pattern=r'^[a-z0-9-]+$')
+    payload: dict[str, Any] = Field(default_factory=dict)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
+
+
 class WritingProposalChapter(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     content: str = Field(min_length=1, max_length=5000)
@@ -111,6 +144,19 @@ class WritingProposal(BaseModel):
     style: str = Field(min_length=1, max_length=80)
     tone: str = Field(min_length=1, max_length=2000)
     chapters: list[WritingProposalChapter] = Field(min_length=1, max_length=100)
+
+
+class WritingAssistantTurnResponse(BaseModel):
+    status: Literal['needs_input', 'ready', 'completed', 'needs_model', 'needs_adapter', 'failed']
+    phase: Literal['collecting_requirements', 'awaiting_confirmation', 'completed']
+    reply: str
+    selected_skill: str
+    route: str
+    requirements: WritingRequirementsPatch
+    missing: list[str] = Field(default_factory=list)
+    questions: list[AssistantPlanQuestion] = Field(default_factory=list)
+    result: dict[str, Any] | None = None
+    proposal: WritingProposal | None = None
 
 
 class WritingProposalRequest(BaseModel):

@@ -353,7 +353,7 @@ function createWritingSession(userId) {
   const timestamp = new Date().toISOString()
   return {
     id: crypto.randomUUID(), userId, phase: 'collecting_requirements', messages: [],
-    requirements: emptyWritingRequirements(), proposal: null, selectedSkill: null, projectId: null,
+    requirements: emptyWritingRequirements(), proposal: null, selectedSkill: null, questions: [], lastResult: null, projectId: null,
     createdAt: timestamp, updatedAt: timestamp,
   }
 }
@@ -364,6 +364,7 @@ function writingSessionPublic(session) {
     id: session.id, phase: session.phase, messages: session.messages || [],
     requirements: { ...emptyWritingRequirements(), ...(session.requirements || {}) },
     proposal: session.proposal || null, selectedSkill: session.selectedSkill || null,
+    questions: Array.isArray(session.questions) ? session.questions : [], lastResult: session.lastResult || null,
     projectId: session.projectId || null, createdAt: session.createdAt, updatedAt: session.updatedAt,
   }
 }
@@ -781,6 +782,27 @@ async function executeWritingTask(taskId, userId) {
   }
 }
 
+async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}) {
+  const modelConfig = await getUserModelConfig(user)
+  const body = {
+    message,
+    messages: (session.messages || []).map(({ role, text }) => ({ role, text })),
+    requirements: session.requirements || emptyWritingRequirements(),
+    skill: skill || undefined,
+    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
+  }
+  if (modelConfig) body.model_config = modelConfig
+  const response = await fetch(`${aiServiceUrl}/v1/assistants/writing/turn`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120_000),
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok) throw Object.assign(new Error(result?.detail || '写作助手处理失败'), { status: response.status >= 500 ? 502 : response.status })
+  return result
+}
+
 async function requestWritingProposal(user, session) {
   const modelConfig = await getUserModelConfig(user)
   const body = {
@@ -998,70 +1020,75 @@ app.get('/api/writing-assistant/session', async (req, res, next) => {
 })
 
 app.post('/api/writing-assistant/messages', async (req, res, next) => {
+  let prepared = null
   try {
     const message = cleanText(req.body?.message, '助手消息', 4000)
-    const prepared = await updateDb((db) => {
+    const skill = req.body?.skill === undefined || req.body?.skill === null || req.body?.skill === ''
+      ? null
+      : cleanText(req.body.skill, 'Skill 名称', 80)
+    if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
+    const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
+    if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
+
+    prepared = await updateDb((db) => {
       let session = db.writingSessions[req.user.id]
-      if (!session || session.userId !== req.user.id || req.body?.restart === true) {
-        session = createWritingSession(req.user.id)
-        db.writingSessions[req.user.id] = session
-      }
-      if (session.phase === 'writing') {
+      if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
         session = createWritingSession(req.user.id)
         db.writingSessions[req.user.id] = session
       }
       appendWritingMessage(session, 'user', message)
       if (session.phase === 'awaiting_confirmation') {
-        const reply = '建书方案已经准备好，请先确认创建，或取消后重新开始。'
+        const reply = '建书方案已经准备好，请先确认创建，或开始新对话。'
         appendWritingMessage(session, 'assistant', reply)
-        return { session: writingSessionPublic(session), reply, missing: [] }
+        return { blocked: true, reply, session: writingSessionPublic(session) }
       }
-      session.requirements = mergeWritingRequirements(session.requirements, message)
-      session.selectedSkill = session.requirements.type === '短篇' ? 'story-short-write' : session.requirements.type === '长篇' ? 'story-long-write' : null
-      const missing = missingWritingRequirements(session.requirements)
-      if (missing.length) {
-        const reply = writingQuestion(missing)
-        appendWritingMessage(session, 'assistant', reply)
-        return { session: writingSessionPublic(session), reply, missing }
-      }
-      return { session: writingSessionPublic(session), reply: '', missing: [] }
+      session.questions = []
+      return { blocked: false, session: writingSessionPublic(session) }
     })
 
-    if (prepared.session.phase === 'awaiting_confirmation') {
-      res.json({ status: 'completed', phase: prepared.session.phase, reply: prepared.reply, missing: [], selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: prepared.session.proposal, session: prepared.session })
-      return
-    }
-    if (prepared.missing.length) {
-      res.json({ status: 'needs_input', phase: 'collecting_requirements', reply: prepared.reply, missing: prepared.missing, selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: null, session: prepared.session })
+    if (prepared.blocked) {
+      res.json({ status: 'completed', phase: prepared.session.phase, reply: prepared.reply, missing: [], questions: [], selectedSkill: prepared.session.selectedSkill, requirements: prepared.session.requirements, proposal: prepared.session.proposal, session: prepared.session })
       return
     }
 
-    const generated = await requestWritingProposal(req.user, prepared.session)
+    const generated = await requestWritingAssistantTurn(req.user, prepared.session, message, skill, payload)
     const updated = await updateDb((db) => {
       const session = db.writingSessions[req.user.id]
       if (!session || session.id !== prepared.session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
+      session.requirements = { ...emptyWritingRequirements(), ...(generated.requirements || session.requirements || {}) }
+      session.selectedSkill = generated.selected_skill || skill || session.selectedSkill || null
+      session.questions = Array.isArray(generated.questions) ? generated.questions.slice(0, 2) : []
+      session.lastResult = generated.result || null
       const reply = cleanOptionalText(generated.reply, '助手回复', 4000)
-        || (generated.status === 'needs_model' ? '请先在设置中配置模型，当前创作需求已经保存。' : generated.status === 'failed' ? '方案生成失败，请检查模型配置后重试。' : '建书方案已经准备好，请确认后创建作品。')
-      if (generated.status === 'completed' && generated.proposal) {
-        session.proposal = validateSmartProposal(generated.proposal, session.requirements.type)
+        || (generated.status === 'needs_model' ? '请先在设置中配置模型，当前创作需求已经保存。' : generated.status === 'failed' ? '处理失败，请检查模型配置后重试。' : '我已经处理好这个请求。')
+      if (generated.proposal) {
+        session.proposal = validateSmartProposal(generated.proposal, session.requirements.type || '长篇')
         session.phase = 'awaiting_confirmation'
+      } else if (generated.phase === 'completed') {
+        session.phase = 'collecting_requirements'
+      } else {
+        session.phase = generated.phase || 'collecting_requirements'
       }
       appendWritingMessage(session, 'assistant', reply)
       return { session: writingSessionPublic(session), reply }
     })
+
     res.json({
       status: generated.status,
       phase: updated.session.phase,
       reply: updated.reply,
       missing: generated.missing || [],
+      questions: updated.session.questions,
       selectedSkill: updated.session.selectedSkill,
+      route: generated.route || '',
       requirements: updated.session.requirements,
+      result: updated.session.lastResult,
       proposal: updated.session.proposal,
       session: updated.session,
     })
   } catch (error) {
     if (isNetworkError(error)) {
-      next(Object.assign(new Error('AI 服务暂不可用，创作需求已保存'), { status: 503 }))
+      next(Object.assign(new Error(prepared ? 'AI 服务暂不可用，本轮消息已保存' : 'AI 服务暂不可用'), { status: 503 }))
       return
     }
     next(error)

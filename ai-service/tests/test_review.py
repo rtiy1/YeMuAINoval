@@ -164,7 +164,7 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
                 'model_config': {
                     'api_key': 'sk-test-fake-key-123456',
                     'model': 'gpt-4o-mini',
-                    'base_url': 'http://127.0.0.1:9999',
+                    'api_base_url': 'http://127.0.0.1:9999',
                 },
             },
         )
