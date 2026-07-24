@@ -38,6 +38,26 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertEqual(response.status, 'needs_model')
         self.assertEqual(response.candidates, [])
 
+    def test_web_search_toggle_bypasses_planning_and_uses_results(self):
+        from app.workflows.assistant_agent import run_writing_assistant_turn
+        request = WritingAssistantTurnRequest(message='最近悬疑短篇有什么趋势？', web_search=True)
+        fake = {'status': 'completed', 'results': [{'title': '盐言故事榜', 'url': 'https://example.com/a', 'snippet': '...'}], 'summary': None, 'searched': True, 'message': '已检索到 1 条结果。'}
+        with mock.patch('app.skills.search.execute_search_skill', return_value=fake):
+            response = run_writing_assistant_turn(request)
+        self.assertEqual(response.status, 'completed')
+        self.assertEqual(response.selected_skill, 'story-search')
+        self.assertEqual(response.route, 'web-search')
+        self.assertIn('盐言故事榜', response.reply)
+        self.assertIsNone(response.proposal)
+
+    def test_web_search_toggle_reports_failure_honestly(self):
+        from app.workflows.assistant_agent import run_writing_assistant_turn
+        request = WritingAssistantTurnRequest(message='搜一下 不存在的词', web_search=True)
+        with mock.patch('app.skills.search.execute_search_skill', return_value={'status': 'failed', 'results': [], 'message': '联网搜索失败。', 'searched': False}):
+            response = run_writing_assistant_turn(request)
+        self.assertEqual(response.status, 'completed')
+        self.assertIn('失败', response.reply)
+
     def test_anthropic_kwargs_default_max_tokens_and_base_url(self):
         kwargs = resolve_model_kwargs(ModelConfig(provider='anthropic', model='claude-3-5-sonnet-latest', api_key='k', api_base_url='https://proxy.example/v1'), get_settings := __import__('app.config', fromlist=['get_settings']).get_settings())
         self.assertEqual(kwargs['provider'], 'anthropic')

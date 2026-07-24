@@ -886,7 +886,7 @@ async function executeWritingTask(taskId, userId) {
   }
 }
 
-async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}) {
+async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
   const modelConfig = await getUserModelConfig(user)
   const body = {
     message,
@@ -895,6 +895,7 @@ async function requestWritingAssistantTurn(user, session, message, skill = null,
     skill: skill || undefined,
     payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
   }
+  if (webSearch) body.web_search = true
   if (modelConfig) body.model_config = modelConfig
   const response = await fetch(`${aiServiceUrl}/v1/assistants/writing/turn`, {
     method: 'POST',
@@ -1173,6 +1174,7 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
     const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
     if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
+    const webSearch = req.body?.web_search === true
 
     let session = await loadWritingSession(req.user.id)
     if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
@@ -1191,7 +1193,7 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     await saveWritingSession(req.user.id, session)
     prepared = { session }
 
-    const generated = await requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload)
+    const generated = await requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webSearch)
     const reloaded = await loadWritingSession(req.user.id)
     if (!reloaded || reloaded.id !== session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
     session = reloaded
