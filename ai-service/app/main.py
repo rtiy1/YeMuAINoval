@@ -10,6 +10,8 @@ from app.schemas import (
     SkillCatalogResponse,
     StoryAgentRequest,
     StoryAgentResponse,
+    StoryMemoryExtractRequest,
+    StoryMemoryExtractResponse,
     WritingAssistantTurnRequest,
     WritingAssistantTurnResponse,
     WritingProposalRequest,
@@ -18,6 +20,7 @@ from app.schemas import (
 from app.skills.capability import get_story_skill_capability
 from app.skills.registry import SkillRegistryError
 from app.workflows.assistant_agent import run_writing_assistant_turn
+from app.workflows.memory import extract_story_memories
 from app.workflows.writing_assistant import generate_writing_proposal
 from app.workflows.story_agent import run_story_agent
 
@@ -77,6 +80,11 @@ async def writing_assistant_turn(request: WritingAssistantTurnRequest):
 @app.post('/v1/assistants/writing/proposal', response_model=WritingProposalResponse, dependencies=[Depends(verify_service_token)])
 async def writing_proposal(request: WritingProposalRequest):
     return generate_writing_proposal(request)
+
+
+@app.post('/v1/memories/extract', response_model=StoryMemoryExtractResponse, dependencies=[Depends(verify_service_token)])
+async def extract_memories(request: StoryMemoryExtractRequest):
+    return extract_story_memories(request)
 
 
 @app.post('/v1/reviews/chapter', response_model=ChapterReviewResponse, dependencies=[Depends(verify_service_token)])

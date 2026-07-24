@@ -85,6 +85,42 @@ class StoryAgentResponse(BaseModel):
     result: dict[str, Any]
 
 
+class StoryMemoryCandidate(BaseModel):
+    type: Literal['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit']
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=4000)
+    importance: int = Field(default=3, ge=1, le=5)
+    character_name: str = Field(default='', max_length=80)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    reason: str = Field(default='', max_length=500)
+    replaces_memory_id: str | None = None
+
+
+class StoryMemoryExtractRequest(BaseModel):
+    chapter_title: str = Field(default='当前章节', min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=500_000)
+    writing_context: dict[str, Any] = Field(default_factory=dict)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
+
+
+class StoryMemoryExtractResponse(BaseModel):
+    status: Literal['completed', 'needs_model', 'failed']
+    message: str
+    candidates: list[StoryMemoryCandidate] = Field(default_factory=list, max_length=40)
+
+
+class EditProposalBlock(BaseModel):
+    original: str = Field(default='', max_length=100_000)
+    replacement: str = Field(default='', max_length=100_000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class EditProposal(BaseModel):
+    revised_text: str = Field(max_length=500_000)
+    summary: str = Field(min_length=1, max_length=1000)
+    blocks: list[EditProposalBlock] = Field(default_factory=list, max_length=200)
+
+
 class WritingAssistantMessage(BaseModel):
     role: Literal['user', 'assistant']
     text: str = Field(min_length=1, max_length=4000)

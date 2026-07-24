@@ -8,19 +8,42 @@ import path from 'node:path'
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-api-'))
 const dataFile = path.join(tempDir, 'db.json')
 const aiServer = http.createServer(async (req, res) => {
-  if (req.method !== 'POST' || !['/v1/assistants/writing/proposal', '/v1/agents/story'].includes(req.url)) {
+  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/memories/extract'].includes(req.url)) {
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'not found' }))
     return
   }
   let raw = ''
   for await (const chunk of req) raw += chunk
   const body = JSON.parse(raw || '{}')
+  if (req.url === '/v1/memories/extract') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', message: '已整理候选记忆', candidates: [{ type: 'chapter_summary', title: '本章摘要', content: '测试摘要', importance: 3, reason: '正文明确' }] }))
+    return
+  }
   if (req.url === '/v1/agents/story') {
     if (String(body.message || '').includes('取消任务')) await new Promise((resolve) => setTimeout(resolve, 300))
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', route: 'story', selected_skill: body.skill || 'story', result: { output: '测试 AI 输出' } }))
     return
   }
   const requirements = body.requirements || {}
+  if (req.url === '/v1/assistants/writing/turn') {
+    const values = { type: '', genre: '', style: '', premise: '', ...requirements }
+    const message = String(body.message || '')
+    if (!values.type && message.includes('短篇')) values.type = '短篇'
+    else if (!values.genre && values.type) values.genre = message
+    else if (!values.style && values.genre) values.style = message
+    else if (!values.premise && values.style) values.premise = message
+    const missing = ['type', 'genre', 'style', 'premise'].filter((field) => !values[field])
+    if (missing.length) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'needs_input', phase: 'collecting_requirements', reply: '请继续补充。', selected_skill: values.type === '短篇' ? 'story-short-write' : 'story-long-write', route: 'test', requirements: values, missing, questions: [] }))
+      return
+    }
+    const turnPayload = {
+      status: 'completed', phase: 'awaiting_confirmation', missing: [], reply: '建书方案已经准备好，请确认后创建。', selected_skill: values.type === '短篇' ? 'story-short-write' : 'story-long-write', route: 'test', requirements: values,
+      proposal: { title: '雾港回声', type: values.type, genre: values.genre, style: values.style, tone: values.premise, chapters: [{ title: '第一章 来信', content: '主角收到一封来自失踪记者的信，并发现日期来自未来。' }, { title: '第二章 旧港', content: '主角前往封闭的旧港寻找第一条线索。' }, { title: '第三章 回声', content: '谎言被揭开一角，新的追踪者出现。' }] },
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(turnPayload))
+    return
+  }
   const payload = {
     status: 'completed', phase: 'awaiting_confirmation', missing: [],
     reply: '建书方案已经准备好，请确认后创建。',
@@ -222,12 +245,24 @@ try {
 
   const smartIdea = await call('POST', '/api/ideas', { label: '线索', title: '未来邮戳', body: '邮戳日期比寄信日早三天。', projectId: smart.payload.project.id, pinned: true })
   assert.equal(smartIdea.response.status, 201)
+  const smartMemory = await call('POST', '/api/story-memories', { projectId: smart.payload.project.id, type: 'canon_fact', title: '记者身份', content: '失踪记者曾在旧港工作。', importance: 5, sourceChapterId: '1' })
+  assert.equal(smartMemory.response.status, 201)
+  const memoryBatch = await call('POST', '/api/story-memories/batch', { projectId: smart.payload.project.id, memories: [
+    { type: 'character_state', title: '主角状态', content: '主角已经返回旧港。', importance: 4, sourceChapterId: '2', characterName: '主角' },
+    { type: 'chapter_summary', title: '第二章摘要', content: '主角回到旧港调查来信。', sourceChapterId: '2' },
+  ] })
+  assert.equal(memoryBatch.response.status, 201)
+  assert.equal(memoryBatch.payload.created.length, 2)
+  assert.equal((await call('GET', `/api/story-memories?projectId=${smart.payload.project.id}`)).payload.memories.length, 3)
   const smartForeshadow = await call('POST', '/api/foreshadows', { projectId: smart.payload.project.id, title: '第三封信', content: '第三封信会揭示失踪记者的真实身份。', status: 'planted', importance: 5, plantChapterId: '1', targetChapterId: '2' })
   assert.equal(smartForeshadow.response.status, 201)
   const smartContext = await call('GET', `/api/projects/${smart.payload.project.id}/chapters/2/context`)
   assert.equal(smartContext.response.status, 200)
   assert.equal(smartContext.payload.context.chapter.outline, '主角回到封闭多年的旧港调查。')
   assert.equal(smartContext.payload.context.materials[0].title, '未来邮戳')
+  assert.equal(smartContext.payload.context.version, 2)
+  assert.equal(smartContext.payload.context.storyMemory[0].title, '记者身份')
+  assert.equal(smartContext.payload.context.storyMemory.length, 3)
   assert.equal(smartContext.payload.context.unresolvedForeshadows[0].title, '第三封信')
   assert.equal((await call('DELETE', `/api/projects/${smart.payload.project.id}`)).response.status, 204)
 
@@ -271,11 +306,20 @@ try {
   }
   assert.equal(completedTask.payload.task.status, 'completed')
   assert.equal(completedTask.payload.task.result.result.output, '测试 AI 输出')
+  const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
+  const reusedTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
+  assert.equal(reusedTask.payload.task.id, duplicateTask.payload.task.id)
+  assert.equal(reusedTask.payload.task.reused, true)
   const cancelTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '取消任务', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   assert.equal(cancelTask.response.status, 202)
   const cancelled = await call('POST', `/api/ai/tasks/${cancelTask.payload.task.id}/cancel`)
   assert.equal(cancelled.response.status, 200)
   assert.equal(cancelled.payload.task.status, 'cancelled')
+  assert.equal(cancelled.payload.task.errorCode, 'cancelled')
+  const retried = await call('POST', `/api/ai/tasks/${cancelTask.payload.task.id}/retry`)
+  assert.equal(retried.response.status, 202)
+  assert.equal(retried.payload.task.attempt, 2)
+  assert.equal(retried.payload.task.parentTaskId, cancelTask.payload.task.id)
 
   assert.equal((await call('DELETE', `/api/projects/${projectId}`)).response.status, 204)
 
