@@ -2840,7 +2840,7 @@ function SettingsModal({ onClose, onNotify }) {
   const [saving, setSaving] = useState(false)
   const [modelList, setModelList] = useState([])
   const [fetchingModels, setFetchingModels] = useState(false)
-  const [form, setForm] = useState({ apiBaseUrl: '', apiKey: '', model: '', temperature: 0.7, maxTokens: 4096, contextWindow: 16384 })
+  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', temperature: 0.7, maxTokens: 4096, contextWindow: 16384 })
 
   useEffect(() => {
     let mounted = true
@@ -2850,6 +2850,7 @@ function SettingsModal({ onClose, onNotify }) {
         const s = response.settings || {}
         setSettings(s)
         setForm({
+          provider: s.provider === 'anthropic' ? 'anthropic' : 'openai',
           apiBaseUrl: s.apiBaseUrl || '',
           apiKey: '',
           model: s.model || '',
@@ -2913,9 +2914,18 @@ function SettingsModal({ onClose, onNotify }) {
       ) : (
         <form className="settings-form" onSubmit={handleSave}>
           <label className="settings-field">
+            <span>模型服务商</span>
+            <select value={form.provider} onChange={(e) => updateField('provider', e.target.value)}>
+              <option value="openai">OpenAI 兼容</option>
+              <option value="anthropic">Anthropic（Claude）</option>
+            </select>
+            <small>选择 OpenAI 兼容或 Anthropic 格式；两者均可填自定义 Base URL 走代理</small>
+          </label>
+
+          <label className="settings-field">
             <span>API Base URL</span>
-            <input type="url" value={form.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder="https://api.openai.com/v1" />
-            <small>OpenAI 兼容 API 地址，留空使用服务端默认</small>
+            <input type="url" value={form.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder={form.provider === 'anthropic' ? 'https://api.anthropic.com/v1（留空用官方）' : 'https://api.openai.com/v1'} />
+            <small>{form.provider === 'anthropic' ? 'Anthropic 兼容地址，留空使用官方 API' : 'OpenAI 兼容 API 地址，留空使用服务端默认'}</small>
           </label>
 
           <label className="settings-field">
@@ -2927,7 +2937,7 @@ function SettingsModal({ onClose, onNotify }) {
           <div className="settings-model-row">
             <label className="settings-field settings-model-field">
               <span>模型名</span>
-              <input type="text" value={form.model} onChange={(e) => updateField('model', e.target.value)} placeholder="gpt-4o-mini" list="model-list" />
+              <input type="text" value={form.model} onChange={(e) => updateField('model', e.target.value)} placeholder={form.provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini'} list="model-list" />
               <small>输入或从下拉选择</small>
             </label>
             <button type="button" className="settings-fetch-models" disabled={fetchingModels} onClick={handleFetchModels}>

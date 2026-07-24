@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ModelConfig(BaseModel):
     """用户自定义的 LLM 模型配置，覆盖服务端默认。"""
+    provider: Literal['openai', 'anthropic'] | None = None
     api_base_url: str | None = None
     api_key: str | None = None
     model: str | None = None

@@ -32,8 +32,8 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertTrue(payload['ok'])
         self.assertFalse(payload['llm_configured'])
-        self.assertEqual(payload['skills_installed'], 13)
-        self.assertEqual(payload['skills_ready'], 2)
+        self.assertEqual(payload['skills_installed'], 14)
+        self.assertEqual(payload['skills_ready'], 3)
         self.assertEqual(payload['skills_needing_model'], 9)
 
     async def test_registry_uses_vendored_project_skills(self):
@@ -56,6 +56,8 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(skills['story-deslop']['executor'], 'deslop-v1')
         self.assertEqual(skills['story-long-write']['executor'], 'prompt-only-v1')
         self.assertEqual(skills['story-cover']['status'], 'registered')
+        self.assertEqual(skills['story-search']['status'], 'ready')
+        self.assertEqual(skills['story-search']['executor'], 'search-v1')
 
     async def test_agent_invokes_story_review_capability(self):
         response = await self.client.post(

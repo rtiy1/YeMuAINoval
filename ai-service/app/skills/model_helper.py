@@ -1,7 +1,7 @@
 """模型配置解析 helper。
 
 合并用户自定义的模型配置（per-request）与服务端默认设置，
-统一供 4 个 ChatOpenAI 调用点使用。
+按 provider 选择 ChatOpenAI 或 ChatAnthropic。
 """
 
 from typing import Any
@@ -11,18 +11,44 @@ from langchain_openai import ChatOpenAI
 from app.config import Settings
 
 
+def _provider_of(override: Any | None) -> str:
+    return getattr(override, 'provider', None) or 'openai'
+
+
 def resolve_model_kwargs(
     override: Any | None,
     settings: Settings,
     default_temperature: float = 0.2,
 ) -> dict[str, Any]:
-    """合并 override 与 settings 默认值，返回 ChatOpenAI 可用的 kwargs。
+    """合并 override 与 settings 默认值，返回按 provider 分流的模型 kwargs。
 
     override 中非 None 的字段覆盖 settings 默认值。
-    返回 dict 始终含 model / api_key / temperature；
-    base_url 仅在非空时加入；max_tokens 仅在非空时加入。
+    OpenAI: 始终含 model / api_key / temperature；base_url、max_tokens 仅在非空时加入。
+    Anthropic: 始终含 model / api_key / temperature / max_tokens（必填，默认 4096）；
+    base_url 非空时映射为 anthropic_api_url。
+    返回 dict 额外含 'provider'。
     """
     ov = override
+    provider = _provider_of(ov)
+    if provider == 'anthropic':
+        model = (ov.model if ov and ov.model else None) or settings.anthropic_model or 'claude-3-5-sonnet-latest'
+        api_key = (ov.api_key if ov and ov.api_key else None) or settings.anthropic_api_key
+        temperature = default_temperature
+        if ov and ov.temperature is not None:
+            temperature = max(0.0, min(2.0, float(ov.temperature)))
+        base_url = (ov.api_base_url if ov and ov.api_base_url else None) or settings.anthropic_base_url
+        max_tokens = (ov.max_tokens if ov and ov.max_tokens is not None else None) or 4096
+        kwargs: dict[str, Any] = {
+            'provider': 'anthropic',
+            'model': model,
+            'api_key': api_key,
+            'temperature': temperature,
+            'max_tokens': int(max_tokens),
+        }
+        if base_url:
+            kwargs['anthropic_api_url'] = base_url
+        return kwargs
+
     model = (ov.model if ov and ov.model else None) or settings.openai_model
     api_key = (ov.api_key if ov and ov.api_key else None) or settings.openai_api_key
     temperature = default_temperature
@@ -30,8 +56,8 @@ def resolve_model_kwargs(
         temperature = max(0.0, min(2.0, float(ov.temperature)))
     base_url = (ov.api_base_url if ov and ov.api_base_url else None) or settings.openai_base_url
     max_tokens = (ov.max_tokens if ov and ov.max_tokens is not None else None)
-
-    kwargs: dict[str, Any] = {
+    kwargs = {
+        'provider': 'openai',
         'model': model,
         'api_key': api_key,
         'temperature': temperature,
@@ -44,9 +70,11 @@ def resolve_model_kwargs(
 
 
 def has_api_key(override: Any | None, settings: Settings) -> bool:
-    """判断是否有可用的 API Key（override 优先，回退 settings）。"""
+    """判断是否有可用的 API Key（override 优先，回退 settings，按 provider）。"""
     if override and override.api_key:
         return True
+    if _provider_of(override) == 'anthropic':
+        return bool(settings.anthropic_api_key)
     return bool(settings.openai_api_key)
 
 
@@ -84,6 +112,11 @@ def truncate_for_context(
     return text
 
 
-def create_chat_model(override: Any | None, settings: Settings, default_temperature: float = 0.2) -> ChatOpenAI:
-    """直接构造 ChatOpenAI 实例，合并 override 配置。"""
-    return ChatOpenAI(**resolve_model_kwargs(override, settings, default_temperature))
+def create_chat_model(override: Any | None, settings: Settings, default_temperature: float = 0.2):
+    """按 provider 构造聊天模型实例，合并 override 配置。"""
+    kwargs = resolve_model_kwargs(override, settings, default_temperature)
+    provider = kwargs.pop('provider', 'openai')
+    if provider == 'anthropic':
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(**kwargs)
+    return ChatOpenAI(**kwargs)
