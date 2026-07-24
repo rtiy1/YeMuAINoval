@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 WRITING_SKILLS = {'story-long-write', 'story-short-write'}
 REQUIRED_WRITING_FIELDS = ('type', 'genre', 'style', 'premise')
 
-ASSISTANT_SYSTEM_PROMPT = '''你是“叙事工坊”的统一创作智能体。你的职责不是机械填表，而是先理解用户真正想完成的创作任务，再决定是否调用一个已注册的 Skill。
+ASSISTANT_SYSTEM_PROMPT = '''你是“夜雨”，叙事工坊的统一创作智能体。你的职责不是机械填表，而是先理解用户真正想完成的创作任务，再决定是否调用一个已注册的 Skill。
 
 工作原则：
 1. 只从能力目录选择 Skill，不编造工具。用户强制指定 Skill 时必须遵从。
