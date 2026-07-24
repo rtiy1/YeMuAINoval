@@ -40,6 +40,7 @@ import {
   Menu,
   Minimize2,
   MoreHorizontal,
+  PanelLeft,
   PanelRight,
   PenLine,
   Pin,
@@ -67,9 +68,13 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 
+const ASSISTANT_NAME = '夜雨'
+const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
+const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
+
 const primaryNavItems = [
   { id: 'overview', label: '总览', icon: LayoutDashboard },
-  { id: 'assistant', label: '创作助手', icon: MessageCircle },
+  { id: 'assistant', label: ASSISTANT_NAME, icon: MessageCircle },
   { id: 'works', label: '我的作品', icon: BookOpen },
   { id: 'library', label: '素材库', icon: Library },
 ]
@@ -84,12 +89,12 @@ const navItems = [...primaryNavItems, ...moreNavItems]
 const editorFeatureActions = [
   { key: 'write', label: 'AI写作', tone: 'violet', icon: WandSparkles, skill: 'story', command: '结合当前作品设定，帮我继续规划并写作下一段。' },
   { key: 'continue', label: '续写', tone: 'blue', icon: PenLine, skill: 'story', command: '根据当前章节上下文续写，保持人物和叙事风格一致。' },
-  { key: 'workflow', label: '工作流', tone: 'teal', icon: Grid2X2, skill: 'story', command: '为当前章节规划一个从大纲到正文的写作工作流。' },
-  { key: 'edit', label: 'AI编辑', tone: 'green', icon: BrainCircuit, skill: 'story-review', command: '编辑当前章节，指出结构、人物和节奏问题。' },
+  { key: 'workflow', label: '写作计划', tone: 'teal', icon: Grid2X2, skill: 'story', command: '为当前章节整理从情节目标到正文推进的写作计划，先不要直接修改正文。' },
+  { key: 'edit', label: '章节诊断', tone: 'green', icon: BrainCircuit, skill: 'story-review', command: '诊断当前章节的结构、人物和节奏问题，输出修改建议报告，不直接修改正文。' },
   { key: 'expand', label: 'AI扩写', tone: 'purple', icon: Maximize2, skill: 'story', command: '扩写当前选中的情节，增加细节、动作和情绪推进。' },
-  { key: 'polish', label: 'AI润色', tone: 'green', icon: Wand2, skill: 'story-deslop', command: '润色当前章节，让语言更自然、更像作者本人。' },
+  { key: 'polish', label: '自然化润色', tone: 'green', icon: Wand2, skill: 'story-deslop', command: '对当前章节去 AI 味，让语言更自然、更像作者本人。' },
   { key: 'brainstorm', label: '灵感风暴', tone: 'orange', icon: Lightbulb, skill: 'story', command: '围绕当前章节生成 5 个可用的剧情转折和灵感。' },
-  { key: 'proofread', label: 'AI纠错', tone: 'red', icon: CheckSquare2, skill: 'story-review', command: '检查当前章节的错别字、病句、逻辑和格式问题。' },
+  { key: 'proofread', label: '文字检查', tone: 'red', icon: CheckSquare2, skill: 'story-review', command: '检查当前章节的错别字、病句、逻辑和格式问题，输出纠错报告，不直接修改正文。' },
   { key: 'characters', label: '人物', tone: 'indigo', icon: UsersRound, tab: '人物' },
   { key: 'terms', label: '词条', tone: 'indigo', icon: Tags, tab: '词条' },
 ]
@@ -103,18 +108,17 @@ const authQuotes = [
 
 // 每个 skill 的默认指令和功能标签
 const skillMeta = {
-  'story': { label: '网文工具箱路由', command: '我想写小说' },
-  'story-long-write': { label: '长篇写作', command: '帮我开书', needsContent: false },
-  'story-long-write-outline': { label: '写大纲', command: '帮我写大纲', needsContent: false },
-  'story-short-write': { label: '短篇写作', command: '帮我写一篇短篇', needsContent: false },
-  'story-long-analyze': { label: '长篇拆文', command: '拆解这本书', needsContent: true },
-  'story-short-analyze': { label: '短篇拆文', command: '拆解这个短篇', needsContent: true },
-  'story-long-scan': { label: '长篇扫榜', command: '长篇什么火', needsContent: false },
-  'story-short-scan': { label: '短篇扫榜', command: '短篇什么火', needsContent: false },
-  'story-deslop': { label: '去 AI 味', command: '对以下正文去 AI 味', needsContent: true },
-  'story-review': { label: '章节审稿', command: '审查这一章', needsContent: true },
-  'story-import': { label: '导入小说', command: '导入我的小说', needsContent: true },
-  'story-setup': { label: '环境部署', command: '准备写书', needsContent: false },
+  'story': { label: '智能创作路由', command: '我想写小说' },
+  'story-long-write': { label: '长篇写作', command: '帮我规划并创作一本长篇小说', needsContent: false },
+  'story-short-write': { label: '短篇写作', command: '帮我规划并创作一篇短篇小说', needsContent: false },
+  'story-long-analyze': { label: '长篇正文分析', command: '分析我提供的长篇正文结构', needsContent: true },
+  'story-short-analyze': { label: '短篇正文分析', command: '分析我提供的短篇正文结构', needsContent: true },
+  'story-long-scan': { label: '长篇题材趋势', command: '分析长篇网文的题材与市场趋势；不要声称获取了实时榜单', needsContent: false },
+  'story-short-scan': { label: '短篇题材趋势', command: '分析短篇网文的题材与市场趋势；不要声称获取了实时榜单', needsContent: false },
+  'story-deslop': { label: '自然化润色', command: '对以下正文去 AI 味', needsContent: true },
+  'story-review': { label: '章节诊断报告', command: '审查这一章并输出报告，不直接修改正文', needsContent: true },
+  'story-import': { label: '粘贴文稿分析', command: '分析我粘贴的小说正文结构', needsContent: true },
+  'story-setup': { label: '写作准备建议', command: '给我一份开始写书前的准备建议，不执行系统部署', needsContent: false },
 }
 
 // 需要正文的 skill
@@ -237,8 +241,16 @@ function App() {
   const [importProjectOpen, setImportProjectOpen] = useState(false)
   const [importProjectLoading, setImportProjectLoading] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
   const [toast, setToast] = useState('')
   const [skillCatalog, setSkillCatalog] = useState([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
   const [reviewReport, setReviewReport] = useState(null)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
@@ -327,11 +339,21 @@ function App() {
   }, [user])
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
+    } catch {
+      // 浏览器禁用本地存储时仍可在当前会话使用折叠状态。
+    }
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
     if (!user) return undefined
     let mounted = true
+    setSkillsLoading(true)
     api.getSkills()
       .then((response) => { if (mounted) setSkillCatalog(response.skills || []) })
-      .catch(() => { if (mounted) setSkillCatalog([]) })
+      .catch(() => undefined)
+      .finally(() => { if (mounted) setSkillsLoading(false) })
     return () => { mounted = false }
   }, [user])
 
@@ -462,6 +484,22 @@ function App() {
   const wordCount = useMemo(() => draft.replace(/\s/g, '').length, [draft])
   const hasUnsavedDraft = Boolean(currentProject?.id && activeChapterId != null && draft !== savedDraftRef.current)
 
+  async function refreshSkills({ notifyResult = true } = {}) {
+    if (skillsLoading) return false
+    setSkillsLoading(true)
+    try {
+      const response = await api.getSkills()
+      setSkillCatalog(response.skills || [])
+      if (notifyResult) setToast('能力目录已刷新')
+      return true
+    } catch (error) {
+      if (notifyResult) setToast(error.message || '能力目录刷新失败，已保留当前状态')
+      return false
+    } finally {
+      setSkillsLoading(false)
+    }
+  }
+
   async function refreshDashboard() {
     try {
       const response = await api.getDashboard()
@@ -565,7 +603,7 @@ function App() {
       if (response.status === 'needs_model') setToast('需求已保存，请先在设置中配置模型')
       else if (response.status === 'failed') setToast(response.reply || '方案生成失败，请重试')
     } catch (error) {
-      setToast(error.message || '写作助手暂时不可用')
+      setToast(error.message || `${ASSISTANT_NAME}暂时不可用`)
     } finally {
       setWritingAssistantLoading(false)
     }
@@ -680,7 +718,7 @@ function App() {
       if (currentChapterShortened) {
         await persistDraft(currentProject.id, activeChapterId, draft, { silent: true }).catch(() => undefined)
       }
-      setToast(error.message || '智能分章失败')
+      setToast(error.message || '拆分章节失败')
       return false
     }
   }
@@ -1025,20 +1063,23 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className={`sidebar ${showMobileMenu ? 'is-open' : ''}`}>
         <div className="brand-lockup">
           <div className="brand-mark"><span>叙</span></div>
-          <div>
+          <div className="brand-copy">
             <div className="brand-name">叙事工坊</div>
             <div className="brand-subtitle">STORY STUDIO</div>
           </div>
+          <button type="button" className="sidebar-collapse-button" aria-label={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'} title={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+            {sidebarCollapsed ? <PanelRight size={16} /> : <PanelLeft size={16} />}
+          </button>
         </div>
 
         <div className="sidebar-section-label">工作台</div>
         <nav className="primary-nav" aria-label="主导航">
           {primaryNavItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} onClick={() => selectSection(id)}>
+            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} aria-label={label} title={sidebarCollapsed ? label : undefined} onClick={() => selectSection(id)}>
               <Icon size={17} strokeWidth={1.8} />
               <span>{label}</span>
               {id === 'library' && <span className="nav-count">{ideas.length}</span>}
@@ -1049,7 +1090,7 @@ function App() {
         <div className="sidebar-section-label more-label">更多</div>
         <nav className="primary-nav secondary-nav" aria-label="更多功能">
           {moreNavItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} onClick={() => selectSection(id)}>
+            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} aria-label={label} title={sidebarCollapsed ? label : undefined} onClick={() => selectSection(id)}>
               <Icon size={17} strokeWidth={1.8} />
               <span>{label}</span>
             </button>
@@ -1068,8 +1109,8 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
-          <button className="nav-item" onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
+          <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
+          <button className="nav-item" aria-label="退出登录" title={sidebarCollapsed ? '退出登录' : undefined} onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
           <div className="profile-chip">
             <div className="avatar">{user.name.slice(0, 1)}</div>
             <div className="profile-copy"><strong>{user.name}</strong><span>{user.email}</span></div>
@@ -1101,7 +1142,7 @@ function App() {
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onSmartCreate={() => selectSection('assistant')} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
           {activeSection === 'deconstruct' && <Deconstruct onNotify={notify} onRunSkill={openSkillRunner} />}
-          {activeSection === 'toolkit' && <Toolkit onNotify={notify} skills={skillCatalog} onRunSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} onNavigate={selectSection} />}
+          {activeSection === 'toolkit' && <Toolkit onNotify={notify} skills={skillCatalog} skillsLoading={skillsLoading} onRefreshSkills={refreshSkills} onRunSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} onNavigate={selectSection} />}
         </div>
       </main>
 
@@ -1221,70 +1262,57 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
         <div>
           <div className="eyebrow"><span className="eyebrow-line" />{dateLabel}</div>
           <h1>{projects.length ? `${greeting}，继续写下去。` : `${greeting}，从第一本书开始。`}</h1>
-          <p className="welcome-copy">{projects.length ? '今天的故事，想从哪一幕开始？' : '新建一个作品，写下你的第一行。'}</p>
+          <p className="welcome-copy">{projects.length ? '回到正在推进的故事，或者先和夜雨理清下一步。' : '和夜雨聊聊你的想法，或手动建立第一部作品。'}</p>
         </div>
         <div className="welcome-actions">
-          <button className="secondary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />创作助手</button>
-          <button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button>
+          {active ? <><button className="secondary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />问问{ASSISTANT_NAME}</button><button className="primary-button" onClick={() => onOpen(active)}><PenLine size={17} />继续写作</button></> : <><button className="secondary-button" onClick={onNew}><BookPlus size={16} />手动新建</button><button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={17} />和{ASSISTANT_NAME}开始构思</button></>}
         </div>
       </section>
 
-      <section className="dashboard-summary" aria-label="创作数据概览">
-        <div className="summary-card"><span className="summary-icon coral"><FileText size={17} /></span><div><small>累计字数</small><strong>{formatNumber(stats?.totalWords)}</strong></div><em>全部作品</em></div>
-        <div className="summary-card"><span className="summary-icon teal"><PenLine size={17} /></span><div><small>今日新增</small><strong>{formatNumber(stats?.todayWords)}</strong></div><em>自动统计</em></div>
-        <div className="summary-card"><span className="summary-icon yellow"><BookOpen size={17} /></span><div><small>章节总数</small><strong>{formatNumber(stats?.chapterCount)}</strong></div><em>{formatNumber(stats?.projectCount)} 部作品</em></div>
-        <div className="summary-card"><span className="summary-icon purple"><Clock3 size={17} /></span><div><small>本周活跃</small><strong>{formatNumber(stats?.activeDays)}</strong></div><em>近 7 天</em></div>
-      </section>
-
-      <section className="dashboard-quick-actions compact-actions" aria-label="快捷入口">
-        <button onClick={() => onNavigate('works')}><span className="quick-action-icon coral"><BookOpen size={17} /></span><span><strong>我的作品</strong><small>管理进度与状态</small></span><ChevronRight size={15} /></button>
-        <button onClick={() => onNavigate('assistant')}><span className="quick-action-icon purple"><MessageCircle size={17} /></span><span><strong>创作助手</strong><small>从想法到建书方案</small></span><ChevronRight size={15} /></button>
-      </section>
-
-      {!projects.length ? (
+      {!active ? (
         <section className="empty-state hero-empty">
           <div className="empty-state-icon"><BookOpen size={28} /></div>
           <h2>开始你的第一本书</h2>
-          <p>打开创作助手，先说清你想写什么；也可以手动新建作品，直接进入编辑器。</p>
-          <div className="empty-state-actions">
-            <button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={17} />打开创作助手</button>
-            <button className="secondary-button" onClick={onNew}><BookPlus size={16} />手动新建</button>
-          </div>
+          <p>告诉{ASSISTANT_NAME}你想写什么，它会选择合适的 Skill 并只追问真正影响下一步的信息。</p>
+          <div className="empty-state-actions"><button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={17} />和{ASSISTANT_NAME}开始构思</button><button className="secondary-button" onClick={onNew}><BookPlus size={16} />手动新建</button></div>
         </section>
       ) : (
         <>
-        <section className="focus-section">
-          <div className="section-heading"><div><span className="section-overline">正在进行</span><h2>继续你的故事</h2></div><button className="text-button" onClick={() => onNavigate('works')}>查看全部 <ArrowUpRight size={15} /></button></div>
-          <div className="focus-project">
-          <div className={`large-cover ${active.cover}`}><span>{active.title}</span><i>STORY<br />NO. 01</i></div>
-          <div className="focus-copy">
-            <div className="tag-row"><span className="status-tag"><span className="status-pulse" />{active.status}</span><span className="muted-tag">{active.type} · {active.genre}</span></div>
-            <h3>{active.title}</h3>
-            <p>{active.tone}</p>
-            <div className="progress-line"><span style={{ width: `${active.progress}%` }} /></div>
-            <div className="focus-metrics"><span><strong>{active.progress}%</strong> 完成度</span><span><strong>{active.words}</strong> 字</span><span>更新于 {formatRelativeTime(active.updatedAt, active.updated)}</span></div>
-            <button className="dark-button" onClick={() => onOpen(active)}>继续写作 <ArrowUpRight size={16} /></button>
-          </div>
-          <div className="focus-side-note"><span className="note-label">下一章提示</span><p>继续推进当前章节的情节。</p><button className="icon-button small" aria-label="打开章节提示" onClick={() => onOpen(active)} title="打开章节提示"><ChevronRight size={16} /></button></div>
-        </div>
-      </section>
+          <section className="focus-section overview-focus-section">
+            <div className="section-heading"><div><span className="section-overline">正在进行</span><h2>当前作品</h2></div><button className="text-button" onClick={() => onNavigate('works')}>查看全部 <ArrowUpRight size={15} /></button></div>
+            <div className="focus-project">
+              <div className={`large-cover ${active.cover}`}><span>{active.title}</span><i>STORY<br />NO. 01</i></div>
+              <div className="focus-copy">
+                <div className="tag-row"><span className="status-tag"><span className="status-pulse" />{active.status}</span><span className="muted-tag">{active.type} · {active.genre}</span></div>
+                <h3>{active.title}</h3><p>{active.tone}</p>
+                <div className="progress-line"><span style={{ width: `${active.progress}%` }} /></div>
+                <div className="focus-metrics"><span><strong>{active.progress}%</strong> 完成度</span><span><strong>{active.words}</strong> 字</span><span>更新于 {formatRelativeTime(active.updatedAt, active.updated)}</span></div>
+                <button className="dark-button" onClick={() => onOpen(active)}>继续写作 <ArrowUpRight size={16} /></button>
+              </div>
+              <div className="focus-side-note"><span className="note-label">下一章提示</span><p>继续推进当前章节的情节。</p><button className="icon-button small" aria-label="打开章节提示" onClick={() => onOpen(active)} title="打开章节提示"><ChevronRight size={16} /></button></div>
+            </div>
+          </section>
 
-      <section className="dashboard-grid overview-pulse-grid">
-        <WritingPulse stats={stats} />
-        <section className="overview-secondary-links" aria-label="辅助能力">
-          <div className="section-heading compact"><div><span className="section-overline">辅助</span><h2>需要时再打开</h2></div></div>
-          <div className="overview-link-list">
-            <button onClick={() => onNavigate('library')}><span className="quick-action-icon teal"><Library size={16} /></span><span><strong>素材库</strong><small>人物、设定与灵感</small></span><ChevronRight size={15} /></button>
-            <button onClick={() => onNavigate('toolkit')}><span className="quick-action-icon yellow"><Target size={16} /></span><span><strong>高级工具</strong><small>扫榜、去 AI 味、审稿</small></span><ChevronRight size={15} /></button>
-            <button onClick={() => onNavigate('deconstruct')}><span className="quick-action-icon purple"><BookOpenCheck size={16} /></span><span><strong>拆文台</strong><small>拆解参考书结构</small></span><ChevronRight size={15} /></button>
-          </div>
-        </section>
-      </section>
+          <section className="dashboard-summary dashboard-stat-strip" aria-label="创作数据概览">
+            <div className="summary-card"><span className="summary-icon coral"><FileText size={16} /></span><div><small>累计字数</small><strong>{formatNumber(stats?.totalWords)}</strong></div></div>
+            <div className="summary-card"><span className="summary-icon teal"><PenLine size={16} /></span><div><small>今日新增</small><strong>{formatNumber(stats?.todayWords)}</strong></div></div>
+            <div className="summary-card"><span className="summary-icon yellow"><BookOpen size={16} /></span><div><small>章节总数</small><strong>{formatNumber(stats?.chapterCount)}</strong></div></div>
+            <div className="summary-card"><span className="summary-icon purple"><Clock3 size={16} /></span><div><small>本周活跃</small><strong>{formatNumber(stats?.activeDays)} 天</strong></div></div>
+          </section>
 
-      <section className="recent-section">
-        <div className="section-heading compact"><div><span className="section-overline">作品空间</span><h2>最近的作品</h2></div><button className="text-button" onClick={() => onNavigate('works')}>管理作品 <ArrowUpRight size={15} /></button></div>
-        <div className="project-grid">{projects.map((project) => <ProjectCard key={project.id} project={project} onOpen={onOpen} />)}</div>
-      </section>
+          <section className="dashboard-grid overview-pulse-grid">
+            <WritingPulse stats={stats} />
+            <section className="overview-secondary-links" aria-label="工作区入口">
+              <div className="section-heading compact"><div><span className="section-overline">工作区</span><h2>需要时再打开</h2></div></div>
+              <div className="overview-link-list">
+                <button onClick={() => onNavigate('library')}><span className="quick-action-icon teal"><Library size={16} /></span><span><strong>素材库</strong><small>人物、设定与灵感</small></span><ChevronRight size={15} /></button>
+                <button onClick={() => onNavigate('toolkit')}><span className="quick-action-icon yellow"><Target size={16} /></span><span><strong>高级工具</strong><small>题材趋势、自然化润色与章节诊断</small></span><ChevronRight size={15} /></button>
+                <button onClick={() => onNavigate('deconstruct')}><span className="quick-action-icon purple"><BookOpenCheck size={16} /></span><span><strong>拆文台</strong><small>分析所提供参考正文的结构</small></span><ChevronRight size={15} /></button>
+              </div>
+            </section>
+          </section>
+
+          <section className="recent-section"><div className="section-heading compact"><div><span className="section-overline">作品空间</span><h2>最近的作品</h2></div><button className="text-button" onClick={() => onNavigate('works')}>管理作品 <ArrowUpRight size={15} /></button></div><div className="project-grid">{projects.map((project) => <ProjectCard key={project.id} project={project} onOpen={onOpen} />)}</div></section>
         </>
       )}
     </div>
@@ -1304,12 +1332,16 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
   const questions = session?.questions || []
   const hasStarted = messages.length > 0
   const needsModel = messages.at(-1)?.role === 'assistant' && messages.at(-1)?.text?.includes('配置模型')
-  const availableSkills = (skills || []).filter((item) => item.name !== 'story')
+  const availableSkills = (skills || []).filter((item) => item.name !== 'story' && callableSkill(item))
   const starterPrompts = [
     '我想写一本小说',
     '我想写一个现代都市故事',
     '帮我构思一个悬疑短篇',
   ]
+
+  useEffect(() => {
+    if (selectedSkill && !availableSkills.some((item) => item.name === selectedSkill)) setSelectedSkill('')
+  }, [availableSkills, selectedSkill])
 
   useEffect(() => {
     let mounted = true
@@ -1378,7 +1410,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
             <span className="assistant-chat-mark"><Bot size={18} /></span>
             <div>
               <small>统一 AI 创作入口</small>
-              <h1>创作助手</h1>
+              <h1>{ASSISTANT_NAME}</h1>
             </div>
           </div>
           <div className="assistant-chat-actions">
@@ -1778,7 +1810,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
 
   function openSplitDialog() {
     if (!draft.trim()) {
-      onNotify('先写一点正文，再进行智能分章')
+      onNotify('先写一点正文，再按光标拆分章节')
       return
     }
     const textarea = textareaRef.current
@@ -2018,7 +2050,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
             <div className="toolbar-group">
               <button className="toolbar-button" aria-label="高频词分析" title="高频词分析" onClick={() => frequentWords.length ? setFrequencyOpen(true) : onNotify('当前正文还没有可分析的重复词')}><Highlighter size={15} /></button>
               <button className="toolbar-button" aria-label="自动排版" title="自动排版" onClick={autoFormatChapter}><AlignLeft size={15} /></button>
-              <button className="toolbar-button" aria-label="智能分章" title="智能分章" onClick={openSplitDialog}><Split size={15} /></button>
+              <button className="toolbar-button" aria-label="按光标拆章" title="按光标拆章（本地操作）" onClick={openSplitDialog}><Split size={15} /></button>
               <button className="toolbar-button" aria-label="朗读本章" title="朗读本章" onClick={readChapterAloud}><Volume2 size={15} /></button>
             </div>
             <span className="toolbar-spacer" />
@@ -2042,8 +2074,8 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
 
         <aside className={`insight-rail ${assistantOpen ? '' : 'collapsed'}`}>
           {assistantOpen ? <>
-            <div className="assistant-panel-heading"><div className="assistant-title"><Bot size={16} /><strong>灵犀助手</strong><span>Chat</span></div><button className="icon-button small" aria-label="收起助手" title="收起助手" onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
-            <div className="assistant-welcome"><strong>灵犀娘已就位。</strong><p>今天想改剧情、磨人物，还是直接开写？</p></div>
+            <div className="assistant-panel-heading"><div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>Chat</span></div><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
+            <div className="assistant-welcome"><strong>{ASSISTANT_NAME}已就位。</strong><p>今天想改剧情、磨人物，还是直接开写？</p></div>
             <div className="assistant-quick-actions">
               <button onClick={(event) => submitAssistant(event, '帮我分析这段文字的节奏和情绪。')}><span>01</span>帮我分析这段文字</button>
               <button onClick={(event) => submitAssistant(event, '如何让当前章节的剧情更精彩？')}><span>02</span>如何让剧情更精彩？</button>
@@ -2056,7 +2088,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
             <div className="insight-card coral-note"><span>情绪曲线</span><strong>待分析</strong><p>写完本章后，可使用 Skill 审稿分析情绪节奏。</p></div>
             <div className="insight-card chapter-anchor-card"><span>本章锚点</span>{anchorIdeas.length ? <div className="anchor-list">{anchorIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className={`entity-dot ${idea.color === 'teal' ? 'teal' : 'coral'}`} /><span><strong>{idea.title}</strong><small>{idea.label} · 点击插入</small></span></button>)}</div> : <p>还没有关联锚点，可从素材库插入剧情、冲突或线索卡。</p>}<button className="text-button" onClick={() => setIdeaPickerOpen(true)}>{anchorIdeas.length ? '插入更多素材' : '打开素材库'} <ArrowUpRight size={14} /></button></div>
             <div className="insight-card quote-card"><Info size={15} /><p>“让线索先抵达读者，再让人物意识到它。”</p></div>
-          </> : <button className="assistant-reopen" aria-label="展开灵犀助手" title="展开灵犀助手" onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}
+          </> : <button className="assistant-reopen" aria-label={`展开${ASSISTANT_NAME}`} title={`展开${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}
         </aside>
       </div>
     </div>
@@ -2067,7 +2099,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], onC
     {outlineOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOutlineOpen(false)}><div className="modal outline-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">{project?.title}</span><h2>章节大纲</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setOutlineOpen(false)}><X size={18} /></button></div>{chapters.length ? <ol className="outline-list">{chapters.map((chapter) => <li key={chapter.id}><span className="outline-num">{String(chapter.id).padStart(2, '0')}</span><button className="outline-title" onClick={() => { onSelectChapter?.(chapter); setOutlineOpen(false) }}>{chapter.title}</button><span className={`outline-state ${chapter.state === 'done' ? 'done' : ''}`}>{chapter.state === 'done' ? '已完成' : '草稿'}</span><span className="outline-words">{chapter.words} 字</span></li>)}</ol> : <div className="empty-state small"><p>还没有章节，先新建第一章吧。</p></div>}</div></div>}
     {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setHistoryOpen(false)}><div className="modal history-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">编辑器</span><h2>历史记录</h2></div><button className="icon-button" aria-label="关闭历史记录" onClick={() => setHistoryOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">选择一个快照恢复到正文，当前内容会保留在重做栈中。</p><div className="history-list">{historyLoading ? <div className="history-empty"><LoaderCircle size={22} className="spin" /><p>正在读取历史快照</p></div> : historyRef.current.past.length ? historyRef.current.past.slice().reverse().map((snapshot, index) => { const version = historyRef.current.past.length - index; const preview = snapshot.replace(/\s+/g, ' ').trim(); return <button type="button" className="history-item" key={`${version}-${index}`} onClick={() => restoreHistory(snapshot)}><span className="history-item-version">版本 {version}</span><span className="history-item-copy"><strong>{formatNumber(snapshot.replace(/\s/g, '').length)} 字</strong><small>{preview || '（空正文）'}</small></span><ChevronRight size={16} /></button> }) : <div className="history-empty"><History size={22} /><p>还没有可恢复的编辑快照</p><small>继续输入一会儿，历史记录会自动生成。</small></div>}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setHistoryOpen(false)}>关闭</button></div></div></div>}
     {frequencyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setFrequencyOpen(false)}><div className="modal frequency-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">正文分析</span><h2>高频词</h2></div><button className="icon-button" aria-label="关闭高频词" onClick={() => setFrequencyOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">统计当前章节中重复出现的词语，点击词语可回到正文定位第一次出现的位置。</p><div className="frequency-cloud">{frequentWords.map(([word, count]) => <button type="button" className="frequency-chip" key={word} onClick={() => locateFrequentWord(word)}><strong>{word}</strong><small>{count} 次</small></button>)}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setFrequencyOpen(false)}>关闭</button></div></div></div>}
-    {splitOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !splitLoading && setSplitOpen(false)}><div className="modal split-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">章节结构</span><h2>智能分章</h2></div><button className="icon-button" aria-label="关闭智能分章" disabled={splitLoading} onClick={() => setSplitOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">以当前光标位置为分界，将后半段正文保存为一个新章节。</p><form onSubmit={confirmSplit}><label>新章节标题<input autoFocus value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} maxLength={100} placeholder="例如：潮声之后" /></label><div className="split-preview"><div><span>当前章节保留</span><strong>{formatNumber(splitBefore.length)} 字</strong><p>{splitBefore.slice(-90) || '拆分位置之前暂无正文'}</p></div><ChevronRight size={17} /><div><span>新章节内容</span><strong>{formatNumber(splitAfter.length)} 字</strong><p>{splitAfter.slice(0, 90) || '拆分位置之后暂无正文'}</p></div></div><div className="modal-actions"><button type="button" className="secondary-button" disabled={splitLoading} onClick={() => setSplitOpen(false)}>取消</button><button type="submit" className="dark-button" disabled={splitLoading || !splitTitle.trim()}>{splitLoading ? <LoaderCircle size={16} className="spin" /> : <Split size={16} />}{splitLoading ? '分章中' : '确认分章'}</button></div></form></div></div>}
+    {splitOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !splitLoading && setSplitOpen(false)}><div className="modal split-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">本地章节操作</span><h2>按光标拆章</h2></div><button className="icon-button" aria-label="关闭拆分章节" disabled={splitLoading} onClick={() => setSplitOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">以当前光标位置为分界，在本地拆分正文并保存为新章节；此操作不调用 AI。</p><form onSubmit={confirmSplit}><label>新章节标题<input autoFocus value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} maxLength={100} placeholder="例如：潮声之后" /></label><div className="split-preview"><div><span>当前章节保留</span><strong>{formatNumber(splitBefore.length)} 字</strong><p>{splitBefore.slice(-90) || '拆分位置之前暂无正文'}</p></div><ChevronRight size={17} /><div><span>新章节内容</span><strong>{formatNumber(splitAfter.length)} 字</strong><p>{splitAfter.slice(0, 90) || '拆分位置之后暂无正文'}</p></div></div><div className="modal-actions"><button type="button" className="secondary-button" disabled={splitLoading} onClick={() => setSplitOpen(false)}>取消</button><button type="submit" className="dark-button" disabled={splitLoading || !splitTitle.trim()}>{splitLoading ? <LoaderCircle size={16} className="spin" /> : <Split size={16} />}{splitLoading ? '拆分中' : '确认拆分'}</button></div></form></div></div>}
     {foreshadowOpen && <ForeshadowModal project={project} chapters={chapters} target={foreshadowTarget} onClose={() => { setForeshadowOpen(false); setForeshadowTarget(null) }} onCreate={onCreateForeshadow} onUpdate={onUpdateForeshadow} onDelete={onDeleteForeshadow} />}
     {ideaPickerOpen && <MaterialPicker ideas={ideas} projectId={project?.id} onClose={() => setIdeaPickerOpen(false)} onInsert={insertMaterial} />}
   </>
@@ -2122,7 +2154,7 @@ function ForeshadowModal({ project, chapters, target, onClose, onCreate, onUpdat
     if (result) onClose()
   }
 
-  return <div className="modal-backdrop foreshadow-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal foreshadow-modal" role="dialog" aria-modal="true" aria-labelledby="foreshadow-modal-title"><div className="modal-heading"><div><span className="section-overline">{project?.title || '作品'} · 叙事管理</span><h2 id="foreshadow-modal-title">{editing ? '编辑伏笔' : '登记伏笔'}</h2></div><button className="icon-button" aria-label="关闭伏笔编辑" title="关闭" disabled={loading} onClick={onClose}><X size={18} /></button></div><p className="modal-subtitle">记录线索如何埋下、准备在哪一章回收，写作助手会自动把未回收伏笔加入章节上下文。</p><form onSubmit={submit}><label>伏笔标题<input autoFocus value={form.title} onChange={(event) => update('title', event.target.value)} maxLength={120} placeholder="例如：反锁的门" /></label><label>线索内容<textarea value={form.content} onChange={(event) => update('content', event.target.value)} maxLength={2000} rows={4} placeholder="描述读者能看到的线索，以及它最终指向什么。" /></label><div className="form-row"><label>状态<select value={form.status} onChange={(event) => update('status', event.target.value)}>{Object.entries(foreshadowStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>重要性<select value={form.importance} onChange={(event) => update('importance', event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} · {value >= 4 ? '关键线索' : value === 3 ? '普通线索' : '轻量线索'}</option>)}</select></label></div><label>分类<input value={form.category} onChange={(event) => update('category', event.target.value)} maxLength={40} placeholder="例如：人物身世、世界观、案件线索" /></label><div className="form-row"><label>埋入章节<select value={form.plantChapterId} onChange={(event) => update('plantChapterId', event.target.value)}><option value="">暂不指定</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label><label>计划回收章节<select value={form.targetChapterId} onChange={(event) => update('targetChapterId', event.target.value)}><option value="">暂不指定</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label></div><label>实际回收章节<select value={form.resolvedChapterId} onChange={(event) => update('resolvedChapterId', event.target.value)}><option value="">尚未回收</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label>{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button>{editing && <button type="button" className="danger-text-button" disabled={loading} onClick={remove}><Trash2 size={15} />删除</button>}<button type="submit" className="dark-button" disabled={loading}>{loading ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{loading ? '保存中' : editing ? '保存伏笔' : '加入作品'}</button></div></form></div></div>
+  return <div className="modal-backdrop foreshadow-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal foreshadow-modal" role="dialog" aria-modal="true" aria-labelledby="foreshadow-modal-title"><div className="modal-heading"><div><span className="section-overline">{project?.title || '作品'} · 叙事管理</span><h2 id="foreshadow-modal-title">{editing ? '编辑伏笔' : '登记伏笔'}</h2></div><button className="icon-button" aria-label="关闭伏笔编辑" title="关闭" disabled={loading} onClick={onClose}><X size={18} /></button></div><p className="modal-subtitle">记录线索如何埋下、准备在哪一章回收，{ASSISTANT_NAME}会自动把未回收伏笔加入章节上下文。</p><form onSubmit={submit}><label>伏笔标题<input autoFocus value={form.title} onChange={(event) => update('title', event.target.value)} maxLength={120} placeholder="例如：反锁的门" /></label><label>线索内容<textarea value={form.content} onChange={(event) => update('content', event.target.value)} maxLength={2000} rows={4} placeholder="描述读者能看到的线索，以及它最终指向什么。" /></label><div className="form-row"><label>状态<select value={form.status} onChange={(event) => update('status', event.target.value)}>{Object.entries(foreshadowStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>重要性<select value={form.importance} onChange={(event) => update('importance', event.target.value)}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} · {value >= 4 ? '关键线索' : value === 3 ? '普通线索' : '轻量线索'}</option>)}</select></label></div><label>分类<input value={form.category} onChange={(event) => update('category', event.target.value)} maxLength={40} placeholder="例如：人物身世、世界观、案件线索" /></label><div className="form-row"><label>埋入章节<select value={form.plantChapterId} onChange={(event) => update('plantChapterId', event.target.value)}><option value="">暂不指定</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label><label>计划回收章节<select value={form.targetChapterId} onChange={(event) => update('targetChapterId', event.target.value)}><option value="">暂不指定</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label></div><label>实际回收章节<select value={form.resolvedChapterId} onChange={(event) => update('resolvedChapterId', event.target.value)}><option value="">尚未回收</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>第 {chapter.id} 章 · {chapter.title}</option>)}</select></label>{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button>{editing && <button type="button" className="danger-text-button" disabled={loading} onClick={remove}><Trash2 size={15} />删除</button>}<button type="submit" className="dark-button" disabled={loading}>{loading ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{loading ? '保存中' : editing ? '保存伏笔' : '加入作品'}</button></div></form></div></div>
 }
 
 function Works({ projects, onOpen, onNew, onEdit, onDelete, onSmartCreate, onImport }) {
@@ -2150,7 +2182,7 @@ function Works({ projects, onOpen, onNew, onEdit, onDelete, onSmartCreate, onImp
   }
   return <>
   <div className="page inner-page">
-    <div className="page-heading"><div><span className="section-overline">作品空间</span><h1>我的作品</h1><p>所有故事都在这里继续。</p></div><div className="works-heading-actions"><button className="secondary-button" onClick={onImport}><Download size={16} />导入</button><button className="secondary-button smart-create-button" onClick={onSmartCreate}><Sparkles size={16} />智能创建</button><button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button></div></div>
+    <div className="page-heading"><div><span className="section-overline">作品空间</span><h1>我的作品</h1><p>所有故事都在这里继续。</p></div><div className="works-heading-actions"><button className="secondary-button" onClick={onImport}><Download size={16} />导入本地文稿</button><button className="secondary-button smart-create-button" onClick={onSmartCreate}><Sparkles size={16} />和{ASSISTANT_NAME}构思</button><button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button></div></div>
     <div className="works-toolbar works-toolbar-expanded"><div className="filter-tabs">{types.map((type) => <button key={type} className={typeFilter === type ? 'selected' : ''} onClick={() => setTypeFilter(type)}>{type} <span>{typeCounts[type] || 0}</span></button>)}</div><div className="filter-tabs status-filter-tabs">{statuses.map((status) => <button key={status} className={statusFilter === status ? 'selected' : ''} onClick={() => setStatusFilter(status)}>{status} <span>{statusCounts[status] || 0}</span></button>)}</div></div>
     {filtered.length ? <div className="works-list">{filtered.map((project) => <div className="work-row-wrap" key={project.id}><button className="work-row" onClick={() => onOpen(project)}><div className={`row-cover ${project.cover}`}><span>{project.title.slice(0, 1)}</span></div><div className="row-main"><div className="row-title"><h3>{project.title}</h3><span className="muted-tag">{project.type}</span></div><p>{project.genre} · {project.status}</p><div className="row-progress"><span style={{ width: `${project.progress}%` }} /></div></div><div className="row-stat"><strong>{project.words}</strong><span>总字数</span></div><div className="row-stat"><strong>{project.progress}%</strong><span>完成度</span></div><div className="row-updated"><span>最近编辑</span><strong>{formatRelativeTime(project.updatedAt, project.updated)}</strong></div><ChevronRight size={18} className="row-arrow" /></button><button className="work-row-menu" aria-label="作品操作" title="作品操作" onClick={(event) => { event.stopPropagation(); setMenuOpenId(menuOpenId === project.id ? null : project.id) }}><MoreHorizontal size={16} /></button>{menuOpenId === project.id && <div className="chapter-menu work-menu" role="menu"><button onClick={() => { onEdit(project); setMenuOpenId(null) }}>编辑作品</button><button className="danger" onClick={() => { setDeleteTarget(project); setMenuOpenId(null) }}>删除作品</button></div>}</div>)}</div> : <div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>没有匹配的作品</h2><p>调整筛选条件，或新建一本作品开始创作。</p><button className="primary-button" onClick={onNew}><BookPlus size={17} />新建作品</button></div>}
   </div>
@@ -2284,7 +2316,7 @@ function Deconstruct({ onNotify, onRunSkill }) {
 // 高级工具：只保留作者真正会单独打开的低频/专项能力
 const toolkitSkillGroups = [
   {
-    label: '选题扫榜',
+    label: '题材趋势',
     skills: ['story-long-scan', 'story-short-scan'],
   },
   {
@@ -2295,24 +2327,24 @@ const toolkitSkillGroups = [
 
 // 每个 skill 卡片的展示信息
 const skillCardMeta = {
-  'story-long-scan': { label: '长篇扫榜', desc: '追踪长篇热门题材与趋势', tone: 'coral', icon: 'Target' },
-  'story-short-scan': { label: '短篇扫榜', desc: '追踪短篇热门题材与趋势', tone: 'coral', icon: 'Target' },
-  'story-deslop': { label: '去 AI 味', desc: '去除确定性套话与 AI 句式痕迹', tone: 'teal', icon: 'WandSparkles' },
-  'story-review': { label: '章节审稿', desc: '结构化审查章节并给出评分', tone: 'teal', icon: 'BrainCircuit' },
+  'story-long-scan': { label: '长篇题材趋势', desc: '基于模型知识分析长篇热门题材与市场方向，不获取实时榜单', tone: 'coral', icon: 'Target' },
+  'story-short-scan': { label: '短篇题材趋势', desc: '基于模型知识分析短篇选题与市场方向，不获取实时榜单', tone: 'coral', icon: 'Target' },
+  'story-deslop': { label: '自然化润色', desc: '检查并改写套话与常见 AI 句式痕迹', tone: 'teal', icon: 'WandSparkles' },
+  'story-review': { label: '章节诊断', desc: '结构化审查章节并输出评分与建议报告，不直接修改正文', tone: 'teal', icon: 'BrainCircuit' },
 }
 
-function Toolkit({ onNotify, skills, onRunSkill, onOpenSettings, onNavigate }) {
+function Toolkit({ onNotify, skills, skillsLoading, onRefreshSkills, onRunSkill, onOpenSettings, onNavigate }) {
   const [guideOpen, setGuideOpen] = useState(false)
   const skillMap = useMemo(() => Object.fromEntries(skills.map((s) => [s.name, s])), [skills])
-  const callable = (skill) => skill.status === 'ready' || skill.status === 'needs_model'
+  const callable = callableSkill
   const listedSkills = toolkitSkillGroups.flatMap((group) => group.skills.map((name) => skillMap[name]).filter(Boolean))
   const readyCount = listedSkills.filter((s) => s.status === 'ready').length
   const needsModelCount = listedSkills.filter((s) => s.status === 'needs_model').length
-  return <><div className="page inner-page"><div className="page-heading"><div><span className="section-overline">低频专项</span><h1>高级工具</h1><p>写作请走创作助手与编辑器；这里只放扫榜、去 AI 味和审稿。</p></div><div className="page-heading-actions"><button className="text-button" onClick={onOpenSettings}><Settings2 size={15} />模型设置</button><button className="text-button" onClick={() => setGuideOpen(true)}><CircleHelp size={15} />使用指南</button></div></div>
+  return <><div className="page inner-page"><div className="page-heading"><div><span className="section-overline">低频专项</span><h1>高级工具</h1><p>写作请走{ASSISTANT_NAME}与编辑器；这里只放题材趋势、自然化润色和章节诊断。</p></div><div className="page-heading-actions"><button className="text-button" onClick={onOpenSettings}><Settings2 size={15} />模型设置</button><button className="text-button" onClick={() => setGuideOpen(true)}><CircleHelp size={15} />使用指南</button></div></div>
   <div className="toolkit-redirect-card">
-    <div><span className="section-overline">主路径</span><h2>想开书或继续写？</h2><p>建书方案用创作助手，正文续写和润色在编辑器里更顺手。</p></div>
+    <div><span className="section-overline">主路径</span><h2>想开书或继续写？</h2><p>建书方案用{ASSISTANT_NAME}，正文续写和润色在编辑器里更顺手。</p></div>
     <div className="toolkit-redirect-actions">
-      <button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />创作助手</button>
+      <button className="primary-button" onClick={() => onNavigate('assistant')}><MessageCircle size={16} />{ASSISTANT_NAME}</button>
       <button className="secondary-button" onClick={() => onNavigate('works')}><BookOpen size={16} />我的作品</button>
       <button className="secondary-button" onClick={() => onNavigate('deconstruct')}><BookOpenCheck size={16} />拆文台</button>
     </div>
@@ -2328,11 +2360,11 @@ function Toolkit({ onNotify, skills, onRunSkill, onOpenSettings, onNavigate }) {
       return <button className={`skill-card ${card.tone} ${canCall ? '' : 'disabled'}`} key={skill.name} disabled={!canCall} onClick={() => canCall && onRunSkill(skill.name)}><div className="skill-card-top"><span className={`skill-card-icon ${card.tone}`}><Icon size={22} /></span><span className={`skill-status ${skill.status}`}>{skill.status === 'ready' ? '可调用' : skill.status === 'needs_model' ? '需模型' : skill.status === 'registered' ? '待适配' : '不可用'}</span></div><h3>{card.label}</h3><p>{card.desc}</p><div className="skill-card-foot"><span>{skill.name}</span>{skill.version && <span className="tiny-meta">v{skill.version}</span>}<ArrowUpRight size={16} /></div></button>
     })}</div></section>
   })}
-  <div className="tool-footer"><Sparkles size={17} /><span>叙事工坊 0.1 · 本地工作区</span><button className="text-button" onClick={() => onNotify('能力目录已刷新')}>刷新状态 <ArrowUpRight size={14} /></button></div></div>{guideOpen && <GuideModal onClose={() => setGuideOpen(false)} />}</>
+  <div className="tool-footer"><Sparkles size={17} /><span>叙事工坊 0.1 · 本地工作区</span><button className="text-button" disabled={skillsLoading} onClick={() => onRefreshSkills()}>{skillsLoading ? <LoaderCircle size={14} className="spin" /> : null}{skillsLoading ? '刷新中' : '刷新状态'} {!skillsLoading && <ArrowUpRight size={14} />}</button></div></div>{guideOpen && <GuideModal onClose={() => setGuideOpen(false)} />}</>
 }
 
 function GuideModal({ onClose }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal guide-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">使用指南</span><h2>叙事工坊怎么用</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><div className="guide-content"><h3>开始创作</h3><p>优先打开「创作助手」，先描述想法，再确认篇幅、题材和设定，生成建书方案。也可以在「我的作品」手动新建。</p><h3>章节写作</h3><p>进入编辑器后，续写、润色、审稿和素材插入都在当前章节上下文中完成，正文会自动保存。</p><h3>素材库</h3><p>集中管理人物、设定、剧情锚点与灵感卡，可关联到具体作品。</p><h3>高级工具</h3><p>扫榜、去 AI 味、章节审稿放在这里；拆文台用于拆解你合法持有的参考书。写作主流程不必绕路到这里。</p><h3>设置</h3><p>在左下角「设置」中配置 OpenAI 兼容的 API Base URL、Key 和模型名，所有 AI 调用会使用此配置。</p></div><div className="modal-actions"><button type="button" className="dark-button" onClick={onClose}>知道了</button></div></div></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal guide-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">使用指南</span><h2>叙事工坊怎么用</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><div className="guide-content"><h3>开始创作</h3><p>优先打开「{ASSISTANT_NAME}」，先描述想法，再确认篇幅、题材和设定，生成建书方案。也可以在「我的作品」手动新建。</p><h3>章节写作</h3><p>进入编辑器后，续写、自然化润色、章节诊断和素材插入都在当前章节上下文中完成，正文会自动保存。诊断类 Skill 输出报告，不会直接修改正文。</p><h3>素材库</h3><p>集中管理人物、设定、剧情锚点与灵感卡，可关联到具体作品。</p><h3>高级工具</h3><p>题材趋势分析、自然化润色和章节诊断放在这里；趋势分析基于模型知识，不获取实时榜单。拆文台用于分析你合法持有并主动提供的参考正文。</p><h3>设置</h3><p>在左下角「设置」中配置 OpenAI 兼容的 API Base URL、Key 和模型名，所有 AI 调用会使用此配置。</p></div><div className="modal-actions"><button type="button" className="dark-button" onClick={onClose}>知道了</button></div></div></div>
 }
 
 function ReviewReport({ report, onClose }) {
@@ -2413,7 +2445,7 @@ function ImportProjectModal({ loading, onClose, onImport }) {
     onImport({ title: title.trim(), type, genre: genre.trim() || '未分类', chapters })
   }
 
-  return <div className="modal-backdrop import-project-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal import-project-modal" role="dialog" aria-modal="true" aria-labelledby="import-project-title"><div className="modal-heading"><div><span className="section-overline">本地文稿</span><h2 id="import-project-title">导入作品</h2><p className="modal-subtitle">支持 TXT 文稿，自动识别“第X章、序章、番外、Chapter X”等章节标题。</p></div><button className="icon-button" aria-label="关闭导入" disabled={loading} onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label className="import-file-picker"><input type="file" accept=".txt,text/plain" disabled={loading} onChange={chooseFile} /><span><FolderOpen size={18} /><strong>{fileName || '选择 TXT 文件'}</strong><small>也可以在下方直接粘贴全文</small></span></label><div className="form-row"><label>作品名<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="作品名称" /></label><label>篇幅<select value={type} onChange={(event) => setType(event.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label></div><label>题材<input value={genre} onChange={(event) => setGenre(event.target.value)} maxLength={30} placeholder="例如：东方玄幻" /></label><label>全文<textarea value={content} onChange={(event) => { setContent(event.target.value); setFileName(''); setError('') }} rows={8} maxLength={10000000} placeholder="粘贴小说全文，章节标题单独占一行…" /></label>{content && <div className="import-detection"><div><BookOpen size={16} /><span>识别到 <strong>{chapters.length}</strong> 章</span></div><div><FileText size={16} /><span>约 <strong>{formatNumber(totalWords)}</strong> 字</span></div></div>}{chapters.length > 0 && <div className="import-preview">{chapters.slice(0, 6).map((chapter, index) => <span key={`${chapter.title}-${index}`}><b>{String(index + 1).padStart(2, '0')}</b>{chapter.title}<small>{formatNumber(chapter.content.replace(/\s/g, '').length)} 字</small></span>)}{chapters.length > 6 && <em>还有 {chapters.length - 6} 章…</em>}</div>}{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button><button type="submit" className="dark-button" disabled={loading || !content.trim()}>{loading ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}{loading ? '导入中' : '开始导入'}</button></div></form></div></div>
+  return <div className="modal-backdrop import-project-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal import-project-modal" role="dialog" aria-modal="true" aria-labelledby="import-project-title"><div className="modal-heading"><div><span className="section-overline">本地 TXT</span><h2 id="import-project-title">导入本地文稿</h2><p className="modal-subtitle">浏览器会在本地读取 TXT，并按“第X章、序章、番外、Chapter X”等标题规则拆分章节；此流程不调用 AI 或 story-import Skill。</p></div><button className="icon-button" aria-label="关闭导入" disabled={loading} onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label className="import-file-picker"><input type="file" accept=".txt,text/plain" disabled={loading} onChange={chooseFile} /><span><FolderOpen size={18} /><strong>{fileName || '选择 TXT 文件'}</strong><small>也可以在下方直接粘贴全文</small></span></label><div className="form-row"><label>作品名<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="作品名称" /></label><label>篇幅<select value={type} onChange={(event) => setType(event.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label></div><label>题材<input value={genre} onChange={(event) => setGenre(event.target.value)} maxLength={30} placeholder="例如：东方玄幻" /></label><label>全文<textarea value={content} onChange={(event) => { setContent(event.target.value); setFileName(''); setError('') }} rows={8} maxLength={10000000} placeholder="粘贴小说全文，章节标题单独占一行…" /></label>{content && <div className="import-detection"><div><BookOpen size={16} /><span>识别到 <strong>{chapters.length}</strong> 章</span></div><div><FileText size={16} /><span>约 <strong>{formatNumber(totalWords)}</strong> 字</span></div></div>}{chapters.length > 0 && <div className="import-preview">{chapters.slice(0, 6).map((chapter, index) => <span key={`${chapter.title}-${index}`}><b>{String(index + 1).padStart(2, '0')}</b>{chapter.title}<small>{formatNumber(chapter.content.replace(/\s/g, '').length)} 字</small></span>)}{chapters.length > 6 && <em>还有 {chapters.length - 6} 章…</em>}</div>}{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button><button type="submit" className="dark-button" disabled={loading || !content.trim()}>{loading ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}{loading ? '导入中' : '开始导入'}</button></div></form></div></div>
 }
 
 function SmartCreateModal({ proposal, loading, onClose, onCreate }) {
@@ -2556,6 +2588,7 @@ function SkillRunnerModal({ skill, skills, loading, result, onClose, onRun, draf
 function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, hasSelection = false, onApplyOutput, smartCreateMode = false, onUseSmartResult }) {
   const r = result.result || {}
   const statusLabel = { completed: '完成', needs_model: '需模型', needs_input: '需输入', needs_adapter: '需适配', failed: '失败' }[result.status] || result.status
+  const isCompleted = result.status === 'completed'
   const outputText = typeof r.output === 'string' ? r.output : r.output ? JSON.stringify(r.output, null, 2) : ''
   const [copied, setCopied] = useState(false)
 
@@ -2591,6 +2624,9 @@ function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, 
     {result.status === 'needs_input' && (
       <div className="skill-result-notice"><Info size={15} /><p>{r.message || '请补充所需输入。'}</p></div>
     )}
+    {result.status === 'needs_adapter' && (
+      <div className="skill-result-notice"><Info size={15} /><p>{r.message || '该 Skill 已注册，但当前应用还没有可执行它的适配器。'}</p></div>
+    )}
     {result.status === 'failed' && (
       <div className="skill-result-notice skill-result-error"><Info size={15} /><p>{r.message || '执行失败。'}</p></div>
     )}
@@ -2611,7 +2647,7 @@ function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, 
 
     {outputText && (
       <div className="skill-result-output">
-        <div className="skill-result-output-heading"><span className="skill-result-output-label">输出</span><div className="skill-result-output-actions"><button type="button" onClick={copyOutput}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制结果'}</button>{smartCreateMode && result.status === 'completed' && onUseSmartResult && <button type="button" className="smart-result-button" onClick={() => onUseSmartResult(result)}><BookPlus size={14} />使用方案创建</button>}{canApplyToDraft && onApplyOutput && <><button type="button" onClick={() => onApplyOutput(outputText, 'insert')}><PenLine size={14} />{hasSelection ? '替换选中内容' : '插入正文'}</button><button type="button" className="replace-output" onClick={() => onApplyOutput(outputText, 'replace')}><Wand2 size={14} />替换全文</button></>}</div></div>
+        <div className="skill-result-output-heading"><span className="skill-result-output-label">{isCompleted ? '输出' : '执行详情'}</span>{isCompleted && <div className="skill-result-output-actions"><button type="button" onClick={copyOutput}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? '已复制' : '复制结果'}</button>{smartCreateMode && onUseSmartResult && <button type="button" className="smart-result-button" onClick={() => onUseSmartResult(result)}><BookPlus size={14} />使用方案创建</button>}{canApplyToDraft && onApplyOutput && <><button type="button" onClick={() => onApplyOutput(outputText, 'insert')}><PenLine size={14} />{hasSelection ? '替换选中内容' : '插入正文'}</button><button type="button" className="replace-output" onClick={() => onApplyOutput(outputText, 'replace')}><Wand2 size={14} />替换全文</button></>}</div>}</div>
         {originalText ? <div className="skill-result-comparison"><div><span>原文选区</span><pre>{originalText}</pre></div><div><span>AI 新内容</span><pre>{outputText}</pre></div></div> : <pre className="skill-result-output-text">{outputText}</pre>}
       </div>
     )}
