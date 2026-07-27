@@ -7,6 +7,7 @@ import path from 'node:path'
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-api-'))
 const dataFile = path.join(tempDir, 'db.json')
+const agentRequests = []
 const aiServer = http.createServer(async (req, res) => {
   if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/memories/extract'].includes(req.url)) {
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'not found' }))
@@ -20,6 +21,7 @@ const aiServer = http.createServer(async (req, res) => {
     return
   }
   if (req.url === '/v1/agents/story') {
+    agentRequests.push(body)
     if (String(body.message || '').includes('取消任务')) await new Promise((resolve) => setTimeout(resolve, 300))
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', route: 'story', selected_skill: body.skill || 'story', result: { output: '测试 AI 输出' } }))
     return
@@ -64,7 +66,13 @@ const aiAddress = aiServer.address()
 const aiServiceUrl = `http://127.0.0.1:${aiAddress.port}`
 const child = spawn(process.execPath, ['server/index.mjs'], {
   cwd: path.join(import.meta.dirname, '..'),
-  env: { ...process.env, PORT: '0', HOST: '127.0.0.1', AUTH_SECRET: 'smoke-test-secret-with-enough-entropy', STORY_DATA_FILE: dataFile, AI_SERVICE_URL: aiServiceUrl },
+  env: {
+    ...process.env,
+    NODE_ENV: 'test', PORT: '0', HOST: '127.0.0.1', AUTH_SECRET: 'smoke-test-secret-with-enough-entropy',
+    STORY_DATA_FILE: dataFile, AI_SERVICE_URL: aiServiceUrl, AI_TASK_QUEUE_ENABLED: 'false',
+    ALLOW_SHARED_MODEL_KEY: 'false', REGISTRATION_MODE: 'open', AI_DAILY_REQUEST_LIMIT: '0',
+    AI_CONCURRENT_REQUEST_LIMIT: '3', AI_REQUESTS_PER_MINUTE: '30',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 
@@ -133,6 +141,12 @@ try {
   accessToken = registered.payload.accessToken
   refreshHeader = cookieFrom(registered.response)
   assert.ok(refreshHeader?.startsWith('story_refresh='))
+
+  const initialUsage = await call('GET', '/api/ai/usage')
+  assert.deepEqual(initialUsage.payload.usage, { used: 0, limit: null, remaining: null, active: 0, concurrentLimit: 3 })
+  for (let attempt = 0; attempt < 35; attempt += 1) {
+    assert.equal((await call('GET', '/api/ai/usage')).response.status, 200, 'read-only polling must not consume the AI request rate limit')
+  }
 
   const seededProjects = await call('GET', '/api/projects')
   assert.equal(seededProjects.payload.projects.length, 1)
@@ -306,6 +320,9 @@ try {
   }
   assert.equal(completedTask.payload.task.status, 'completed')
   assert.equal(completedTask.payload.task.result.result.output, '测试 AI 输出')
+  const completedRequest = agentRequests.find((request) => request.message === '继续写作')
+  assert.equal(completedRequest.model_config.allow_server_fallback, false)
+  assert.equal(completedRequest.model_config.api_key, undefined)
   const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   const reusedTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   assert.equal(reusedTask.payload.task.id, duplicateTask.payload.task.id)
@@ -320,6 +337,10 @@ try {
   assert.equal(retried.response.status, 202)
   assert.equal(retried.payload.task.attempt, 2)
   assert.equal(retried.payload.task.parentTaskId, cancelTask.payload.task.id)
+  const reusedRetry = await call('POST', `/api/ai/tasks/${cancelTask.payload.task.id}/retry`)
+  assert.equal(reusedRetry.response.status, 200)
+  assert.equal(reusedRetry.payload.task.id, retried.payload.task.id)
+  assert.equal(reusedRetry.payload.task.reused, true)
 
   assert.equal((await call('DELETE', `/api/projects/${projectId}`)).response.status, 204)
 
@@ -342,7 +363,10 @@ try {
 
   console.log('API smoke test passed: auth, refresh rotation, isolation, validation, CRUD, logout')
 } finally {
-  child.kill('SIGTERM')
+  if (child.exitCode === null) {
+    child.kill('SIGTERM')
+    await new Promise((resolve) => child.once('exit', resolve))
+  }
   aiServer.close()
   await rm(tempDir, { recursive: true, force: true })
 }

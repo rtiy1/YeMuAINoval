@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.schemas import StoryAgentRequest, StoryAgentResponse
 from app.skills.capability import SkillNotReadyError, get_story_skill_capability, route_story_intent
-from app.skills.model_helper import has_api_key
+from app.skills.model_helper import create_chat_model, has_api_key
 
 
 class AgentState(TypedDict, total=False):
@@ -36,19 +36,7 @@ def select_skill(state: AgentState) -> dict[str, Any]:
     capability = get_story_skill_capability()
     if has_api_key(override, settings):
         catalog = [item.model_dump() for item in capability.catalog()]
-        from langchain_openai import ChatOpenAI
-        model_kwargs = {
-            'model': (override.model if override and override.model else None) or settings.openai_model,
-            'api_key': (override.api_key if override and override.api_key else None) or settings.openai_api_key,
-            'temperature': 0,
-        }
-        if override and override.api_base_url:
-            model_kwargs['base_url'] = override.api_base_url
-        elif settings.openai_base_url:
-            model_kwargs['base_url'] = settings.openai_base_url
-        if override and override.max_tokens:
-            model_kwargs['max_tokens'] = int(override.max_tokens)
-        model = ChatOpenAI(**model_kwargs).with_structured_output(SkillSelection)
+        model = create_chat_model(override, settings, default_temperature=0).with_structured_output(SkillSelection)
         prompt = ChatPromptTemplate.from_messages([
             ('system', '你是 Story Agent 的能力路由器。只从能力目录选择最匹配的 Skill；不要执行任务，不要编造能力。'),
             ('human', '能力目录：\n{catalog}\n\n用户请求：{message}'),

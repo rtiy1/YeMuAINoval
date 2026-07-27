@@ -8,8 +8,9 @@ service_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(service_root))
 os.environ.setdefault('AI_SERVICE_TOKEN', 'test-token')
 
+from app.config import Settings
 from app.schemas import EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest, ModelConfig
-from app.skills.model_helper import resolve_model_kwargs
+from app.skills.model_helper import has_api_key, resolve_model_kwargs
 from app.skills.capability import SkillInvocation
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
@@ -70,6 +71,17 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertEqual(kwargs['provider'], 'openai')
         self.assertEqual(kwargs['max_tokens'], 1024)
         self.assertNotIn('anthropic_api_url', kwargs)
+
+    def test_strict_byok_ignores_server_keys_but_accepts_user_key(self):
+        settings = Settings(openai_api_key='server-openai', anthropic_api_key='server-anthropic')
+        for provider in ('openai', 'anthropic'):
+            without_user_key = ModelConfig(provider=provider, allow_server_fallback=False)
+            self.assertFalse(has_api_key(without_user_key, settings))
+            self.assertIsNone(resolve_model_kwargs(without_user_key, settings)['api_key'])
+
+            with_user_key = ModelConfig(provider=provider, api_key=f'user-{provider}', allow_server_fallback=False)
+            self.assertTrue(has_api_key(with_user_key, settings))
+            self.assertEqual(resolve_model_kwargs(with_user_key, settings)['api_key'], f'user-{provider}')
 
 
 class SearchSkillTests(unittest.TestCase):

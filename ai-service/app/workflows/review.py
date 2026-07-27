@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.schemas import ChapterReviewRequest, ReviewFinding, ReviewResult
 from app.skills.capability import SkillInvocation
-from app.skills.model_helper import has_api_key
+from app.skills.model_helper import create_chat_model, has_api_key
 from app.skills.story_review import deduplicate_findings, load_review_resources, run_skill_checks, select_rubric
 
 
@@ -71,19 +71,7 @@ def llm_review(state: ReviewState) -> dict[str, Any]:
     if not has_api_key(override, settings):
         return {'llm_result': None}
     resources = load_review_resources(state['rubric'])
-    from langchain_openai import ChatOpenAI
-    model_kwargs = {
-        'model': (override.model if override and override.model else None) or settings.openai_model,
-        'api_key': (override.api_key if override and override.api_key else None) or settings.openai_api_key,
-        'temperature': override.temperature if override and override.temperature is not None else 0.1,
-    }
-    if override and override.api_base_url:
-        model_kwargs['base_url'] = override.api_base_url
-    elif settings.openai_base_url:
-        model_kwargs['base_url'] = settings.openai_base_url
-    if override and override.max_tokens:
-        model_kwargs['max_tokens'] = int(override.max_tokens)
-    model = ChatOpenAI(**model_kwargs).with_structured_output(LlmReview)
+    model = create_chat_model(override, settings, default_temperature=0.1).with_structured_output(LlmReview)
     prompt = ChatPromptTemplate.from_messages([
         ('system', '''你正在执行 story-review Skill 的 solo 模式。审查只找问题，不续写、不改写正文。每条 finding 必须引用原文证据，并严格输出 severity/category/location/evidence/issue/fix。无法从单章证明的前文一致性问题不要猜测。平台规则只作为 advisory，不把机械字数或密度指标当硬门槛。\n\nSKILL CONTRACT:\n{skill_contract}\n\nQUALITY RUBRIC:\n{quality_rubric}\n\nPLATFORM RUBRIC:\n{platform_rubric}\n\nCHECKLIST:\n{quality_checklist}\n\nANTI-AI RULES:\n{anti_ai_writing}\n\nBANNED WORDS:\n{banned_words}'''),
         ('human', '题材：{genre}\n平台：{platform}\n章节：{title}\n\n正文：\n{content}'),

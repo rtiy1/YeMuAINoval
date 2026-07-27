@@ -17,6 +17,7 @@ import {
   CircleHelp,
   Copy,
   Clock3,
+  Code2,
   Download,
   FileText,
   FolderOpen,
@@ -72,6 +73,7 @@ import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
+const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
 
 const primaryNavItems = [
@@ -1186,6 +1188,7 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
+          <a className="nav-item source-code-link" href={SOURCE_REPOSITORY_URL} target="_blank" rel="noreferrer" aria-label="源代码" title={sidebarCollapsed ? '源代码 · AGPL-3.0' : undefined}><Code2 size={17} strokeWidth={1.8} /><span>源代码 · AGPL-3.0</span></a>
           <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
           <button className="nav-item" aria-label="退出登录" title={sidebarCollapsed ? '退出登录' : undefined} onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
           <div className="profile-chip">
@@ -1321,6 +1324,7 @@ function AuthScreen({ mode, error, onModeChange, onSubmit }) {
             <button className="auth-submit" disabled={submitting} type="submit">{submitting ? <LoaderCircle size={17} className="spin" /> : <ArrowUpRight size={17} />}{submitting ? '请稍候' : isRegister ? '创建账号' : '进入工作台'}</button>
           </form>
           <p className="auth-security"><LockKeyhole size={13} />密码经过加盐哈希处理，登录会话可随时退出。</p>
+          <p className="auth-source"><a href={SOURCE_REPOSITORY_URL} target="_blank" rel="noreferrer"><Code2 size={12} />源代码 · AGPL-3.0</a></p>
         </div>
       </section>
     </main>

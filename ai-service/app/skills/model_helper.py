@@ -15,6 +15,10 @@ def _provider_of(override: Any | None) -> str:
     return getattr(override, 'provider', None) or 'openai'
 
 
+def _allow_server_fallback(override: Any | None) -> bool:
+    return override is None or getattr(override, 'allow_server_fallback', True)
+
+
 def resolve_model_kwargs(
     override: Any | None,
     settings: Settings,
@@ -32,7 +36,7 @@ def resolve_model_kwargs(
     provider = _provider_of(ov)
     if provider == 'anthropic':
         model = (ov.model if ov and ov.model else None) or settings.anthropic_model or 'claude-3-5-sonnet-latest'
-        api_key = (ov.api_key if ov and ov.api_key else None) or settings.anthropic_api_key
+        api_key = (ov.api_key if ov and ov.api_key else None) or (settings.anthropic_api_key if _allow_server_fallback(ov) else None)
         temperature = default_temperature
         if ov and ov.temperature is not None:
             temperature = max(0.0, min(2.0, float(ov.temperature)))
@@ -50,7 +54,7 @@ def resolve_model_kwargs(
         return kwargs
 
     model = (ov.model if ov and ov.model else None) or settings.openai_model
-    api_key = (ov.api_key if ov and ov.api_key else None) or settings.openai_api_key
+    api_key = (ov.api_key if ov and ov.api_key else None) or (settings.openai_api_key if _allow_server_fallback(ov) else None)
     temperature = default_temperature
     if ov and ov.temperature is not None:
         temperature = max(0.0, min(2.0, float(ov.temperature)))
@@ -73,6 +77,8 @@ def has_api_key(override: Any | None, settings: Settings) -> bool:
     """判断是否有可用的 API Key（override 优先，回退 settings，按 provider）。"""
     if override and override.api_key:
         return True
+    if not _allow_server_fallback(override):
+        return False
     if _provider_of(override) == 'anthropic':
         return bool(settings.anthropic_api_key)
     return bool(settings.openai_api_key)

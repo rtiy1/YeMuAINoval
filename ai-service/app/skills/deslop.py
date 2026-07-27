@@ -10,7 +10,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.skills.capability import SkillInvocation
-from app.skills.model_helper import has_api_key, resolve_context_window, truncate_for_context
+from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
 from app.skills.reference_loader import format_references_block, load_referenced
 from app.skills.registry import get_skill_registry
 from app.skills.script_checks import deduplicate_findings, run_check_scripts
@@ -68,22 +68,8 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
             'message': '请提供需要去 AI 味的正文（payload.content）。',
         }
 
-    from langchain_openai import ChatOpenAI
     context_window = resolve_context_window(override, settings)
-
-    model_kwargs = {
-        'model': (override.model if override and override.model else None) or settings.openai_model,
-        'api_key': (override.api_key if override and override.api_key else None) or settings.openai_api_key,
-        'temperature': override.temperature if override and override.temperature is not None else 0.3,
-    }
-    if override and override.api_base_url:
-        model_kwargs['base_url'] = override.api_base_url
-    elif settings.openai_base_url:
-        model_kwargs['base_url'] = settings.openai_base_url
-    if override and override.max_tokens:
-        model_kwargs['max_tokens'] = int(override.max_tokens)
-
-    model = ChatOpenAI(**model_kwargs)
+    model = create_chat_model(override, settings, default_temperature=0.3)
 
     checks_summary = json.dumps(checks, ensure_ascii=False, default=str)[:20_000] if checks else '确定性检查未发现问题'
     system_parts = [

@@ -12,6 +12,7 @@ class ModelConfig(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     context_window: int | None = None
+    allow_server_fallback: bool = True
 
 
 class ChapterReviewRequest(BaseModel):

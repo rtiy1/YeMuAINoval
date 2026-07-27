@@ -71,6 +71,10 @@ button { border: 0; cursor: pointer; }
 .primary-nav { display: flex; flex-direction: column; gap: 3px; }
 .nav-item { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 10px 12px; color: #a9aca4; background: transparent; border-radius: 5px; font-size: 13px; transition: .18s ease; }
 .nav-item:hover { background: #242725; color: #f7f4ec; }
+.source-code-link { text-decoration: none; }
+.auth-source { display: flex; justify-content: center; margin: 10px 0 0; }
+.auth-source a { display: inline-flex; align-items: center; gap: 5px; color: #94978f; font-size: 9px; text-decoration: none; }
+.auth-source a:hover { color: #4d524c; }
 .nav-item.active { background: #e6e0d3; color: #202321; font-weight: 600; }
 .nav-count { margin-left: auto; color: #80847c; font-family: 'DM Mono', monospace; font-size: 10px; }
 .nav-item.active .nav-count { color: #6b7169; }

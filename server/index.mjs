@@ -20,8 +20,12 @@ import {
   verifyAccessToken,
   verifyPassword,
 } from './auth.mjs'
-import { countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
+import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 import * as chatMemory from './chat-memory.mjs'
+import { invokeStoryAgent } from './story-agent.mjs'
+import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
+import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
+import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -39,11 +43,32 @@ const CHAPTER_STATES = new Set(['draft', 'current', 'done'])
 const FORESHADOW_STATUSES = new Set(['planned', 'planted', 'resolved', 'abandoned'])
 const STORY_MEMORY_TYPES = new Set(['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit'])
 const STORY_MEMORY_STATUSES = new Set(['active', 'archived'])
-const STORY_MEMORY_ORDER = new Map(['canon_fact', 'world_rule', 'character_state', 'voice_habit', 'event', 'chapter_summary'].map((type, index) => [type, index]))
 const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
 const GENRE_SUGGESTIONS = ['现代言情', '古代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世', '历史架空']
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
 const writingTaskControllers = new Map()
+const registrationMode = process.env.REGISTRATION_MODE || (process.env.NODE_ENV === 'production' ? 'owner-only' : 'open')
+if (!['open', 'owner-only', 'closed'].includes(registrationMode)) {
+  throw new Error('REGISTRATION_MODE must be open, owner-only, or closed')
+}
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error('AUTH_SECRET must contain at least 32 characters in production')
+  if (!process.env.AI_SERVICE_TOKEN || process.env.AI_SERVICE_TOKEN.length < 16) throw new Error('AI_SERVICE_TOKEN must contain at least 16 characters in production')
+}
+const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
+const aiDailyLimit = nonNegativeIntegerEnv('AI_DAILY_REQUEST_LIMIT', 0, 100_000)
+const aiConcurrentLimit = positiveIntegerEnv('AI_CONCURRENT_REQUEST_LIMIT', 3, 100)
+const aiRequestRateLimit = positiveIntegerEnv('AI_REQUESTS_PER_MINUTE', 30, 10_000)
+
+function positiveIntegerEnv(name, fallback, maximum) {
+  const value = Number(process.env[name])
+  return Number.isInteger(value) && value > 0 ? Math.min(value, maximum) : fallback
+}
+
+function nonNegativeIntegerEnv(name, fallback, maximum) {
+  const value = Number(process.env[name])
+  return Number.isInteger(value) && value >= 0 ? Math.min(value, maximum) : fallback
+}
 
 function isCodespacesOrigin(origin) {
   if (process.env.CODESPACES !== 'true' || !process.env.CODESPACE_NAME) return false
@@ -59,6 +84,12 @@ function isCodespacesOrigin(origin) {
 }
 
 app.disable('x-powered-by')
+if (process.env.TRUST_PROXY && process.env.TRUST_PROXY !== 'false') {
+  const proxySetting = /^\d+$/.test(process.env.TRUST_PROXY)
+    ? Number(process.env.TRUST_PROXY)
+    : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY
+  app.set('trust proxy', proxySetting)
+}
 app.use(helmet({ contentSecurityPolicy: false }))
 app.use((req, res, next) => {
   const origin = req.get('origin')
@@ -173,6 +204,68 @@ function cleanTags(value) {
   if (value == null || value === '') return []
   const source = Array.isArray(value) ? value : String(value).split(/[,，]/)
   return [...new Set(source.map((item) => String(item).trim()).filter(Boolean).map((item) => item.slice(0, 20)))].slice(0, 8)
+}
+
+function pruneAiUsage(db, now = Date.now()) {
+  const retentionCutoff = now - 30 * 24 * 60 * 60 * 1000
+  db.aiUsage = (db.aiUsage || [])
+    .filter((event) => new Date(event.createdAt).getTime() >= retentionCutoff)
+    .slice(-20_000)
+}
+
+function aiUsageSummary(db, userId, now = Date.now()) {
+  pruneAiUsage(db, now)
+  const dayCutoff = now - 24 * 60 * 60 * 1000
+  const leaseCutoff = now - 5 * 60 * 1000
+  const events = db.aiUsage.filter((event) => event.userId === userId)
+  const used = events.filter((event) => new Date(event.createdAt).getTime() >= dayCutoff).length
+  const activeRequests = events.filter((event) => !event.completedAt && new Date(event.createdAt).getTime() >= leaseCutoff).length
+  const activeTasks = db.writingTasks.filter((task) => task.userId === userId && ['queued', 'running'].includes(task.status)).length
+  return {
+    used,
+    limit: aiDailyLimit || null,
+    remaining: aiDailyLimit ? Math.max(0, aiDailyLimit - used) : null,
+    active: activeRequests + activeTasks,
+    concurrentLimit: aiConcurrentLimit,
+  }
+}
+
+function assertAiCapacity(db, userId) {
+  const usage = aiUsageSummary(db, userId)
+  if (usage.limit && usage.used >= usage.limit) throw Object.assign(new Error(`今日 AI 调用额度已用完（${usage.limit} 次）`), { status: 429 })
+  if (usage.active >= usage.concurrentLimit) throw Object.assign(new Error(`同时最多执行 ${usage.concurrentLimit} 个 AI 请求`), { status: 429 })
+  return usage
+}
+
+function recordQueuedAiUsage(db, userId, operation) {
+  assertAiCapacity(db, userId)
+  const timestamp = new Date().toISOString()
+  const event = { id: crypto.randomUUID(), userId, operation, createdAt: timestamp, completedAt: timestamp, outcome: 'queued' }
+  db.aiUsage.push(event)
+  return event
+}
+
+async function runWithAiQuota(userId, operation, callback) {
+  const event = await updateDb((db) => {
+    assertAiCapacity(db, userId)
+    const created = { id: crypto.randomUUID(), userId, operation, createdAt: new Date().toISOString(), completedAt: null, outcome: null }
+    db.aiUsage.push(created)
+    return created
+  })
+  try {
+    const result = await callback()
+    await updateDb((db) => {
+      const current = db.aiUsage.find((item) => item.id === event.id)
+      if (current) Object.assign(current, { completedAt: new Date().toISOString(), outcome: 'completed' })
+    })
+    return result
+  } catch (error) {
+    await updateDb((db) => {
+      const current = db.aiUsage.find((item) => item.id === event.id)
+      if (current) Object.assign(current, { completedAt: new Date().toISOString(), outcome: 'failed' })
+    }).catch(() => undefined)
+    throw error
+  }
 }
 
 function unauthorized(message = '请先登录') {
@@ -301,61 +394,6 @@ function createStoryMemoryRecord(db, userId, project, input, timestamp = new Dat
   return {
     id: crypto.randomUUID(), userId, projectId: project.id, ...values, sourceChapterId,
     createdAt: timestamp, updatedAt: timestamp,
-  }
-}
-
-function contextExcerpt(value, maxLength = 1600) {
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, Math.floor(maxLength * 0.35))}\n…\n${text.slice(-Math.floor(maxLength * 0.65))}`
-}
-
-function buildWritingContext(db, project, chapter) {
-  const chapters = db.chapters[project.id] || []
-  const chapterIndex = chapters.findIndex((item) => String(item.id) === String(chapter.id))
-  const drafts = draftMapFor(db, project.id)
-  const previousChapters = chapters
-    .slice(Math.max(0, chapterIndex - 6), chapterIndex)
-    .map((item) => ({
-      id: item.id,
-      title: item.title,
-      outline: contextExcerpt(item.outline, 900),
-      ending: contextExcerpt(drafts[String(item.id)], 1200).slice(-1200),
-    }))
-  const materials = db.ideas
-    .filter((idea) => idea.userId === project.userId && (!idea.projectId || idea.projectId === project.id))
-    .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-    .slice(0, 20)
-    .map((idea) => ({ label: idea.label, title: idea.title, body: contextExcerpt(idea.body, 500), tags: idea.tags || [] }))
-  const unresolvedForeshadows = db.foreshadows
-    .filter((item) => item.userId === project.userId && item.projectId === project.id && !['resolved', 'abandoned'].includes(item.status))
-    .sort((left, right) => Number(right.importance || 0) - Number(left.importance || 0))
-    .slice(0, 20)
-    .map((item) => ({ title: item.title, content: contextExcerpt(item.content, 700), status: item.status, targetChapterId: item.targetChapterId || null }))
-  const storyMemory = db.storyMemories
-    .filter((item) => item.userId === project.userId && item.projectId === project.id && item.status !== 'archived')
-    .sort((left, right) => (STORY_MEMORY_ORDER.get(left.type) ?? 99) - (STORY_MEMORY_ORDER.get(right.type) ?? 99)
-      || Number(right.importance || 0) - Number(left.importance || 0)
-      || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-    .slice(0, 60)
-    .map((item) => ({
-      id: item.id,
-      type: item.type,
-      title: item.title,
-      content: contextExcerpt(item.content, 900),
-      importance: item.importance || 3,
-      characterName: item.characterName || '',
-      sourceChapterId: item.sourceChapterId || null,
-      tags: item.tags || [],
-    }))
-  return {
-    version: 2,
-    project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
-    chapter: { id: chapter.id, title: chapter.title, outline: contextExcerpt(chapter.outline, 2400), state: chapter.state },
-    previousChapters,
-    storyMemory,
-    materials,
-    unresolvedForeshadows,
   }
 }
 
@@ -616,6 +654,9 @@ app.post('/api/auth/register', async (req, res, next) => {
       createdAt: new Date().toISOString(),
     }
     const created = await updateDb((db) => {
+      if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
+        throw Object.assign(new Error('当前站点未开放注册'), { status: 403 })
+      }
       if (db.users.some((item) => item.email === email)) {
         throw Object.assign(new Error('该邮箱已经注册'), { status: 409 })
       }
@@ -696,6 +737,26 @@ app.get('/api/auth/me', authenticate, (req, res) => {
 
 app.use('/api', authenticate)
 
+const aiInvocationPaths = [
+  /^\/api\/ai\/models$/,
+  /^\/api\/ai\/agent\/runs$/,
+  /^\/api\/ai\/tasks$/,
+  /^\/api\/ai\/tasks\/[^/]+\/retry$/,
+  /^\/api\/ai\/reviews\/chapter$/,
+  /^\/api\/writing-assistant\/messages$/,
+  /^\/api\/projects\/[^/]+\/chapters\/[^/]+\/memory-candidates$/,
+]
+
+app.use(rateLimit({
+  windowMs: 60_000,
+  limit: aiRequestRateLimit,
+  keyGenerator: (req) => req.user.id,
+  skip: (req) => req.method !== 'POST' || !aiInvocationPaths.some((pattern) => pattern.test(req.path)),
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'AI 请求过于频繁，请稍后再试' },
+}))
+
 function sanitizeSettings(input, existing) {
   const settings = { ...(existing || {}) }
   if (input.apiBaseUrl !== undefined) {
@@ -739,7 +800,7 @@ function publicSettings(settings) {
 }
 
 async function getUserModelConfig(user) {
-  if (!user?.settings) return null
+  if (!user?.settings) return sharedModelAccessAllowed ? null : { provider: 'openai', allow_server_fallback: false }
   const s = user.settings
   const apiKey = decryptSecret(s.apiKeyEnc)
   return {
@@ -750,6 +811,7 @@ async function getUserModelConfig(user) {
     temperature: s.temperature ?? undefined,
     max_tokens: s.maxTokens ?? undefined,
     context_window: s.contextWindow ?? undefined,
+    allow_server_fallback: sharedModelAccessAllowed,
   }
 }
 
@@ -762,48 +824,9 @@ function validateStoryAgentInput(input) {
   return { message, skill, payload }
 }
 
-async function enrichStoryAgentPayload(userId, payload) {
-  const projectId = payload.project_id || payload.projectId
-  const chapterId = payload.chapter_id || payload.chapterId
-  if (!projectId) return payload
-  const db = await loadDb()
-  const project = findOr404(db, projectId, userId)
-  const chapter = chapterId ? chapterOr404(db, project, chapterId) : null
-  const writingContext = chapter
-    ? buildWritingContext(db, project, chapter)
-    : { version: 1, project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' } }
-  return { ...payload, writing_context: writingContext }
-}
-
-async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000)) {
-  const validated = validateStoryAgentInput(input)
-  const payload = await enrichStoryAgentPayload(user.id, validated.payload)
-  const modelConfig = await getUserModelConfig(user)
-  const body = { message: validated.message, skill: validated.skill, payload }
-  if (modelConfig) body.model_config = modelConfig
-  const response = await fetch(`${aiServiceUrl}/v1/agents/story`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
-    body: JSON.stringify(body),
-    signal,
-  })
-  const result = await response.json().catch(() => null)
-  if (!response.ok) throw Object.assign(new Error(result?.detail || 'Story Agent 处理失败'), { status: response.status >= 500 ? 502 : response.status })
-  return result
-}
-
 function taskRequestKey(userId, input, idempotencyKey = '') {
   const stable = JSON.stringify({ userId, skill: input.skill || null, message: input.message, payload: input.payload })
   return crypto.createHash('sha256').update(idempotencyKey ? `${userId}:${idempotencyKey}` : stable).digest('hex')
-}
-
-function classifyTaskError(error, cancelled = false) {
-  if (cancelled) return { errorCode: 'cancelled', retryable: true, message: '任务已取消，可重新提交' }
-  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return { errorCode: 'timeout', retryable: true, message: '模型响应超时，可重试此任务' }
-  if (isNetworkError(error) || error?.status === 502 || error?.status === 503) return { errorCode: 'service_unavailable', retryable: true, message: 'AI 服务暂不可用，可稍后重试' }
-  if (error?.status === 400 && /模型|API Key|密钥|model/i.test(error?.message || '')) return { errorCode: 'model_config', retryable: false, message: '模型配置无效，请在设置中检查地址、密钥和模型名' }
-  if (/上下文|字符|token|length/i.test(error?.message || '')) return { errorCode: 'context_too_large', retryable: false, message: '输入上下文过长，请缩短正文或素材后重试' }
-  return { errorCode: 'unknown', retryable: true, message: error?.message || 'AI Skill 执行失败' }
 }
 
 function createWritingTask({ userId, input, requestKey, parentTaskId = null, attempt = 1 }) {
@@ -830,60 +853,36 @@ function writingTaskPublic(task) {
   }
 }
 
-async function executeWritingTask(taskId, userId) {
+async function executeWritingTaskLocally(taskId, userId) {
   const controller = new AbortController()
   writingTaskControllers.set(taskId, controller)
   try {
-    const prepared = await updateDb((db) => {
-      const task = db.writingTasks.find((item) => item.id === taskId && item.userId === userId)
-      const user = db.users.find((item) => item.id === userId)
-      if (!task || !user || task.status === 'cancelled' || task.cancelRequested) return null
-      task.status = 'running'
-      task.progress = 15
-      task.statusMessage = '正在构建写作上下文'
-      task.updatedAt = new Date().toISOString()
-      return { input: task.input, user }
-    })
-    if (!prepared) return
-    await updateDb((db) => {
-      const task = db.writingTasks.find((item) => item.id === taskId)
-      if (task && task.status === 'running') {
-        task.progress = 35
-        task.statusMessage = '正在执行 AI Skill'
-        task.updatedAt = new Date().toISOString()
-      }
-    })
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])
-    const result = await invokeStoryAgent(prepared.user, prepared.input, signal)
-    await updateDb((db) => {
-      const task = db.writingTasks.find((item) => item.id === taskId)
-      if (!task || task.status === 'cancelled' || task.cancelRequested) return
-      task.status = 'completed'
-      task.progress = 100
-      task.statusMessage = 'AI Skill 执行完成'
-      task.result = result
-      task.updatedAt = new Date().toISOString()
-    })
-  } catch (error) {
-    await updateDb((db) => {
-      const task = db.writingTasks.find((item) => item.id === taskId)
-      if (!task) return
-      const classified = classifyTaskError(error, controller.signal.aborted || task.cancelRequested)
-      if (classified.errorCode === 'cancelled') {
-        task.status = 'cancelled'
-        task.statusMessage = classified.message
-      } else {
-        task.status = 'failed'
-        task.statusMessage = classified.message
-        task.error = classified.message
-      }
-      task.errorCode = classified.errorCode
-      task.retryable = classified.retryable
-      task.updatedAt = new Date().toISOString()
-    }).catch(() => undefined)
+    await runWritingTask(taskId, { userId, controller, requeueOnAbort: true })
   } finally {
     writingTaskControllers.delete(taskId)
   }
+}
+
+async function dispatchWritingTask(task) {
+  if (isTaskQueueEnabled()) {
+    try {
+      await enqueueWritingTask(task.id)
+    } catch (error) {
+      await updateDb((db) => {
+        const current = db.writingTasks.find((item) => item.id === task.id)
+        if (!current || !['queued', 'running'].includes(current.status)) return
+        current.status = 'failed'
+        current.error = 'AI 任务队列暂不可用'
+        current.errorCode = 'service_unavailable'
+        current.statusMessage = '任务入队失败，可稍后重试'
+        current.retryable = true
+        current.updatedAt = new Date().toISOString()
+      }).catch(() => undefined)
+      throw error
+    }
+    return
+  }
+  queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })
 }
 
 async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
@@ -1002,9 +1001,19 @@ app.get('/api/ai/skills', async (req, res, next) => {
   }
 })
 
+app.get('/api/ai/usage', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    res.json({ usage: aiUsageSummary(db, req.user.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.post('/api/ai/agent/runs', async (req, res, next) => {
   try {
-    res.json(await invokeStoryAgent(req.user, req.body || {}))
+    const input = validateStoryAgentInput(req.body || {})
+    res.json(await runWithAiQuota(req.user.id, 'agent-run', () => invokeStoryAgent(req.user, input)))
   } catch (error) {
     if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
@@ -1060,11 +1069,12 @@ app.post('/api/ai/tasks', async (req, res, next) => {
         reused = existing
         return existing
       }
+      recordQueuedAiUsage(db, req.user.id, 'ai-task')
       const created = createWritingTask({ userId: req.user.id, input, requestKey })
       db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
       return created
     })
-    if (!reused) queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
+    if (!reused) await dispatchWritingTask(task)
     res.status(reused ? 200 : 202).json({ task: { ...writingTaskPublic(task), reused: Boolean(reused) } })
   } catch (error) {
     next(error)
@@ -1073,12 +1083,17 @@ app.post('/api/ai/tasks', async (req, res, next) => {
 
 app.post('/api/ai/tasks/:taskId/retry', async (req, res, next) => {
   try {
+    let reused = false
     const task = await updateDb((db) => {
       const original = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
       if (!original) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
       if (!['failed', 'cancelled'].includes(original.status)) throw Object.assign(new Error('只有失败或已取消任务可以重试'), { status: 409 })
       const existing = db.writingTasks.find((item) => item.parentTaskId === original.id && ['queued', 'running'].includes(item.status))
-      if (existing) return existing
+      if (existing) {
+        reused = true
+        return existing
+      }
+      recordQueuedAiUsage(db, req.user.id, 'ai-task-retry')
       const created = createWritingTask({
         userId: req.user.id,
         input: original.input,
@@ -1089,8 +1104,8 @@ app.post('/api/ai/tasks/:taskId/retry', async (req, res, next) => {
       db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
       return created
     })
-    if (task.status === 'queued') queueMicrotask(() => { void executeWritingTask(task.id, req.user.id) })
-    res.status(202).json({ task: writingTaskPublic(task) })
+    if (!reused) await dispatchWritingTask(task)
+    res.status(reused ? 200 : 202).json({ task: { ...writingTaskPublic(task), reused } })
   } catch (error) {
     next(error)
   }
@@ -1111,6 +1126,7 @@ app.post('/api/ai/tasks/:taskId/cancel', async (req, res, next) => {
       return current
     })
     writingTaskControllers.get(task.id)?.abort()
+    await publishTaskCancellation(task.id)
     res.json({ task: writingTaskPublic(task) })
   } catch (error) {
     next(error)
@@ -1133,18 +1149,21 @@ app.post('/api/ai/reviews/chapter', async (req, res, next) => {
     const modelConfig = await getUserModelConfig(req.user)
     const reviewBody = { title, genre, platform, mode, content: req.body.content }
     if (modelConfig) reviewBody.model_config = modelConfig
-    const response = await fetch(`${aiServiceUrl}/v1/reviews/chapter`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
-      body: JSON.stringify(reviewBody),
-      signal: AbortSignal.timeout(60_000),
+    const payload = await runWithAiQuota(req.user.id, 'chapter-review', async () => {
+      const response = await fetch(`${aiServiceUrl}/v1/reviews/chapter`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+        body: JSON.stringify(reviewBody),
+        signal: AbortSignal.timeout(60_000),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok) {
+        const error = new Error(result?.detail || 'AI 服务处理失败')
+        error.status = response.status >= 500 ? 502 : response.status
+        throw error
+      }
+      return result
     })
-    const payload = await response.json().catch(() => null)
-    if (!response.ok) {
-      const error = new Error(payload?.detail || 'AI 服务处理失败')
-      error.status = response.status >= 500 ? 502 : response.status
-      throw error
-    }
     res.json(payload)
   } catch (error) {
     if (isNetworkError(error)) {
@@ -1193,7 +1212,11 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     await saveWritingSession(req.user.id, session)
     prepared = { session }
 
-    const generated = await requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webSearch)
+    const generated = await runWithAiQuota(
+      req.user.id,
+      webSearch ? 'writing-assistant-search' : 'writing-assistant-turn',
+      () => requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webSearch),
+    )
     const reloaded = await loadWritingSession(req.user.id)
     if (!reloaded || reloaded.id !== session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
     session = reloaded
@@ -1702,14 +1725,17 @@ app.post('/api/projects/:projectId/chapters/:chapterId/memory-candidates', async
     const modelConfig = await getUserModelConfig(req.user)
     const body = { chapter_title: chapter.title, content, writing_context: buildWritingContext(db, project, chapter) }
     if (modelConfig) body.model_config = modelConfig
-    const response = await fetch(`${aiServiceUrl}/v1/memories/extract`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
+    const payload = await runWithAiQuota(req.user.id, 'memory-extraction', async () => {
+      const response = await fetch(`${aiServiceUrl}/v1/memories/extract`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok) throw Object.assign(new Error(result?.detail || '作品记忆整理失败'), { status: response.status >= 500 ? 502 : response.status })
+      return result
     })
-    const payload = await response.json().catch(() => null)
-    if (!response.ok) throw Object.assign(new Error(payload?.detail || '作品记忆整理失败'), { status: response.status >= 500 ? 502 : response.status })
     res.json(payload)
   } catch (error) {
     next(error)
@@ -1893,16 +1919,26 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: status >= 500 ? '服务器内部错误' : error.message })
 })
 
-await updateDb((db) => {
+const interruptedTaskIds = await updateDb((db) => {
   const timestamp = new Date().toISOString()
+  const interrupted = []
   for (const task of db.writingTasks) {
     if (!['queued', 'running'].includes(task.status)) continue
-    task.status = 'failed'
-    task.error = '服务曾在任务执行期间重启，请重新提交任务'
-    task.statusMessage = '任务因服务重启中断'
+    if (isTaskQueueEnabled()) {
+      task.status = 'queued'
+      task.progress = 0
+      task.statusMessage = '任务等待 worker 恢复执行'
+      interrupted.push(task.id)
+    } else {
+      task.status = 'failed'
+      task.error = '服务曾在任务执行期间重启，请重新提交任务'
+      task.statusMessage = '任务因服务重启中断'
+    }
     task.updatedAt = timestamp
   }
+  return interrupted
 })
+for (const taskId of interruptedTaskIds) await enqueueWritingTask(taskId)
 
 const server = app.listen(port, host, (error) => {
   if (error) {
@@ -1913,6 +1949,29 @@ const server = app.listen(port, host, (error) => {
   const address = server.address()
   const actualPort = typeof address === 'object' && address ? address.port : port
   console.log(`Story API listening on http://${host}:${actualPort}`)
-  console.log(`Data file: ${path.join(serverDir, 'data', 'db.json')}`)
+  const storage = storeInfo()
+  console.log(`Storage: ${storage.backend}${storage.dataFile ? ` (${storage.dataFile})` : ''}`)
   if (usesDefaultSecret) console.warn('AUTH_SECRET is not set; use a strong secret in production.')
 })
+
+let shuttingDown = false
+async function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`Received ${signal}; shutting down Story API`)
+  for (const controller of writingTaskControllers.values()) controller.abort()
+  const closed = new Promise((resolve) => server.close(resolve))
+  const forceClose = setTimeout(() => server.closeAllConnections(), 8_000)
+  await closed
+  clearTimeout(forceClose)
+  await Promise.allSettled([chatMemory.closeClient(), closeTaskQueue(), closeStore()])
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    void shutdown(signal).catch((error) => {
+      console.error('Story API shutdown failed:', error)
+      process.exitCode = 1
+    })
+  })
+}
