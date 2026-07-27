@@ -90,35 +90,18 @@ test('context compaction keeps six recent turns raw and selects older turns', ()
   assert.equal(plan.messages.length, 8)
 })
 
-test('turn plan advances with context, skill and result events', () => {
+test('turn plan only exposes an explicit runtime plan', () => {
+  assert.deepEqual(agentTurnPlan({ status: 'running', events: [] }), [])
   assert.deepEqual(agentTurnPlan({
-    status: 'queued',
-    skill: 'story-review',
-    events: [],
-  }).map((item) => item.status), ['inProgress', 'pending', 'pending'])
-
-  assert.deepEqual(agentTurnPlan({
-    status: 'running',
-    skill: 'story-review',
-    events: [
-      { type: 'context', status: 'completed' },
-      { type: 'skill', status: 'running' },
+    plan: [
+      { step: '读取当前章节', status: 'completed' },
+      { step: '核对伏笔', status: 'inProgress' },
+      { step: '', status: 'completed' },
     ],
-  }).map((item) => item.status), ['completed', 'inProgress', 'pending'])
-
-  const completed = agentTurnPlan({
-    status: 'completed',
-    skill: 'story-deslop',
-    input: { payload: { reviewable_edit: true } },
-    events: [
-      { type: 'context', status: 'completed' },
-      { type: 'skill', status: 'completed' },
-      { type: 'result', status: 'completed' },
-    ],
-  })
-  assert.deepEqual(completed.map((item) => item.status), ['completed', 'completed', 'completed'])
-  assert.match(completed[1].step, /模板化/)
-  assert.match(completed[2].step, /逐段可审阅/)
+  }), [
+    { step: '读取当前章节', status: 'completed' },
+    { step: '核对伏笔', status: 'inProgress' },
+  ])
 })
 
 test('turn public response exposes Codex-style items and lifecycle', () => {
@@ -147,7 +130,22 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
   assert.equal(output.status, 'completed')
   assert.equal(output.threadId, 'thread-1')
   assert.equal(output.items.at(-1).content[0].text, '续写结果')
-  assert.deepEqual(output.plan.map((item) => item.status), ['completed', 'completed', 'completed'])
+  assert.deepEqual(output.plan, [])
+})
+
+test('plan collaboration turns expose a plan item without a fake progress checklist', () => {
+  const thread = { id: 'thread-plan' }
+  const turn = { id: 'turn-plan', taskId: 'task-plan', message: '规划下一卷' }
+  const task = {
+    id: 'task-plan',
+    status: 'completed',
+    input: { payload: { collaboration_mode: 'plan' } },
+    result: { result: { output: '## 下一卷计划\n\n1. 回收旧伏笔' } },
+  }
+  const output = agentTurnPublic(thread, turn, task, (value) => ({ id: value.id }))
+  assert.deepEqual(output.plan, [])
+  assert.equal(output.items.at(-1).type, 'plan')
+  assert.equal(output.source.mode, 'plan')
 })
 
 test('thread public response restores task source without exposing raw input', () => {

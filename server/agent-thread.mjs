@@ -106,6 +106,7 @@ export function taskSource(task) {
   return {
     chapterId: task?.chapterId ?? payload.chapter_id ?? payload.chapterId ?? null,
     chapterTitle: text(payload.chapter_title || payload.chapterTitle),
+    mode: text(payload.collaboration_mode) || 'build',
     sourceText: typeof payload.source_text === 'string' ? payload.source_text : typeof payload.sourceText === 'string' ? payload.sourceText : typeof payload.content === 'string' ? payload.content : '',
     selectedText: typeof payload.selected_text === 'string' ? payload.selected_text : typeof payload.selectedText === 'string' ? payload.selectedText : '',
     selectionStart: Number(payload.selection_start ?? payload.selectionStart) || 0,
@@ -127,45 +128,15 @@ export function turnStatus(task) {
   return itemStatus(task?.status)
 }
 
-function hasEvent(task, type, statuses = null) {
-  return (task?.events || []).some((event) => event.type === type && (!statuses || statuses.has(event.status)))
-}
-
-function executionStep(task) {
-  const skill = task?.result?.selected_skill || task?.skill || 'story'
-  if (skill === 'story-review') return '审查章节并定位可核验问题'
-  if (skill === 'story-deslop') return '重写文本并降低模板化表达'
-  if (/-write$/.test(skill)) return '生成符合上下文的写作结果'
-  if (/(?:-analyze|-scan)$/.test(skill)) return '分析结构、节奏与连续性'
-  return '选择并执行合适的创作能力'
-}
-
 export function agentTurnPlan(task) {
-  if (!task) return []
-  const terminal = TERMINAL_TASK_STATUSES.has(task?.status)
-  const contextCompleted = hasEvent(task, 'context', new Set(['completed']))
-  const skillStarted = hasEvent(task, 'skill')
-  const skillCompleted = hasEvent(task, 'skill', new Set(['completed']))
-  const resultCompleted = hasEvent(task, 'result', new Set(['completed']))
-
-  return [
-    {
-      step: '读取作品、章节与连续性上下文',
-      status: contextCompleted ? 'completed' : terminal ? 'pending' : 'inProgress',
-    },
-    {
-      step: executionStep(task),
-      status: skillCompleted
-        ? 'completed'
-        : skillStarted && !terminal
-          ? 'inProgress'
-          : 'pending',
-    },
-    {
-      step: task?.input?.payload?.reviewable_edit === true ? '整理逐段可审阅修改' : '整理结果并完成检查',
-      status: resultCompleted ? 'completed' : skillCompleted && !terminal ? 'inProgress' : 'pending',
-    },
-  ]
+  if (!Array.isArray(task?.plan)) return []
+  return task.plan
+    .slice(0, 12)
+    .map((item) => ({
+      step: text(item?.step),
+      status: ['pending', 'inProgress', 'completed'].includes(item?.status) ? item.status : 'pending',
+    }))
+    .filter((item) => item.step)
 }
 
 export function agentTurnItems(turn, task) {
@@ -194,9 +165,10 @@ export function agentTurnItems(turn, task) {
     })
   }
   if (TERMINAL_TASK_STATUSES.has(task?.status)) {
+    const planMode = task?.input?.payload?.collaboration_mode === 'plan'
     items.push({
       id: `${turn.id}:agent`,
-      type: 'agentMessage',
+      type: planMode ? 'plan' : 'agentMessage',
       status: itemStatus(task.status),
       content: [{ type: 'outputText', text: taskResultText(task) || task.statusMessage || '' }],
       createdAt: task.updatedAt || null,

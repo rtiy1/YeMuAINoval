@@ -20,6 +20,7 @@ from app.schemas import ContextCompactRequest, EditProposal, StoryMemoryCandidat
 from app.skills.model_helper import has_api_key, resolve_model_kwargs
 from app.skills.capability import SkillInvocation, get_story_skill_capability
 from app.skills.reference_loader import select_reference_requests
+from app.skills.prompt import _stream_chunk_parts, extract_choice_request
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
 from app.workflows.memory import extract_story_memories
@@ -67,6 +68,32 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertLessEqual(len(json.dumps(catalog, ensure_ascii=False)), 8_000)
         self.assertTrue(all(set(item) == {'name', 'description', 'status'} for item in catalog))
         self.assertTrue(all('SKILL CONTRACT' not in item['description'] for item in catalog))
+
+    def test_prompt_skill_extracts_machine_readable_blocking_question(self):
+        parsed = extract_choice_request('''<choice_request>
+{"question":"副本核心体验选哪一种？","options":[
+{"label":"规则怪谈","value":"规则怪谈","description":"强调规则推理"},
+{"label":"生存闯关","value":"生存闯关","description":"强调资源压力"}
+]}
+</choice_request>''')
+        self.assertEqual(parsed['question'], '副本核心体验选哪一种？')
+        self.assertEqual(parsed['options'][0]['key'], 'A')
+        self.assertEqual(parsed['options'][1]['value'], '生存闯关')
+
+    def test_plan_mode_is_distinct_from_execution_checklist(self):
+        source = Path(__file__).parents[1].joinpath('app', 'skills', 'prompt.py').read_text(encoding='utf-8')
+        self.assertIn('PLAN COLLABORATION MODE', source)
+        self.assertIn('禁止改写正文', source)
+        self.assertIn('不调用或伪造 update_plan', source)
+
+    def test_stream_separates_provider_reasoning_summary_from_output(self):
+        output, summary = _stream_chunk_parts([
+            {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': '正在核对伏笔。'}]},
+            {'type': 'text', 'text': '正文结果'},
+            {'type': 'reasoning_content', 'text': '不应暴露的原始推理'},
+        ])
+        self.assertEqual(output, '正文结果')
+        self.assertEqual(summary, '正在核对伏笔。')
 
     def test_shared_agent_policy_matches_codex_style_execution_boundaries(self):
         self.assertIn('直接推进到可交付结果', AGENT_EXECUTION_POLICY)

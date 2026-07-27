@@ -2,6 +2,7 @@ import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
 import { enrichStoryAgentPayload } from './writing-context.mjs'
 import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
+import { consumeSseStream } from '../src/sse.mjs'
 
 const aiServiceUrl = (process.env.AI_SERVICE_URL || 'http://127.0.0.1:8890').replace(/\/$/, '')
 const aiServiceToken = process.env.AI_SERVICE_TOKEN || 'local-ai-service-token'
@@ -44,19 +45,37 @@ function userModelConfig(user) {
   }
 }
 
-export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000)) {
+export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000), onDelta = null, onReasoningDelta = null) {
   const db = await loadDb()
   const payload = enrichStoryAgentPayload(db, user.id, input.payload || {})
   const prepared = await decorateInstalledMarketSkill(user.id, { ...input, payload })
   const body = { message: prepared.message, skill: prepared.skill || null, payload: prepared.payload }
   const modelConfig = userModelConfig(user)
   if (modelConfig) body.model_config = modelConfig
-  const response = await fetch(`${aiServiceUrl}/v1/agents/story`, {
+  const response = await fetch(`${aiServiceUrl}${onDelta ? '/v1/agents/story/stream' : '/v1/agents/story'}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+    headers: {
+      'content-type': 'application/json',
+      'x-service-token': aiServiceToken,
+      ...(onDelta ? { accept: 'text/event-stream' } : {}),
+    },
     body: JSON.stringify(body),
     signal,
   })
+  if (onDelta && response.ok) {
+    let completed = null
+    let streamError = null
+    await consumeSseStream(response.body, async ({ event, data }) => {
+      const payload = data ? JSON.parse(data) : null
+      if (event === 'item/agentMessage/delta' && typeof payload?.delta === 'string') await onDelta(payload.delta)
+      if (event === 'item/reasoning/summaryDelta' && typeof payload?.delta === 'string' && onReasoningDelta) await onReasoningDelta(payload.delta)
+      if (event === 'response/completed') completed = payload?.response || null
+      if (event === 'error') streamError = payload?.error || 'Story Agent 流式执行失败'
+    })
+    if (streamError) throw Object.assign(new Error(streamError), { status: 502 })
+    if (!completed) throw Object.assign(new Error('Story Agent 流式响应未正常完成'), { status: 502 })
+    return completed
+  }
   const result = await response.json().catch(() => null)
   if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, 'Story Agent 处理失败')), { status: response.status >= 500 ? 502 : response.status })
   return result

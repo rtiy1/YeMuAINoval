@@ -1,6 +1,10 @@
+import json
 import logging
+import queue
+import threading
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
 from app.schemas import (
@@ -25,7 +29,7 @@ from app.workflows.assistant_agent import run_writing_assistant_turn
 from app.workflows.context_compaction import compact_story_context
 from app.workflows.memory import extract_story_memories
 from app.workflows.writing_assistant import generate_writing_proposal
-from app.workflows.story_agent import run_story_agent
+from app.workflows.story_agent import run_story_agent, run_story_agent_streaming
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title='Story Studio AI Service', version='0.1.0')
@@ -67,6 +71,39 @@ async def invoke_story_agent(request: StoryAgentRequest):
     except Exception as error:
         logger.exception('story agent failed')
         raise HTTPException(status_code=500, detail='story agent failed') from error
+
+
+@app.post('/v1/agents/story/stream', dependencies=[Depends(verify_service_token)])
+async def stream_story_agent(request: StoryAgentRequest):
+    def event_stream():
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+
+        def run():
+            try:
+                response = run_story_agent_streaming(
+                    request,
+                    lambda delta: events.put(('item/agentMessage/delta', {'delta': delta})),
+                    lambda delta: events.put(('item/reasoning/summaryDelta', {'delta': delta})),
+                )
+                events.put(('response/completed', {'response': response.model_dump()}))
+            except Exception as error:
+                logger.exception('streaming story agent failed')
+                events.put(('error', {'error': str(error) or 'story agent failed'}))
+            finally:
+                events.put(('close', None))
+
+        threading.Thread(target=run, daemon=True).start()
+        while True:
+            event, payload = events.get()
+            if event == 'close':
+                break
+            yield f'event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n'
+
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @app.post('/v1/assistants/writing/turn', response_model=WritingAssistantTurnResponse, dependencies=[Depends(verify_service_token)])

@@ -7,6 +7,7 @@ import {
   agentTurnEvents,
   formatAgentDuration,
   isEditorAgentEdit,
+  normalizeStructuredAgentQuestion,
   parseAgentChoicePrompt,
   resolveEditorAgentCommand,
   waitForAgentPoll,
@@ -71,6 +72,40 @@ test('editor agent converts markdown choices into structured options', () => {
 
 test('editor agent leaves ordinary prose unchanged', () => {
   assert.equal(parseAgentChoicePrompt('这是普通的章节分析，没有需要选择的内容。'), null)
+})
+
+test('editor agent converts markdown comparison tables into selectable directions', () => {
+  const parsed = parseAgentChoicePrompt(`## 一个阻塞问题
+
+**你想让读者体验打脸逆袭，还是体验熟人解谜？**
+
+|  | 逆袭打脸型 | 熟人解谜型 |
+|---|---|---|
+| 单副本长度 | 10-15章 | 5-8章 |
+| 节奏 | 爽点密集 | 线索密集 |
+
+告诉我你更想要哪种，我直接进入开书流程。`)
+
+  assert.equal(parsed.question, '你想让读者体验打脸逆袭，还是体验熟人解谜？')
+  assert.deepEqual(parsed.options.map(({ key, label }) => ({ key, label })), [
+    { key: 'A', label: '逆袭打脸型' },
+    { key: 'B', label: '熟人解谜型' },
+  ])
+  assert.match(parsed.options[0].description, /单副本长度：10-15章/)
+  assert.match(parsed.hint, /进入开书流程/)
+})
+
+test('editor agent renders structured blocking questions returned by skills', () => {
+  const parsed = normalizeStructuredAgentQuestion({
+    question: '副本核心体验选哪一种？',
+    options: [
+      { key: 'A', label: '规则怪谈', value: '规则怪谈', description: '强调规则推理' },
+      { key: 'B', label: '生存闯关', value: '生存闯关', description: '强调资源压力' },
+    ],
+  })
+  assert.equal(parsed.question, '副本核心体验选哪一种？')
+  assert.equal(parsed.options[1].reply, 'B：生存闯关')
+  assert.equal(parsed.options[0].description, '强调规则推理')
 })
 
 test('editor agent formats durations and aborts polling', async () => {

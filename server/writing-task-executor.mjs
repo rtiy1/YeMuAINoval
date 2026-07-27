@@ -42,6 +42,8 @@ export async function executeWritingTask(taskId, { userId = null, controller = n
       if (resumeRunning && task.status === 'running') finishRunningEvent(task, 'interrupted')
       task.status = 'running'
       task.progress = 15
+      task.partialOutput = ''
+      task.reasoningSummary = ''
       task.statusMessage = '正在构建写作上下文'
       appendEvent(task, 'context', '读取作品、章节与连续性上下文', 'running')
       task.updatedAt = new Date().toISOString()
@@ -59,7 +61,38 @@ export async function executeWritingTask(taskId, { userId = null, controller = n
       }
     })
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])
-    const result = await invokeStoryAgent(prepared.user, prepared.input, signal)
+    let partialOutput = ''
+    let reasoningSummary = ''
+    let lastPartialFlush = 0
+    let lastPartialLength = 0
+    const flushReasoningSummary = async (delta) => {
+      reasoningSummary += delta
+      const snapshot = reasoningSummary.slice(0, 12_000)
+      await updateDb((db) => {
+        const task = db.writingTasks.find((item) => item.id === taskId)
+        if (!task || task.status !== 'running' || task.cancelRequested) return
+        task.reasoningSummary = snapshot
+        task.updatedAt = new Date().toISOString()
+        touchAgentThread(db, task)
+      })
+    }
+    const result = await invokeStoryAgent(prepared.user, prepared.input, signal, async (delta) => {
+      partialOutput += delta
+      const now = Date.now()
+      if (now - lastPartialFlush < 60 && partialOutput.length - lastPartialLength < 96) return
+      lastPartialFlush = now
+      lastPartialLength = partialOutput.length
+      const snapshot = partialOutput
+      await updateDb((db) => {
+        const task = db.writingTasks.find((item) => item.id === taskId)
+        if (!task || task.status !== 'running' || task.cancelRequested) return
+        task.partialOutput = snapshot
+        task.progress = Math.max(45, Math.min(88, 45 + Math.floor(snapshot.length / 120)))
+        task.statusMessage = '正在生成回复'
+        task.updatedAt = new Date().toISOString()
+        touchAgentThread(db, task)
+      })
+    }, flushReasoningSummary)
     await updateDb((db) => {
       const task = db.writingTasks.find((item) => item.id === taskId)
       if (!task || task.status === 'cancelled' || task.cancelRequested) return
@@ -73,6 +106,8 @@ export async function executeWritingTask(taskId, { userId = null, controller = n
       task.status = 'completed'
       task.progress = 100
       task.statusMessage = 'AI Skill 执行完成'
+      task.partialOutput = partialOutput || task.partialOutput || ''
+      task.reasoningSummary = reasoningSummary || task.reasoningSummary || ''
       task.result = result
       task.updatedAt = new Date().toISOString()
       touchAgentThread(db, task)

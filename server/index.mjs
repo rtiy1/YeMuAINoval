@@ -981,7 +981,7 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
     id, userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
     skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt, threadId,
     status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
-    result: null, error: null, errorCode: null, retryable: false, cancelRequested: false,
+    result: null, partialOutput: '', reasoningSummary: '', error: null, errorCode: null, retryable: false, cancelRequested: false,
     events: [createTaskEvent(id, 1, 'lifecycle', attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队')],
     createdAt: timestamp, updatedAt: timestamp,
   }
@@ -991,7 +991,7 @@ function writingTaskPublic(task) {
   return {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
     skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
-    statusMessage: task.statusMessage || '', result: task.result || null, error: task.error || null,
+    statusMessage: task.statusMessage || '', result: task.result || null, partialOutput: task.partialOutput || '', reasoningSummary: task.reasoningSummary || '', error: task.error || null,
     errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
     parentTaskId: task.parentTaskId || null, reused: task.reused === true,
     threadId: task.threadId || null, turnId: task.turnId || null,
@@ -1706,6 +1706,10 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
   let turnStarted = false
   let lastTurnVersion = ''
   let lastPlanVersion = ''
+  let lastOutputLength = 0
+  let outputItemStarted = false
+  let lastReasoningLength = 0
+  let reasoningItemStarted = false
   let lastHeartbeat = Date.now()
   const itemVersions = new Map()
   try {
@@ -1725,13 +1729,53 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
       }
       const planVersion = JSON.stringify(publicTurn.plan || [])
-      if (planVersion !== lastPlanVersion) {
+      if (publicTurn.plan?.length && planVersion !== lastPlanVersion) {
         lastPlanVersion = planVersion
         res.write(`event: turn/plan/updated\ndata: ${JSON.stringify({
           threadId: thread.id,
           turnId: turn.id,
-          explanation: '夜雨会先读取当前写作上下文，再执行创作能力并整理结果。',
           plan: publicTurn.plan || [],
+        })}\n\n`)
+      }
+      const partialOutput = String(publicTurn.task?.partialOutput || '')
+      const reasoningSummary = String(publicTurn.task?.reasoningSummary || '')
+      if (reasoningSummary.length > lastReasoningLength) {
+        const delta = reasoningSummary.slice(lastReasoningLength)
+        lastReasoningLength = reasoningSummary.length
+        if (!reasoningItemStarted) {
+          reasoningItemStarted = true
+          res.write(`event: item/started\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            item: { id: `${turn.id}:reasoning`, type: 'reasoning', status: 'inProgress', summary: [] },
+          })}\n\n`)
+        }
+        res.write(`event: item/reasoning/summaryDelta\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          itemId: `${turn.id}:reasoning`,
+          delta,
+        })}\n\n`)
+      }
+      if (partialOutput.length > lastOutputLength) {
+        const delta = partialOutput.slice(lastOutputLength)
+        lastOutputLength = partialOutput.length
+        const planMode = task.input?.payload?.collaboration_mode === 'plan'
+        const outputItemType = planMode ? 'plan' : 'agentMessage'
+        if (!outputItemStarted) {
+          outputItemStarted = true
+          res.write(`event: item/started\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            item: { id: `${turn.id}:agent`, type: outputItemType, status: 'inProgress', text: '' },
+          })}\n\n`)
+        }
+        const deltaEvent = planMode ? 'item/plan/delta' : 'item/agentMessage/delta'
+        res.write(`event: ${deltaEvent}\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          itemId: `${turn.id}:agent`,
+          delta,
         })}\n\n`)
       }
       for (const item of publicTurn.items) {

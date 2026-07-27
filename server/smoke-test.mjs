@@ -18,7 +18,7 @@ const aiServer = http.createServer(async (req, res) => {
     }))
     return
   }
-  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/memories/extract', '/v1/responses'].includes(req.url)) {
+  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/agents/story/stream', '/v1/memories/extract', '/v1/responses'].includes(req.url)) {
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'not found' }))
     return
   }
@@ -35,9 +35,18 @@ const aiServer = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', message: '已整理候选记忆', candidates: [{ type: 'chapter_summary', title: '本章摘要', content: '测试摘要', importance: 3, reason: '正文明确' }] }))
     return
   }
-  if (req.url === '/v1/agents/story') {
+  if (req.url === '/v1/agents/story' || req.url === '/v1/agents/story/stream') {
     agentRequests.push(body)
     if (String(body.message || '').includes('取消任务')) await new Promise((resolve) => setTimeout(resolve, 300))
+    if (req.url.endsWith('/stream')) {
+      const response = { status: 'completed', route: 'story', selected_skill: body.skill || 'story', result: { output: '测试 AI 输出' } }
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write(`event: item/reasoning/summaryDelta\ndata: ${JSON.stringify({ delta: '正在核对章节上下文。' })}\n\n`)
+      res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: '测试 AI ' })}\n\n`)
+      res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: '输出' })}\n\n`)
+      res.end(`event: response/completed\ndata: ${JSON.stringify({ response })}\n\n`)
+      return
+    }
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', route: 'story', selected_skill: body.skill || 'story', result: { output: '测试 AI 输出' } }))
     return
   }
@@ -461,7 +470,7 @@ try {
   assert.equal(task.payload.task.turnId, task.payload.turn.id)
   assert.equal(task.payload.turn.threadId, agentThread.payload.thread.id)
   assert.equal(task.payload.turn.items[0].type, 'userMessage')
-  assert.equal(task.payload.turn.plan.length, 3)
+  assert.equal(task.payload.turn.plan.length, 0)
   assert.equal(task.payload.task.events[0].type, 'lifecycle')
   assert.equal(task.payload.task.events[0].status, 'completed')
   const anonymousStream = await streamTurn(agentThread.payload.thread.id, task.payload.turn.id, { auth: false })
@@ -470,13 +479,15 @@ try {
   assert.equal(streamed.response.status, 200)
   assert.match(streamed.response.headers.get('content-type'), /text\/event-stream/)
   assert.ok(streamed.events.some((event) => event.event === 'turn/started'))
-  assert.ok(streamed.events.some((event) => event.event === 'turn/plan/updated'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/agentMessage/delta'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/reasoning/summaryDelta'))
   assert.ok(streamed.events.some((event) => event.event === 'item/started' || event.event === 'item/completed'))
   assert.equal(streamed.events.at(-1).event, 'turn/completed')
   assert.equal(streamed.events.at(-1).payload.turn.status, 'completed')
   const completedTask = await call('GET', `/api/ai/tasks/${task.payload.task.id}`)
   assert.equal(completedTask.payload.task.status, 'completed')
   assert.equal(completedTask.payload.task.result.result.output, '测试 AI 输出')
+  assert.equal(completedTask.payload.task.reasoningSummary, '正在核对章节上下文。')
   assert.deepEqual(completedTask.payload.task.events.map((event) => event.type), ['lifecycle', 'context', 'skill', 'result'])
   assert.equal(completedTask.payload.task.events.some((event) => event.status === 'running'), false)
   const completedRequest = agentRequests.find((request) => request.message === '继续写作')
@@ -488,7 +499,7 @@ try {
   assert.equal(persistedThread.payload.thread.turns.length, 1)
   assert.equal(persistedThread.payload.thread.turns[0].source.sourceText, '雨落下来。')
   assert.equal(persistedThread.payload.thread.turns[0].task.status, 'completed')
-  assert.deepEqual(persistedThread.payload.thread.turns[0].plan.map((item) => item.status), ['completed', 'completed', 'completed'])
+  assert.deepEqual(persistedThread.payload.thread.turns[0].plan, [])
   assert.deepEqual(persistedThread.payload.thread.turns[0].items.map((item) => item.type), ['userMessage', 'reasoning', 'reasoning', 'dynamicToolCall', 'agentMessage'])
   assert.equal((await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/resume`)).payload.thread.id, agentThread.payload.thread.id)
   assert.equal((await call('GET', `/api/ai/threads?projectId=${projectId}&chapterId=${firstChapterId}`)).payload.thread.id, agentThread.payload.thread.id)

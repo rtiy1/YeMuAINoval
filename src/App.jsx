@@ -87,10 +87,12 @@ import {
   agentThreadMessages,
   formatAgentDuration,
   isEditorAgentEdit,
+  normalizeStructuredAgentQuestion,
   parseAgentChoicePrompt,
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from './editor-agent.mjs'
+import AgentMarkdown from './agent-markdown.jsx'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
@@ -146,7 +148,7 @@ const agentReasoningOptions = [
 const agentModeOptions = [
   { value: 'build', label: 'Build', description: '创作、续写并生成可审阅修改', badge: '默认' },
   { value: 'review', label: 'Review', description: '只审查问题，不直接改写正文' },
-  { value: 'plan', label: 'Plan', description: '分析结构并规划后续剧情' },
+  { value: 'plan', label: 'Plan', description: '只读分析、收敛决策并输出可执行计划' },
 ]
 
 const authQuotes = [
@@ -1763,7 +1765,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
           onClick={() => choose(option)}
         >
           <strong>{option.key}</strong>
-          <span>{option.label}</span>
+          <span className="agent-choice-copy"><span>{option.label}</span>{option.description && <small>{option.description}</small>}</span>
           {selected === option.key ? <Check size={13} /> : <ChevronRight size={13} />}
         </button>)}
       </div>
@@ -1800,7 +1802,8 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
   const exploredCount = Math.max(1, references.length + attachedFiles.length)
   const contextCount = Math.max(1, attachedFiles.length + (run.source?.selectedText ? 1 : 0))
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
-  const choicePrompt = parseAgentChoicePrompt(run.text)
+  const choicePrompt = normalizeStructuredAgentQuestion(result.question) || parseAgentChoicePrompt(run.text)
+  const isPlanMode = run.mode === 'plan' || run.source?.mode === 'plan'
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
@@ -1852,9 +1855,8 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
     </div>}
 
     <details className="agent-reasoning" open={run.status !== 'completed'}>
-      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>推理</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
+      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>执行过程</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
       <div className="agent-reasoning-body">
-        <p>展示的是可核验的执行摘要、工具状态和耗时，不包含模型隐藏思维链。</p>
         {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
           <div className="agent-plan-heading"><List size={13} /><strong>执行计划</strong><span>{plan.filter((item) => item.status === 'completed').length}/{plan.length}</span></div>
           <ol>{plan.map((item, index) => <li className={item.status} key={`${item.step}-${index}`}>
@@ -1869,17 +1871,20 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
             {agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
           </div>)}
         </div>
+        {run.reasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要</strong><AgentMarkdown value={run.reasoningSummary} streaming={run.status === 'running'} /></div></div>}
         {references.length > 0 && <div className="agent-tool-row done"><SearchCode size={13} /><span>探索 {references.length} 份 Skill 引用</span></div>}
         {checks.length > 0 && <div className="agent-tool-row done"><CheckSquare2 size={13} /><span>完成 {checks.length} 项确定性检查</span></div>}
         {run.response?.route && <code>{run.response.route}</code>}
       </div>
     </details>
 
-    {run.status !== 'running' && <div className={`agent-answer ${['failed', 'cancelled', 'needs_model', 'needs_input', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`}>
-      <div className="agent-answer-heading"><Bot size={15} /><strong>{ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
-      {choicePrompt
+    {(run.status !== 'running' || run.text) && <div className={`agent-answer ${run.status === 'running' ? 'streaming' : ''} ${['failed', 'cancelled', 'needs_model', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`} aria-live="polite">
+      <div className="agent-answer-heading"><Bot size={15} /><strong>{isPlanMode ? '计划' : ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
+      {run.status === 'running'
+        ? <AgentMarkdown value={run.text} streaming />
+        : choicePrompt
         ? <AgentChoicePrompt prompt={choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
-        : <p>{run.text}</p>}
+        : <AgentMarkdown value={run.text} />}
     </div>}
 
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
@@ -2974,6 +2979,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const source = {
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
+      mode: agentMode,
       sourceText: draft,
       selectionStart,
       selectionEnd,
@@ -2981,7 +2987,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       attachedFiles: attachedFiles.map(({ name, kind }) => ({ name, kind })),
     }
     const userMessage = { id: `${requestId}-user`, role: 'user', text: message }
-    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, editRequested, requestedSkill: effectiveSkill }
+    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, mode: agentMode, editRequested, requestedSkill: effectiveSkill }
     setAssistantMessages((current) => [...current.slice(-18), userMessage, runMessage])
     setAssistantInput('')
     setAssistantAttachments([])
@@ -3013,6 +3019,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           source_text: draft,
           selected_text: selectedText,
           attached_files: attachedFiles,
+          collaboration_mode: agentMode,
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
@@ -3071,12 +3078,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       response: response || item.response,
       text: terminal
         ? task.status === 'completed' ? agentResponseText(response) : task.error || task.statusMessage || '任务未完成。'
-        : item.text,
+        : typeof task.partialOutput === 'string' && task.partialOutput.length >= String(item.text || '').length
+          ? task.partialOutput
+          : item.text,
       items: turn?.items || item.items || [],
       events: turn ? agentTurnEvents(turn) : task.events || item.events || [],
       plan: turn?.plan || item.plan || [],
       progress: task.progress || 0,
       statusMessage: task.statusMessage || '',
+      reasoningSummary: task.reasoningSummary || item.reasoningSummary || '',
       durationMs: performance.now() - startedAt,
     } : item))
     return terminal
@@ -3088,6 +3098,21 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       await api.streamAgentTurn(threadId, turnId, {
         signal: controller.signal,
         onEvent: (event, payload) => {
+          if (['item/agentMessage/delta', 'item/plan/delta'].includes(event) && payload?.turnId === turnId && typeof payload.delta === 'string') {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+              ...item,
+              text: `${item.text || ''}${payload.delta}`,
+              statusMessage: '正在生成回复',
+            } : item))
+            return
+          }
+          if (event === 'item/reasoning/summaryDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+              ...item,
+              reasoningSummary: `${item.reasoningSummary || ''}${payload.delta}`,
+            } : item))
+            return
+          }
           if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
             setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
               ...item,

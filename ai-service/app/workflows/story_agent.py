@@ -10,6 +10,7 @@ from app.agent_instructions import compose_system_prompt
 from app.config import get_settings
 from app.schemas import StoryAgentRequest, StoryAgentResponse
 from app.skills.capability import SkillNotReadyError, get_story_skill_capability, route_story_intent
+from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window
 
 
@@ -112,6 +113,16 @@ def build_story_agent_graph():
 
 
 story_agent_graph = build_story_agent_graph()
+STREAMABLE_PROMPT_SKILLS = {
+    'story-import',
+    'story-long-analyze',
+    'story-long-scan',
+    'story-long-write',
+    'story-setup',
+    'story-short-analyze',
+    'story-short-scan',
+    'story-short-write',
+}
 
 
 def run_story_agent(request: StoryAgentRequest) -> StoryAgentResponse:
@@ -127,4 +138,45 @@ def run_story_agent(request: StoryAgentRequest) -> StoryAgentResponse:
         selected_skill=state['selected_skill'],
         route=state['route'],
         result=state['tool_result'],
+    )
+
+
+def run_story_agent_streaming(request: StoryAgentRequest, on_delta, on_reasoning_delta=None) -> StoryAgentResponse:
+    """按 Codex item delta 语义流式执行 prompt-only Skill；其他执行器安全回退。"""
+    selection = select_skill({
+        'message': request.message,
+        'requested_skill': request.skill,
+        'payload': request.payload,
+        'model_config_override': request.model_config_override,
+    })
+    selected_skill = selection['selected_skill']
+    route = selection['route']
+    if selected_skill == 'story':
+        target = route_story_intent(request.message)
+        preferred = request.payload.get('preferred_writing_skill')
+        if preferred in {'story-long-write', 'story-short-write'} and target in {'story', 'story-long-write', 'story-short-write'}:
+            target = preferred
+        if target in STREAMABLE_PROMPT_SKILLS:
+            selected_skill = target
+            route = f'story-router -> {target}'
+
+    if selected_skill not in STREAMABLE_PROMPT_SKILLS:
+        return run_story_agent(request)
+
+    from app.skills.prompt import execute_prompt_skill
+
+    result = execute_prompt_skill(SkillInvocation(
+        skill_name=selected_skill,
+        instruction=request.message,
+        payload=request.payload,
+        model_config_override=request.model_config_override,
+    ), on_delta=on_delta, on_reasoning_delta=on_reasoning_delta)
+    result_status = result.get('status') if isinstance(result, dict) else None
+    status = result_status if result_status in {'needs_model', 'failed', 'needs_input'} else 'completed'
+    return StoryAgentResponse(
+        run_id=str(uuid4()),
+        status=status,
+        selected_skill=selected_skill,
+        route=route,
+        result=result,
     )

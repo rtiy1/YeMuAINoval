@@ -41,6 +41,71 @@ function cleanAgentChoiceText(value) {
     .trim()
 }
 
+function markdownTableCells(line, preserveDelimiter = false) {
+  const value = String(line || '').trim()
+  if (!value.includes('|')) return null
+  const cells = value.split('|')
+  if (cells[0].trim() === '') cells.shift()
+  if (cells.at(-1)?.trim() === '') cells.pop()
+  return cells.map((cell) => preserveDelimiter ? cell.trim() : cleanAgentChoiceText(cell))
+}
+
+function parseMarkdownTableChoices(lines) {
+  for (let delimiterIndex = 1; delimiterIndex < lines.length; delimiterIndex += 1) {
+    const delimiterCells = markdownTableCells(lines[delimiterIndex], true)
+    if (!delimiterCells?.length || !delimiterCells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue
+    const headerCells = markdownTableCells(lines[delimiterIndex - 1])
+    if (!headerCells || headerCells.length < 2 || headerCells.length > 7) continue
+
+    let questionIndex = -1
+    for (let index = delimiterIndex - 2; index >= Math.max(0, delimiterIndex - 10); index -= 1) {
+      const copy = cleanAgentChoiceText(lines[index])
+      if (/[？?]/.test(copy) || /请选择|更想要|哪一种|哪种|还是/.test(copy)) {
+        questionIndex = index
+        break
+      }
+    }
+    const nearbyCopy = cleanAgentChoiceText(lines.slice(Math.max(0, delimiterIndex - 10), delimiterIndex - 1).join('\n'))
+    const hasChoiceCue = questionIndex >= 0 || /选择|方向|哪种|还是|更想|确认/.test(nearbyCopy)
+    if (!hasChoiceCue) continue
+
+    const hasRowLabelColumn = headerCells[0] === ''
+    const optionLabels = (hasRowLabelColumn ? headerCells.slice(1) : headerCells).filter(Boolean)
+    if (optionLabels.length < 2 || optionLabels.length > 6) continue
+
+    const detailRows = []
+    let tableEndIndex = delimiterIndex
+    for (let index = delimiterIndex + 1; index < lines.length; index += 1) {
+      const cells = markdownTableCells(lines[index])
+      if (!cells || cells.length < optionLabels.length) break
+      detailRows.push(cells)
+      tableEndIndex = index
+    }
+    const options = optionLabels.map((label, optionIndex) => {
+      const details = detailRows.slice(0, 4).map((cells) => {
+        const rowLabel = hasRowLabelColumn ? cells[0] : ''
+        const value = cells[optionIndex + (hasRowLabelColumn ? 1 : 0)]
+        return value ? `${rowLabel ? `${rowLabel}：` : ''}${value}` : ''
+      }).filter(Boolean)
+      const key = String.fromCharCode(65 + optionIndex)
+      return {
+        key,
+        label,
+        description: details.join(' · '),
+        reply: `${key}：${label}`,
+      }
+    })
+    const questionStart = questionIndex >= 0 ? questionIndex : delimiterIndex - 2
+    return {
+      intro: cleanAgentChoiceText(lines.slice(0, questionStart).join('\n')),
+      question: cleanAgentChoiceText(lines[questionStart]) || '请选择一个方向继续',
+      hint: cleanAgentChoiceText(lines.slice(tableEndIndex + 1).join('\n')),
+      options,
+    }
+  }
+  return null
+}
+
 export function parseAgentChoicePrompt(value) {
   const lines = String(value || '').replace(/\r\n?/g, '\n').split('\n')
   const optionPattern = /^\s*(?:[-*+]\s*)?(?:\*\*)?([A-H])(?:\*\*)?\s*(?:[.、:：]|[—–-]{1,2})\s*(.+?)\s*$/i
@@ -51,7 +116,9 @@ export function parseAgentChoicePrompt(value) {
     })
     .filter(Boolean)
 
-  if (matches.length < 2 || new Set(matches.map((item) => item.key)).size !== matches.length) return null
+  if (matches.length < 2 || new Set(matches.map((item) => item.key)).size !== matches.length) {
+    return parseMarkdownTableChoices(lines)
+  }
 
   const firstOptionIndex = matches[0].index
   const lastOptionIndex = matches.at(-1).index
@@ -73,8 +140,26 @@ export function parseAgentChoicePrompt(value) {
     intro,
     question,
     hint,
-    options: matches.map(({ key, label }) => ({ key, label, reply: `${key}：${label}` })),
+    options: matches.map(({ key, label }) => ({ key, label, description: '', reply: `${key}：${label}` })),
   }
+}
+
+export function normalizeStructuredAgentQuestion(value) {
+  const question = cleanAgentChoiceText(value?.question)
+  if (!question || !Array.isArray(value?.options) || value.options.length < 2) return null
+  const options = value.options.slice(0, 6).map((option, index) => {
+    const key = cleanAgentChoiceText(option?.key) || String.fromCharCode(65 + index)
+    const label = cleanAgentChoiceText(option?.label || option?.value)
+    const replyValue = cleanAgentChoiceText(option?.value || label)
+    return {
+      key,
+      label,
+      description: cleanAgentChoiceText(option?.description),
+      reply: `${key}：${replyValue}`,
+    }
+  }).filter((option) => option.label)
+  if (options.length < 2) return null
+  return { intro: '', question, hint: '', options }
 }
 
 export function resolveEditorAgentCommand(rawMessage, project) {
@@ -106,7 +191,7 @@ export function isEditorAgentEdit(message, skill) {
 
 export function agentTurnEvents(turn) {
   return (turn?.items || [])
-    .filter((item) => item.type !== 'userMessage' && item.type !== 'agentMessage')
+    .filter((item) => item.type !== 'userMessage' && item.type !== 'agentMessage' && item.type !== 'plan')
     .map((item) => ({
       id: item.id,
       type: item.type === 'dynamicToolCall' ? 'skill' : 'lifecycle',
@@ -159,6 +244,7 @@ export function agentThreadMessages(thread) {
       items: turn.items || [],
       events: agentTurnEvents(turn),
       progress: task.progress || 0,
+      reasoningSummary: task.reasoningSummary || '',
       durationMs: task.createdAt && task.updatedAt
         ? Math.max(0, new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime())
         : 0,
