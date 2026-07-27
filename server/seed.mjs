@@ -11,5 +11,7 @@ export const seed = {
   aiUsage: [],
   foreshadows: [],
   storyMemories: [],
+  skillMarketItems: [],
+  skillMarketInstalls: [],
   ideas: [],
 }

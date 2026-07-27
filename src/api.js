@@ -103,6 +103,28 @@ async function streamRequest(path, { signal, onEvent } = {}, retry = true) {
   })
 }
 
+async function downloadRequest(path, retry = true) {
+  const headers = {}
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include', headers })
+  if (response.status === 401 && retry && !path.startsWith('/auth/')) {
+    const session = await refreshSession()
+    if (session) return downloadRequest(path, false)
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(responseErrorMessage(payload, response.status))
+  }
+  const disposition = response.headers.get('content-disposition') || ''
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+  let fileName = plainName || 'skill-package'
+  if (encodedName) {
+    try { fileName = decodeURIComponent(encodedName) } catch { fileName = encodedName }
+  }
+  return { blob: await response.blob(), fileName }
+}
+
 export const api = {
   register: async (credentials) => {
     const payload = await request('/auth/register', { method: 'POST', body: JSON.stringify(credentials) }, false)
@@ -121,6 +143,19 @@ export const api = {
   },
   getMe: () => request('/auth/me'),
   getSkills: () => request('/ai/skills'),
+  getSkillMarket: (params = {}) => {
+    const query = new URLSearchParams()
+    if (params.q) query.set('q', params.q)
+    if (params.category) query.set('category', params.category)
+    if (params.mine) query.set('mine', 'true')
+    return request(`/skill-market${query.size ? `?${query}` : ''}`)
+  },
+  uploadMarketSkill: (input) => request('/skill-market', { method: 'POST', body: JSON.stringify(input) }),
+  reviewMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/review`, { method: 'POST' }),
+  installMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/install`, { method: 'POST' }),
+  uninstallMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/install`, { method: 'DELETE' }),
+  downloadMarketSkill: (skillId) => downloadRequest(`/skill-market/${encodeURIComponent(skillId)}/download`),
+  deleteMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}`, { method: 'DELETE' }),
   getAiUsage: () => request('/ai/usage'),
   runStoryAgent: (input, options = {}) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAgentThread: (projectId, chapterId) => request(`/ai/threads?projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(chapterId)}`),
@@ -139,7 +174,7 @@ export const api = {
   reviewChapter: (chapter) => request('/ai/reviews/chapter', { method: 'POST', body: JSON.stringify(chapter) }),
   getSettings: () => request('/settings'),
   updateSettings: (config) => request('/settings', { method: 'PUT', body: JSON.stringify(config) }),
-  getModels: () => request('/ai/models', { method: 'POST' }),
+  getModels: (config = {}) => request('/ai/models', { method: 'POST', body: JSON.stringify(config) }),
   getWritingAssistantSession: () => request('/writing-assistant/session'),
   sendWritingAssistantMessage: (message, options = {}) => request('/writing-assistant/messages', { method: 'POST', body: JSON.stringify({ message, ...options }) }),
   confirmWritingAssistant: (sessionId, proposal) => request('/writing-assistant/confirm', { method: 'POST', body: JSON.stringify({ sessionId, proposal }) }),

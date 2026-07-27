@@ -41,6 +41,7 @@ export function resolveEditorAgentCommand(rawMessage, project) {
     write: { skill: `story-${length}-write`, message: argument || '结合当前章节与作品设定续写，保持人物和叙事风格一致。' },
     analyze: { skill: `story-${length}-analyze`, message: argument || '分析当前章节的结构、人物动机和节奏。' },
     scan: { skill: `story-${length}-scan`, message: argument || '扫描当前作品的问题并给出可执行建议。' },
+    search: { skill: 'story-search', message: argument || '搜索与当前作品相关的写作资料。' },
   }
   if (command === 'skill' && rest.length > 0) {
     return { skill: rest[0], message: rest.slice(1).join(' ').trim() || `执行 ${rest[0]}` }

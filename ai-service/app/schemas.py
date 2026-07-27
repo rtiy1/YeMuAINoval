@@ -9,6 +9,7 @@ class ModelConfig(BaseModel):
     api_base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
+    reasoning_effort: Literal['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     context_window: int | None = None
@@ -109,6 +110,24 @@ class StoryMemoryExtractResponse(BaseModel):
     status: Literal['completed', 'needs_model', 'failed']
     message: str
     candidates: list[StoryMemoryCandidate] = Field(default_factory=list, max_length=40)
+
+
+class ContextCompactMessage(BaseModel):
+    role: Literal['user', 'assistant']
+    text: str = Field(min_length=1, max_length=12000)
+
+
+class ContextCompactRequest(BaseModel):
+    existing_summary: str = Field(default='', max_length=30000)
+    messages: list[ContextCompactMessage] = Field(min_length=1, max_length=80)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
+
+
+class ContextCompactResponse(BaseModel):
+    status: Literal['completed', 'needs_model', 'failed']
+    message: str
+    summary: str = Field(default='', max_length=30000)
+    compacted_messages: int = Field(default=0, ge=0)
 
 
 class EditProposalBlock(BaseModel):

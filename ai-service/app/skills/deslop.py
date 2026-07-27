@@ -11,6 +11,7 @@ from typing import Any
 from app.agent_instructions import DATA_BOUNDARY_POLICY, NIGHT_RAIN_IDENTITY, STORY_FACT_POLICY
 from app.config import get_settings
 from app.model_content import model_content_text
+from app.model_usage import model_token_usage
 from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
 from app.skills.reference_loader import format_references_block, load_referenced
@@ -107,6 +108,7 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
             'message': '模型执行失败，请检查模型地址、密钥和上下文长度。',
         }
 
+    output = model_content_text(response.content)
     return {
         'status': 'completed',
         'skill': 'story-deslop',
@@ -114,6 +116,7 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
         'references_loaded': references_loaded,
         'references_truncated': ref_result.truncated,
         'checks': checks,
-        'output': model_content_text(response.content),
+        'output': output,
         'original': content,
+        'usage': model_token_usage(response, system_prompt + ''.join(human_parts), output),
     }

@@ -1,6 +1,7 @@
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
 import { enrichStoryAgentPayload } from './writing-context.mjs'
+import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
 
 const aiServiceUrl = (process.env.AI_SERVICE_URL || 'http://127.0.0.1:8890').replace(/\/$/, '')
 const aiServiceToken = process.env.AI_SERVICE_TOKEN || 'local-ai-service-token'
@@ -35,6 +36,7 @@ function userModelConfig(user) {
     api_base_url: settings.apiBaseUrl || undefined,
     api_key: decryptSecret(settings.apiKeyEnc) || undefined,
     model: settings.model || undefined,
+    reasoning_effort: settings.reasoningEffort || undefined,
     temperature: settings.temperature ?? undefined,
     max_tokens: settings.maxTokens ?? undefined,
     context_window: settings.contextWindow ?? undefined,
@@ -45,7 +47,8 @@ function userModelConfig(user) {
 export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000)) {
   const db = await loadDb()
   const payload = enrichStoryAgentPayload(db, user.id, input.payload || {})
-  const body = { message: input.message, skill: input.skill || null, payload }
+  const prepared = await decorateInstalledMarketSkill(user.id, { ...input, payload })
+  const body = { message: prepared.message, skill: prepared.skill || null, payload: prepared.payload }
   const modelConfig = userModelConfig(user)
   if (modelConfig) body.model_config = modelConfig
   const response = await fetch(`${aiServiceUrl}/v1/agents/story`, {
@@ -56,6 +59,24 @@ export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout
   })
   const result = await response.json().catch(() => null)
   if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, 'Story Agent 处理失败')), { status: response.status >= 500 ? 502 : response.status })
+  return result
+}
+
+export async function invokeContextCompaction(user, input, signal = AbortSignal.timeout(120_000)) {
+  const body = {
+    existing_summary: typeof input?.existingSummary === 'string' ? input.existingSummary : '',
+    messages: Array.isArray(input?.messages) ? input.messages : [],
+  }
+  const modelConfig = userModelConfig(user)
+  if (modelConfig) body.model_config = modelConfig
+  const response = await fetch(`${aiServiceUrl}/v1/assistants/context/compact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
+    body: JSON.stringify(body),
+    signal,
+  })
+  const result = await response.json().catch(() => null)
+  if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, '上下文压缩失败')), { status: response.status >= 500 ? 502 : response.status })
   return result
 }
 

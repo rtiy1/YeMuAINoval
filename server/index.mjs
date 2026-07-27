@@ -27,6 +27,9 @@ import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCanc
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
 import { agentThreadPublic, agentTurnPublic, threadConversation } from './agent-thread.mjs'
+import { readSkillPackage, removeSkillPackage, validateSkillPackage, writeSkillPackage } from './skill-market-storage.mjs'
+import { reviewSkillPackage, skillReviewPublicConfig } from './skill-review.mjs'
+import { decorateInstalledMarketSkill, isMarketSkillPublished, marketSkillKey } from './market-skill-runtime.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -44,6 +47,7 @@ const CHAPTER_STATES = new Set(['draft', 'current', 'done'])
 const FORESHADOW_STATUSES = new Set(['planned', 'planted', 'resolved', 'abandoned'])
 const STORY_MEMORY_TYPES = new Set(['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit'])
 const STORY_MEMORY_STATUSES = new Set(['active', 'archived'])
+const SKILL_MARKET_CATEGORIES = new Set(['写作', '审稿', '人物', '世界观', '效率', '其他'])
 const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
 const GENRE_SUGGESTIONS = ['现代言情', '古代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世', '历史架空']
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
@@ -575,6 +579,10 @@ function dashboardStats(db, userId) {
   const totalWords = projects.reduce((total, project) => total + Number(String(project.words || '0').replaceAll(',', '')), 0)
   const chapterCount = projects.reduce((total, project) => total + (db.chapters[project.id] || []).length, 0)
   const log = db.writingLog.filter((entry) => entry.userId === userId)
+  const wordsByDate = new Map()
+  for (const entry of log) {
+    wordsByDate.set(entry.date, (wordsByDate.get(entry.date) || 0) + Number(entry.words || 0))
+  }
   const now = new Date()
   const daily = []
   for (let offset = 6; offset >= 0; offset -= 1) {
@@ -582,7 +590,7 @@ function dashboardStats(db, userId) {
     date.setHours(0, 0, 0, 0)
     date.setDate(date.getDate() - offset)
     const key = localDateKey(date)
-    daily.push({ date: key, words: log.filter((entry) => entry.date === key).reduce((total, entry) => total + Number(entry.words || 0), 0) })
+    daily.push({ date: key, words: wordsByDate.get(key) || 0 })
   }
   let previousWeekWords = 0
   for (let offset = 13; offset >= 7; offset -= 1) {
@@ -590,9 +598,47 @@ function dashboardStats(db, userId) {
     date.setHours(0, 0, 0, 0)
     date.setDate(date.getDate() - offset)
     const key = localDateKey(date)
-    previousWeekWords += log.filter((entry) => entry.date === key).reduce((total, entry) => total + Number(entry.words || 0), 0)
+    previousWeekWords += wordsByDate.get(key) || 0
   }
   const weekWords = daily.reduce((total, item) => total + item.words, 0)
+  const calendar = []
+  for (let offset = 364; offset >= 0; offset -= 1) {
+    const date = new Date(now)
+    date.setHours(0, 0, 0, 0)
+    date.setDate(date.getDate() - offset)
+    const key = localDateKey(date)
+    calendar.push({ date: key, words: wordsByDate.get(key) || 0 })
+  }
+  const activeDateKeys = [...wordsByDate.entries()]
+    .filter(([, words]) => words > 0)
+    .map(([date]) => date)
+    .sort()
+  const activeDateSet = new Set(activeDateKeys)
+  const todayKey = localDateKey(now)
+  const streakCursor = new Date(now)
+  streakCursor.setHours(0, 0, 0, 0)
+  if (!activeDateSet.has(todayKey)) streakCursor.setDate(streakCursor.getDate() - 1)
+  let currentStreak = 0
+  while (activeDateSet.has(localDateKey(streakCursor))) {
+    currentStreak += 1
+    streakCursor.setDate(streakCursor.getDate() - 1)
+  }
+  let longestStreak = 0
+  let runningStreak = 0
+  let previousActiveDate = null
+  for (const key of activeDateKeys) {
+    const date = new Date(`${key}T00:00:00`)
+    const followsPrevious = previousActiveDate && Math.round((date.getTime() - previousActiveDate.getTime()) / 86_400_000) === 1
+    runningStreak = followsPrevious ? runningStreak + 1 : 1
+    longestStreak = Math.max(longestStreak, runningStreak)
+    previousActiveDate = date
+  }
+  const monthKey = todayKey.slice(0, 7)
+  const monthWords = [...wordsByDate.entries()]
+    .filter(([date]) => date.startsWith(monthKey))
+    .reduce((total, [, words]) => total + words, 0)
+  const totalWritingDays = activeDateKeys.length
+  const averageWordsPerWritingDay = totalWritingDays ? Math.round([...wordsByDate.values()].reduce((total, words) => total + words, 0) / totalWritingDays) : 0
   return {
     projectCount: projects.length,
     completedProjects: projects.filter((project) => project.status === '已完结').length,
@@ -603,7 +649,56 @@ function dashboardStats(db, userId) {
     previousWeekWords,
     growthPercent: previousWeekWords > 0 ? Math.round(((weekWords - previousWeekWords) / previousWeekWords) * 100) : null,
     activeDays: daily.filter((item) => item.words > 0).length,
+    totalWritingDays,
+    currentStreak,
+    longestStreak,
+    monthWords,
+    averageWordsPerWritingDay,
+    maxDailyWords: Math.max(0, ...wordsByDate.values()),
+    firstWritingDate: activeDateKeys[0] || null,
     daily,
+    calendar,
+  }
+}
+
+function publicSkillMarketItem(item, userId, author = null, installs = []) {
+  const isOwner = item.userId === userId
+  const installed = installs.some((entry) => entry.userId === userId && entry.skillId === item.id)
+  const review = item.review
+    ? {
+        status: item.review.verdict === 'allow' ? 'approved' : 'rejected',
+        reviewer: item.review.reviewer,
+        riskLevel: item.review.riskLevel,
+        summary: item.review.summary,
+        reviewedAt: item.review.reviewedAt,
+        ...(isOwner ? { findings: item.review.findings || [] } : {}),
+      }
+    : { status: 'legacy', reviewer: 'none', riskLevel: 'unknown', summary: '该 Skill 发布于安全审查功能启用之前。', reviewedAt: null }
+  return {
+    id: item.id,
+    name: item.name,
+    description: item.description,
+    version: item.version,
+    category: item.category,
+    tags: item.tags || [],
+    fileName: item.fileName,
+    fileType: item.fileType,
+    fileSize: item.fileSize,
+    sha256: item.sha256,
+    downloads: Math.max(0, Number(item.downloads) || 0),
+    author: {
+      id: item.userId,
+      name: author?.name || item.authorName || '匿名作者',
+    },
+    isOwner,
+    installed,
+    installCount: installs.filter((entry) => entry.skillId === item.id).length,
+    status: item.status,
+    isListed: isMarketSkillPublished(item),
+    skillKey: marketSkillKey(item.id),
+    review,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   }
 }
 
@@ -650,7 +745,13 @@ async function authenticate(req, _res, next) {
 app.get('/api/health', async (_req, res, next) => {
   try {
     const db = await loadDb()
-    res.json({ ok: true, users: db.users.length, projects: db.projects.length, storage: storeInfo() })
+    res.json({
+      ok: true,
+      users: db.users.length,
+      projects: db.projects.length,
+      storage: storeInfo(),
+      skillReview: skillReviewPublicConfig(),
+    })
   } catch (error) {
     next(error)
   }
@@ -785,6 +886,12 @@ function sanitizeSettings(input, existing) {
   if (input.model !== undefined) {
     settings.model = typeof input.model === 'string' ? input.model.trim().slice(0, 80) : ''
   }
+  if (input.reasoningEffort !== undefined) {
+    const effort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim().toLowerCase() : ''
+    const allowed = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    if (allowed.has(effort)) settings.reasoningEffort = effort
+    else delete settings.reasoningEffort
+  }
   if (input.temperature !== undefined) {
     const temp = Number(input.temperature)
     if (Number.isFinite(temp)) settings.temperature = Math.min(2, Math.max(0, temp))
@@ -804,12 +911,13 @@ function sanitizeSettings(input, existing) {
 }
 
 function publicSettings(settings) {
-  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', temperature: null, maxTokens: null, contextWindow: null }
+  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', reasoningEffort: '', temperature: null, maxTokens: null, contextWindow: null }
   return {
     provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
     apiBaseUrl: settings.apiBaseUrl || '',
     apiKeyMask: maskKey(decryptSecret(settings.apiKeyEnc)),
     model: settings.model || '',
+    reasoningEffort: settings.reasoningEffort || '',
     temperature: settings.temperature ?? null,
     maxTokens: settings.maxTokens ?? null,
     contextWindow: settings.contextWindow ?? null,
@@ -825,6 +933,7 @@ async function getUserModelConfig(user) {
     api_base_url: s.apiBaseUrl || undefined,
     api_key: apiKey || undefined,
     model: s.model || undefined,
+    reasoning_effort: s.reasoningEffort || undefined,
     temperature: s.temperature ?? undefined,
     max_tokens: s.maxTokens ?? undefined,
     context_window: s.contextWindow ?? undefined,
@@ -977,7 +1086,12 @@ async function startWritingTask(user, body, forcedThreadId = null) {
     if (!projectId || thread.projectId !== projectId || String(thread.chapterId) !== String(chapterId)) {
       throw Object.assign(new Error('Agent 会话与当前作品章节不匹配'), { status: 409 })
     }
-    input.payload = { ...input.payload, conversation: threadConversation(thread, db.writingTasks) }
+    input.payload = {
+      ...input.payload,
+      conversation: threadConversation(thread, db.writingTasks),
+      conversation_summary: thread.contextSummary || '',
+      compacted_turn_count: Math.max(0, Number(thread.compactedTurnCount) || 0),
+    }
   } else if (projectId) {
     const db = await loadDb()
     const project = findOr404(db, projectId, user.id)
@@ -1039,12 +1153,17 @@ async function interruptWritingTask(userId, taskId) {
 
 async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
   const modelConfig = await getUserModelConfig(user)
-  const body = {
+  const prepared = await decorateInstalledMarketSkill(user.id, {
     message,
+    skill,
+    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
+  })
+  const body = {
+    message: prepared.message,
     messages: (session.messages || []).map(({ role, text }) => ({ role, text })),
     requirements: session.requirements || emptyWritingRequirements(),
-    skill: skill || undefined,
-    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
+    skill: prepared.skill || undefined,
+    payload: prepared.payload,
   }
   if (webSearch) body.web_search = true
   if (modelConfig) body.model_config = modelConfig
@@ -1102,30 +1221,43 @@ app.put('/api/settings', async (req, res, next) => {
 app.post('/api/ai/models', async (req, res, next) => {
   try {
     const s = req.user.settings || {}
-    const apiKey = decryptSecret(s.apiKeyEnc)
+    const provider = req.body?.provider === 'anthropic'
+      ? 'anthropic'
+      : req.body?.provider === 'openai'
+        ? 'openai'
+        : s.provider === 'anthropic' ? 'anthropic' : 'openai'
+    const apiKey = String(req.body?.apiKey || '').trim() || decryptSecret(s.apiKeyEnc)
     if (!apiKey) throw Object.assign(new Error('请先在设置中配置 API Key'), { status: 400 })
-    const provider = s.provider === 'anthropic' ? 'anthropic' : 'openai'
+    const requestedBaseUrl = req.body?.apiBaseUrl !== undefined ? cleanModelBaseUrl(req.body.apiBaseUrl) : s.apiBaseUrl
     let models = []
     if (provider === 'anthropic') {
-      const baseUrl = (s.apiBaseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '')
+      const baseUrl = (requestedBaseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '')
       const response = await fetch(`${baseUrl}/models`, {
         headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
         signal: AbortSignal.timeout(15_000),
       })
-      if (!response.ok) throw Object.assign(new Error(`拉取模型列表失败（${response.status}）`), { status: 502 })
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null)
+        const message = detail?.error?.message || detail?.message || `上游返回 ${response.status}`
+        throw Object.assign(new Error(`连接失败：${message}`), { status: 502 })
+      }
       const data = await response.json().catch(() => null)
       models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     } else {
-      const baseUrl = (s.apiBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+      const baseUrl = (requestedBaseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
       const response = await fetch(`${baseUrl}/models`, {
         headers: { authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(15_000),
       })
-      if (!response.ok) throw Object.assign(new Error(`拉取模型列表失败（${response.status}）`), { status: 502 })
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null)
+        const message = detail?.error?.message || detail?.message || `上游返回 ${response.status}`
+        throw Object.assign(new Error(`连接失败：${message}`), { status: 502 })
+      }
       const data = await response.json().catch(() => null)
       models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     }
-    res.json({ models })
+    res.json({ models, connected: true })
   } catch (error) {
     if (isNetworkError(error)) {
       next(Object.assign(new Error('模型服务暂不可用'), { status: 503 }))
@@ -1143,12 +1275,248 @@ app.get('/api/ai/skills', async (req, res, next) => {
     })
     const payload = await response.json().catch(() => null)
     if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(payload?.detail, 'Skill 目录读取失败')), { status: response.status >= 500 ? 502 : response.status })
-    res.json(payload)
+    const db = await loadDb()
+    const installedIds = new Set((db.skillMarketInstalls || [])
+      .filter((entry) => entry.userId === req.user.id)
+      .map((entry) => entry.skillId))
+    const communitySkills = (db.skillMarketItems || [])
+      .filter((item) => installedIds.has(item.id) && isMarketSkillPublished(item))
+      .map((item) => ({
+        name: marketSkillKey(item.id),
+        displayName: item.name,
+        version: item.version,
+        description: item.description,
+        status: req.user.settings?.apiKeyEnc || sharedModelAccessAllowed ? 'ready' : 'needs_model',
+        executor: 'community-prompt-only-v1',
+        source: 'market',
+        marketSkillId: item.id,
+      }))
+    const builtInSkills = Array.isArray(payload?.skills)
+      ? payload.skills.filter((skill) => skill.name !== 'story-community')
+      : []
+    res.json({ ...(payload || {}), skills: [...builtInSkills, ...communitySkills] })
   } catch (error) {
     if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
       return
     }
+    next(error)
+  }
+})
+
+app.get('/api/skill-market', async (req, res, next) => {
+  try {
+    const query = String(req.query.q || '').trim().toLowerCase().slice(0, 120)
+    const category = String(req.query.category || '').trim()
+    const mineOnly = req.query.mine === 'true'
+    const db = await loadDb()
+    const users = new Map(db.users.map((user) => [user.id, user]))
+    const items = (db.skillMarketItems || [])
+      .filter((item) => isMarketSkillPublished(item) || item.userId === req.user.id)
+      .filter((item) => !mineOnly || item.userId === req.user.id)
+      .filter((item) => !category || item.category === category)
+      .filter((item) => !query || [item.name, item.description, item.category, ...(item.tags || []), users.get(item.userId)?.name]
+        .filter(Boolean).join(' ').toLowerCase().includes(query))
+      .sort((left, right) => Number(right.downloads || 0) - Number(left.downloads || 0)
+        || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+      .map((item) => publicSkillMarketItem(item, req.user.id, users.get(item.userId), db.skillMarketInstalls || []))
+    res.json({ items, categories: [...SKILL_MARKET_CATEGORIES], review: skillReviewPublicConfig() })
+  } catch (error) {
+    next(error)
+  }
+})
+
+const skillUploadRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Skill 上传和审查过于频繁，请稍后再试' },
+})
+
+app.post('/api/skill-market', skillUploadRateLimit, async (req, res, next) => {
+  let storageName = ''
+  try {
+    const name = cleanText(req.body?.name, 'Skill 名称', 80)
+    const description = cleanText(req.body?.description, 'Skill 简介', 500)
+    const version = cleanOptionalText(req.body?.version, '版本号', 32) || '1.0.0'
+    const category = cleanEnum(req.body?.category || '其他', '分类', SKILL_MARKET_CATEGORIES)
+    const tags = cleanTags(req.body?.tags)
+    const rawFileName = path.basename(cleanText(req.body?.fileName, '文件名', 180))
+    const fileName = rawFileName.replace(/[^\p{L}\p{N}._()（）\-\s]/gu, '_')
+    if (!fileName || fileName === '.' || fileName === '..') throw Object.assign(new Error('文件名无效'), { status: 400 })
+    const existing = await loadDb()
+    const duplicate = (existing.skillMarketItems || []).find((entry) => entry.userId === req.user.id
+      && entry.name.toLowerCase() === name.toLowerCase()
+      && entry.version === version)
+    if (duplicate) throw Object.assign(new Error('同名同版本 Skill 已经发布'), { status: 409 })
+    const validated = validateSkillPackage({ fileName, contentBase64: req.body?.contentBase64 })
+    const review = await reviewSkillPackage({
+      name,
+      description,
+      version,
+      category,
+      tags,
+      fileName,
+      extension: validated.extension,
+      buffer: validated.buffer,
+      sha256: validated.sha256,
+    })
+    if (review.verdict !== 'allow') {
+      const primaryFinding = review.findings?.[0]?.title
+      throw Object.assign(new Error(primaryFinding
+        ? `Skill 未通过安全审查：${primaryFinding}`
+        : `Skill 未通过安全审查：${review.summary}`), { status: 422 })
+    }
+    const id = crypto.randomUUID()
+    storageName = await writeSkillPackage(id, validated.extension, validated.buffer)
+    const timestamp = new Date().toISOString()
+    const item = {
+      id,
+      userId: req.user.id,
+      authorName: req.user.name,
+      name,
+      description,
+      version,
+      category,
+      tags,
+      fileName,
+      fileType: validated.contentType,
+      fileSize: validated.size,
+      sha256: validated.sha256,
+      storageName,
+      downloads: 0,
+      status: review.reviewer === 'model' ? 'published' : 'pending_review',
+      review,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    await updateDb((db) => {
+      db.skillMarketItems ||= []
+      const duplicate = db.skillMarketItems.find((entry) => entry.userId === req.user.id
+        && entry.name.toLowerCase() === name.toLowerCase()
+        && entry.version === version)
+      if (duplicate) throw Object.assign(new Error('同名同版本 Skill 已经发布'), { status: 409 })
+      db.skillMarketItems.unshift(item)
+    })
+    res.status(201).json({ item: publicSkillMarketItem(item, req.user.id, req.user, []) })
+  } catch (error) {
+    if (storageName) await removeSkillPackage(storageName).catch(() => undefined)
+    next(error)
+  }
+})
+
+app.get('/api/skill-market/:skillId/download', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId && isMarketSkillPublished(entry))
+    if (!item) throw Object.assign(new Error('Skill 不存在或已下架'), { status: 404 })
+    const buffer = await readSkillPackage(item.storageName)
+    await updateDb((current) => {
+      const target = (current.skillMarketItems || []).find((entry) => entry.id === item.id && isMarketSkillPublished(entry))
+      if (target) {
+        target.downloads = Math.max(0, Number(target.downloads) || 0) + 1
+        target.updatedAt = new Date().toISOString()
+      }
+    })
+    res.set({
+      'Content-Type': item.fileType || 'application/octet-stream',
+      'Content-Length': String(buffer.length),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    res.attachment(item.fileName)
+    res.send(buffer)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/skill-market/:skillId/review', skillUploadRateLimit, async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
+    if (!item) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
+    if (item.userId !== req.user.id) throw Object.assign(new Error('只能重新审查自己上传的 Skill'), { status: 403 })
+    const buffer = await readSkillPackage(item.storageName)
+    const validated = validateSkillPackage({ fileName: item.fileName, contentBase64: buffer.toString('base64') })
+    if (validated.sha256 !== item.sha256) throw Object.assign(new Error('Skill 文件完整性校验失败'), { status: 409 })
+    const review = await reviewSkillPackage({
+      name: item.name,
+      description: item.description,
+      version: item.version,
+      category: item.category,
+      tags: item.tags,
+      fileName: item.fileName,
+      extension: validated.extension,
+      buffer: validated.buffer,
+      sha256: validated.sha256,
+    })
+    const updated = await updateDb((current) => {
+      const target = (current.skillMarketItems || []).find((entry) => entry.id === item.id && entry.userId === req.user.id)
+      if (!target) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
+      target.review = review
+      target.status = review.verdict === 'allow' && review.reviewer === 'model' ? 'published' : 'pending_review'
+      target.updatedAt = new Date().toISOString()
+      return target
+    })
+    if (!isMarketSkillPublished(updated)) {
+      throw Object.assign(new Error(review.verdict === 'reject'
+        ? `Skill 未通过安全审查：${review.findings?.[0]?.title || review.summary}`
+        : '专用模型审查尚未完成，Skill 仍处于待审查状态'), { status: 422 })
+    }
+    const latest = await loadDb()
+    res.json({ item: publicSkillMarketItem(updated, req.user.id, req.user, latest.skillMarketInstalls || []) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/skill-market/:skillId/install', async (req, res, next) => {
+  try {
+    const installedAt = new Date().toISOString()
+    const item = await updateDb((db) => {
+      const target = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
+      if (!isMarketSkillPublished(target)) throw Object.assign(new Error('该 Skill 尚未通过审查并上架'), { status: 404 })
+      db.skillMarketInstalls ||= []
+      const exists = db.skillMarketInstalls.some((entry) => entry.userId === req.user.id && entry.skillId === target.id)
+      if (!exists) db.skillMarketInstalls.push({ userId: req.user.id, skillId: target.id, installedAt })
+      return target
+    })
+    const db = await loadDb()
+    const author = db.users.find((user) => user.id === item.userId)
+    res.json({ item: publicSkillMarketItem(item, req.user.id, author, db.skillMarketInstalls || []) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/skill-market/:skillId/install', async (req, res, next) => {
+  try {
+    await updateDb((db) => {
+      db.skillMarketInstalls ||= []
+      db.skillMarketInstalls = db.skillMarketInstalls
+        .filter((entry) => !(entry.userId === req.user.id && entry.skillId === req.params.skillId))
+    })
+    res.status(204).end()
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/skill-market/:skillId', async (req, res, next) => {
+  try {
+    const removed = await updateDb((db) => {
+      const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
+      if (!item) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
+      if (item.userId !== req.user.id) throw Object.assign(new Error('只能下架自己上传的 Skill'), { status: 403 })
+      db.skillMarketItems = db.skillMarketItems.filter((entry) => entry.id !== item.id)
+      db.skillMarketInstalls = (db.skillMarketInstalls || []).filter((entry) => entry.skillId !== item.id)
+      return item
+    })
+    await removeSkillPackage(removed.storageName)
+    res.status(204).end()
+  } catch (error) {
     next(error)
   }
 })

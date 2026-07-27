@@ -32,9 +32,9 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertTrue(payload['ok'])
         self.assertFalse(payload['llm_configured'])
-        self.assertEqual(payload['skills_installed'], 14)
+        self.assertEqual(payload['skills_installed'], 15)
         self.assertEqual(payload['skills_ready'], 3)
-        self.assertEqual(payload['skills_needing_model'], 9)
+        self.assertEqual(payload['skills_needing_model'], 10)
 
     async def test_registry_uses_vendored_project_skills(self):
         self.assertEqual(get_skill_registry().root, service_root.parent / 'skills')
@@ -58,6 +58,8 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(skills['story-cover']['status'], 'registered')
         self.assertEqual(skills['story-search']['status'], 'ready')
         self.assertEqual(skills['story-search']['executor'], 'search-v1')
+        self.assertEqual(skills['story-community']['status'], 'needs_model')
+        self.assertEqual(skills['story-community']['executor'], 'community-prompt-only-v1')
 
     async def test_agent_invokes_story_review_capability(self):
         response = await self.client.post(
@@ -93,6 +95,32 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         # story-long-write SKILL.md 引用了大量 references，应非空
         self.assertIsInstance(payload['result']['references_loaded'], list)
         self.assertGreater(len(payload['result']['references_loaded']), 0)
+
+    async def test_reviewed_community_skill_uses_prompt_only_host(self):
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={
+                'message': '检查这段文字',
+                'skill': 'story-community',
+                'payload': {
+                    'community_skill': {
+                        'key': 'market-0123456789abcdef0123456789abcdef',
+                        'name': '社区检查器',
+                        'version': '1.0.0',
+                        'sha256': 'a' * 64,
+                        'instructions': '# 只检查错别字',
+                        'references': [],
+                    },
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'needs_model')
+        self.assertEqual(payload['selected_skill'], 'market-0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['route'], 'community-import -> market-0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['result']['execution_scope'], 'community-prompt-only')
 
     async def test_deslop_reports_missing_model_with_checks(self):
         response = await self.client.post(

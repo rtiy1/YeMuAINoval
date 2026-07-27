@@ -7,6 +7,7 @@ import {
   agentTurnPublic,
   normalizeAgentThreads,
   taskResultText,
+  threadCompactionPlan,
   threadConversation,
 } from './agent-thread.mjs'
 
@@ -52,6 +53,41 @@ test('failed turns do not displace older completed context', () => {
     { role: 'user', text: '保留这一问' },
     { role: 'assistant', text: '保留这一答' },
   ])
+})
+
+test('thread conversation excludes turns already represented by the rolling summary', () => {
+  const thread = {
+    compactedTurnIds: ['turn-1'],
+    turns: [
+      { id: 'turn-1', taskId: 'task-1', message: '旧问题' },
+      { id: 'turn-2', taskId: 'task-2', message: '新问题' },
+    ],
+  }
+  const tasks = [
+    { id: 'task-1', status: 'completed', result: { result: { output: '旧回答' } } },
+    { id: 'task-2', status: 'completed', result: { result: { output: '新回答' } } },
+  ]
+  assert.deepEqual(threadConversation(thread, tasks), [
+    { role: 'user', text: '新问题' },
+    { role: 'assistant', text: '新回答' },
+  ])
+})
+
+test('context compaction keeps six recent turns raw and selects older turns', () => {
+  const turns = Array.from({ length: 10 }, (_, index) => ({
+    id: `turn-${index + 1}`,
+    taskId: `task-${index + 1}`,
+    message: `第 ${index + 1} 次要求 ${'继续推进剧情'.repeat(120)}`,
+  }))
+  const tasks = turns.map((turn, index) => ({
+    id: turn.taskId,
+    status: 'completed',
+    result: { result: { output: `第 ${index + 1} 次结果 ${'剧情事实'.repeat(160)}` } },
+  }))
+  const plan = threadCompactionPlan({ turns }, tasks, { contextWindow: 4000, maxTokens: 800 })
+  assert.ok(plan)
+  assert.deepEqual(plan.turnIds, ['turn-1', 'turn-2', 'turn-3', 'turn-4'])
+  assert.equal(plan.messages.length, 8)
 })
 
 test('turn plan advances with context, skill and result events', () => {

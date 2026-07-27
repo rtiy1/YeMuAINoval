@@ -87,6 +87,9 @@ def invoke_skill_tool(state: AgentState) -> dict[str, Any]:
         if state['selected_skill'] == 'story' and isinstance(routed_skill, str):
             update['selected_skill'] = routed_skill
             update['route'] = f"story-router -> {routed_skill}"
+        elif state['selected_skill'] == 'story-community' and isinstance(routed_skill, str) and routed_skill.startswith('market-'):
+            update['selected_skill'] = routed_skill
+            update['route'] = f'community-import -> {routed_skill}'
         return update
     except SkillNotReadyError as error:
         return {

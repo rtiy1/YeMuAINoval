@@ -12,6 +12,10 @@ export function normalizeAgentThreads(db) {
       ...thread,
       chapterId: thread.chapterId == null ? null : String(thread.chapterId),
       status: thread.status === 'archived' ? 'archived' : 'active',
+      contextSummary: text(thread.contextSummary),
+      compactedTurnIds: Array.isArray(thread.compactedTurnIds) ? [...new Set(thread.compactedTurnIds.filter(Boolean).map(String))].slice(-40) : [],
+      compactedTurnCount: Math.max(0, Number(thread.compactedTurnCount) || 0),
+      contextSummaryUpdatedAt: thread.contextSummaryUpdatedAt || null,
       turns: Array.isArray(thread.turns)
         ? thread.turns.filter((turn) => turn && turn.id && turn.taskId && typeof turn.message === 'string').slice(-40)
         : [],
@@ -45,17 +49,56 @@ export function taskResultText(task) {
 
 export function threadConversation(thread, tasks) {
   const taskMap = new Map((tasks || []).map((task) => [task.id, task]))
+  const compactedTurnIds = new Set(thread?.compactedTurnIds || [])
   const messages = []
   const completedTurns = (thread?.turns || [])
-    .filter((turn) => taskMap.get(turn.taskId)?.status === 'completed')
-    .slice(-8)
+    .filter((turn) => taskMap.get(turn.taskId)?.status === 'completed' && !compactedTurnIds.has(turn.id))
+    .slice(-12)
   for (const turn of completedTurns) {
     const task = taskMap.get(turn.taskId)
-    messages.push({ role: 'user', text: turn.message.slice(0, 4000) })
+    messages.push({ role: 'user', text: turn.message.slice(0, 6000) })
     const response = taskResultText(task)
-    if (response) messages.push({ role: 'assistant', text: response.slice(0, 4000) })
+    if (response) messages.push({ role: 'assistant', text: response.slice(0, 12000) })
   }
-  return messages.slice(-16)
+  return messages.slice(-24)
+}
+
+export function threadCompactionPlan(thread, tasks, { contextWindow = 100000, maxTokens = 4096 } = {}) {
+  const taskMap = new Map((tasks || []).map((task) => [task.id, task]))
+  const compactedTurnIds = new Set(thread?.compactedTurnIds || [])
+  const completedTurns = (thread?.turns || [])
+    .filter((turn) => taskMap.get(turn.taskId)?.status === 'completed' && !compactedTurnIds.has(turn.id))
+  if (completedTurns.length <= 8) return null
+
+  const messages = []
+  for (const turn of completedTurns) {
+    const task = taskMap.get(turn.taskId)
+    messages.push({ role: 'user', text: turn.message.slice(0, 6000) })
+    const response = taskResultText(task)
+    if (response) messages.push({ role: 'assistant', text: response.slice(0, 12000) })
+  }
+  const safeWindow = Math.max(500, Number(contextWindow) || 100000)
+  const reservedOutput = Math.min(Math.max(0, Number(maxTokens) || 4096), safeWindow * 0.4)
+  const transcriptBudget = Math.max(500, Math.floor((safeWindow - reservedOutput) * 0.3))
+  const estimatedTokens = Math.ceil((text(thread?.contextSummary).length + JSON.stringify(messages).length) / 2.2)
+  if (estimatedTokens < transcriptBudget) return null
+
+  const turnsToCompact = completedTurns.slice(0, -6)
+  if (turnsToCompact.length < 2) return null
+  const turnIds = turnsToCompact.map((turn) => turn.id)
+  const messagesToCompact = []
+  for (const turn of turnsToCompact) {
+    const task = taskMap.get(turn.taskId)
+    messagesToCompact.push({ role: 'user', text: turn.message.slice(0, 6000) })
+    const response = taskResultText(task)
+    if (response) messagesToCompact.push({ role: 'assistant', text: response.slice(0, 12000) })
+  }
+  return {
+    turnIds,
+    messages: messagesToCompact,
+    estimatedTokens,
+    transcriptBudget,
+  }
 }
 
 export function taskSource(task) {
@@ -67,6 +110,9 @@ export function taskSource(task) {
     selectedText: typeof payload.selected_text === 'string' ? payload.selected_text : typeof payload.selectedText === 'string' ? payload.selectedText : '',
     selectionStart: Number(payload.selection_start ?? payload.selectionStart) || 0,
     selectionEnd: Number(payload.selection_end ?? payload.selectionEnd) || 0,
+    attachedFiles: Array.isArray(payload.attached_files)
+      ? payload.attached_files.slice(0, 12).map((item) => ({ name: text(item?.name), kind: text(item?.kind) })).filter((item) => item.name)
+      : [],
   }
 }
 
@@ -187,6 +233,9 @@ export function agentThreadPublic(thread, tasks, taskPublic) {
     projectId: thread.projectId,
     chapterId: thread.chapterId,
     status: thread.status,
+    contextSummary: thread.contextSummary || '',
+    compactedTurnCount: Math.max(0, Number(thread.compactedTurnCount) || 0),
+    contextSummaryUpdatedAt: thread.contextSummaryUpdatedAt || null,
     turns,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,

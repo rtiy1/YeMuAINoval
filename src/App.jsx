@@ -4,6 +4,7 @@ import {
   ArrowUpDown,
   ArrowUpRight,
   AlignLeft,
+  BarChart3,
   BookOpen,
   BookMarked,
   BookOpenCheck,
@@ -12,17 +13,20 @@ import {
   BrainCircuit,
   Check,
   CheckSquare2,
+  CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
   Copy,
   Clock3,
   Code2,
+  Command,
   Download,
   FileText,
   FolderOpen,
+  Flame,
   Globe,
-  Grid2X2,
   Highlighter,
   History,
   Info,
@@ -42,6 +46,8 @@ import {
   MoreHorizontal,
   PanelLeft,
   PanelRight,
+  Paperclip,
+  Package,
   PenLine,
   Pin,
   Plus,
@@ -50,14 +56,19 @@ import {
   SearchCode,
   Send,
   Settings2,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Split,
+  Store,
   Target,
   Tags,
+  Trophy,
   Trash2,
   Type,
   Undo2,
   UserRound,
+  UploadCloud,
   UsersRound,
   Users,
   Volume2,
@@ -68,6 +79,7 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
+import { NOVEL_COMMANDS, parseSlashCommand, resolveSelection } from '../terminal/commands.mjs'
 import {
   agentEventDuration,
   agentResponseText,
@@ -88,14 +100,34 @@ const primaryNavItems = [
   { id: 'editor', label: '工作台', icon: PenLine },
   { id: 'works', label: '我的作品', icon: BookOpen },
   { id: 'library', label: '素材库', icon: Library },
+  { id: 'skill-market', label: '技能市场', icon: Store },
+  { id: 'stats', label: '写作统计', icon: BarChart3 },
+  { id: 'profile', label: '个人中心', icon: UserRound },
 ]
 
-const moreNavItems = [
-  { id: 'toolkit', label: '高级工具', icon: Grid2X2 },
-  { id: 'deconstruct', label: '拆文台', icon: BookOpenCheck },
+const navItems = primaryNavItems
+
+const editorAgentCommands = NOVEL_COMMANDS
+  .map(([usage, description]) => {
+    const name = usage.match(/^\/([a-z]+)/)?.[1] || ''
+    return { name, usage, description, insertText: `/${name} `, kind: 'command' }
+  })
+
+const agentReasoningOptions = [
+  { value: '', label: '自动', description: '由模型根据当前任务自行决定', badge: '推荐' },
+  { value: 'minimal', label: '最低', description: '几乎不推理，优先获得最快响应' },
+  { value: 'low', label: '低', description: '适合改写、摘要等轻量任务' },
+  { value: 'medium', label: '中', description: '平衡响应速度与创作质量' },
+  { value: 'high', label: '高', description: '适合结构、人物与复杂修改' },
+  { value: 'xhigh', label: '极高', description: '更深入地推演长篇上下文' },
+  { value: 'max', label: 'MAX', description: '使用模型支持的最高推理强度', badge: '最深' },
 ]
 
-const navItems = [...primaryNavItems, ...moreNavItems]
+const agentModeOptions = [
+  { value: 'build', label: 'Build', description: '创作、续写并生成可审阅修改', badge: '默认' },
+  { value: 'review', label: 'Review', description: '只审查问题，不直接改写正文' },
+  { value: 'plan', label: 'Plan', description: '分析结构并规划后续剧情' },
+]
 
 const authQuotes = [
   { chapter: '第 8 章', title: '风从旧码头来', text: '“她终于明白，潮水从来不是为了带走什么。它只是一次次回来，提醒岸边的人，时间仍在往前。”' },
@@ -124,6 +156,30 @@ const contentSkills = new Set(['story-deslop', 'story-review', 'story-long-analy
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('zh-CN')
+}
+
+function compactTokenCount(value) {
+  const number = Math.max(0, Number(value || 0))
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(number >= 10_000_000 ? 0 : 1)}M`
+  if (number >= 1_000) return `${(number / 1_000).toFixed(number >= 100_000 ? 0 : 1)}K`
+  return number.toLocaleString('zh-CN')
+}
+
+function agentRunTokenUsage(run) {
+  const result = run?.response?.result || {}
+  const usage = result.usage || run?.response?.usage || {}
+  const output = String(result.edit_proposal?.revised_text || result.output || result.summary || result.message || run?.text || '')
+  const source = String(run?.source?.selectedText || run?.source?.sourceText || '')
+  const hasUsage = Number(usage.input_tokens) || Number(usage.output_tokens) || Number(usage.cached_input_tokens)
+  const inputTokens = Math.max(0, Number(usage.input_tokens || (source ? Math.ceil(source.length / 2.2) : 0)))
+  const outputTokens = Math.max(0, Number(usage.output_tokens || (output ? Math.ceil(output.length / 2.2) : 0)))
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens: Math.max(0, Number(usage.cached_input_tokens || 0)),
+    reasoningTokens: Math.max(0, Number(usage.reasoning_output_tokens || 0)),
+    estimated: usage.estimated === true || !hasUsage,
+  }
 }
 
 function AgentEventIcon({ event }) {
@@ -250,6 +306,7 @@ function App() {
   const [importProjectOpen, setImportProjectOpen] = useState(false)
   const [importProjectLoading, setImportProjectLoading] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
@@ -289,6 +346,7 @@ function App() {
   const activeDraftKeyRef = useRef('')
   const saveQueueRef = useRef(Promise.resolve())
   const skillSubmissionRef = useRef(null)
+  const profileMenuRef = useRef(null)
 
   useEffect(() => {
     let mounted = true
@@ -355,6 +413,22 @@ function App() {
       // 浏览器禁用本地存储时仍可在当前会话使用折叠状态。
     }
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    if (!profileMenuOpen) return undefined
+    function closeProfileMenu(event) {
+      if (!profileMenuRef.current?.contains(event.target)) setProfileMenuOpen(false)
+    }
+    function closeProfileMenuOnEscape(event) {
+      if (event.key === 'Escape') setProfileMenuOpen(false)
+    }
+    document.addEventListener('mousedown', closeProfileMenu)
+    document.addEventListener('keydown', closeProfileMenuOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeProfileMenu)
+      document.removeEventListener('keydown', closeProfileMenuOnEscape)
+    }
+  }, [profileMenuOpen])
 
   useEffect(() => {
     if (!user) return undefined
@@ -717,8 +791,10 @@ function App() {
       const response = await api.updateChapter(currentProject.id, chapter.id, { state })
       setChapters((current) => current.map((item) => String(item.id) === String(chapter.id) ? response.chapter : item))
       setToast(state === 'done' ? '章节已标记完成' : '章节已恢复为草稿')
+      return response.chapter
     } catch (error) {
       setToast(error.message)
+      return null
     }
   }
 
@@ -886,7 +962,7 @@ function App() {
   async function confirmStoryMemories(candidates) {
     if (!currentProject?.id || !candidates.length) return false
     try {
-      const response = await api.confirmStoryMemories(currentProject.id, candidates.map((candidate) => ({ ...candidate, characterName: candidate.characterName ?? candidate.character_name ?? '', replacesMemoryId: candidate.replacesMemoryId ?? candidate.replaces_memory_id ?? null, sourceChapterId: activeChapterId })))
+      const response = await api.confirmStoryMemories(currentProject.id, candidates.map((candidate) => ({ ...candidate, characterName: candidate.characterName ?? candidate.character_name ?? '', replacesMemoryId: candidate.replacesMemoryId ?? candidate.replaces_memory_id ?? null, sourceChapterId: candidate.sourceChapterId ?? activeChapterId })))
       setStoryMemories((current) => [...response.created, ...response.updated, ...current.filter((item) => !response.updated.some((updated) => updated.id === item.id))])
       setToast(`已确认 ${response.created.length + response.updated.length} 条作品记忆`)
       return true
@@ -1114,7 +1190,7 @@ function App() {
           </button>
         </div>
 
-        <div className="sidebar-section-label">工作台</div>
+        <div className="sidebar-section-label">创作空间</div>
         <nav className="primary-nav" aria-label="主导航">
           {primaryNavItems.map(({ id, label, icon: Icon }) => (
             <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} aria-label={label} title={sidebarCollapsed ? label : undefined} onClick={() => selectSection(id)}>
@@ -1125,35 +1201,32 @@ function App() {
           ))}
         </nav>
 
-        <div className="sidebar-section-label more-label">更多</div>
-        <nav className="primary-nav secondary-nav" aria-label="更多功能">
-          {moreNavItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`nav-item ${activeSection === id ? 'active' : ''}`} aria-label={label} title={sidebarCollapsed ? label : undefined} onClick={() => selectSection(id)}>
-              <Icon size={17} strokeWidth={1.8} />
-              <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-section-label recent-label">最近打开</div>
-        <div className="recent-projects">
-          {projects.slice(0, 3).map((project) => (
-            <button key={project.id} className="recent-project" onClick={() => openProject(project)}>
+        <div className="sidebar-section-label recent-label">我的书架 · {projects.length}</div>
+        <div className="recent-projects project-shelf">
+          {projects.map((project) => (
+            <button key={project.id} className={`recent-project ${String(currentProject?.id) === String(project.id) ? 'active' : ''}`} onClick={() => openProject(project)}>
               <span className={`mini-cover ${project.cover}`} aria-hidden="true">{project.title.slice(0, 1)}</span>
               <span className="recent-project-name">{project.title}</span>
-              {project.isActive && <span className="active-dot" />}
+              {String(currentProject?.id) === String(project.id) && <span className="active-dot" />}
             </button>
           ))}
+          {!projects.length && <p className="project-shelf-empty">新建作品后会显示在这里</p>}
         </div>
 
         <div className="sidebar-bottom">
-          <a className="nav-item source-code-link" href={SOURCE_REPOSITORY_URL} target="_blank" rel="noreferrer" aria-label="源代码" title={sidebarCollapsed ? '源代码 · AGPL-3.0' : undefined}><Code2 size={17} strokeWidth={1.8} /><span>源代码 · AGPL-3.0</span></a>
           <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
           <button className="nav-item" aria-label="退出登录" title={sidebarCollapsed ? '退出登录' : undefined} onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
-          <div className="profile-chip">
+          <div className="profile-chip" ref={profileMenuRef}>
             <div className="avatar">{user.name.slice(0, 1)}</div>
             <div className="profile-copy"><strong>{user.name}</strong><span>{user.email}</span></div>
-            <MoreHorizontal size={16} />
+            <button type="button" className={`profile-more-button ${profileMenuOpen ? 'active' : ''}`} aria-label="打开账户菜单" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen((open) => !open)}><MoreHorizontal size={16} /></button>
+            {profileMenuOpen && <div className="profile-menu" role="menu">
+              <div className="profile-menu-heading"><div className="avatar small">{user.name.slice(0, 1)}</div><span><strong>{user.name}</strong><small>{user.email}</small></span></div>
+              <button type="button" role="menuitem" onClick={() => { setProfileMenuOpen(false); selectSection('profile') }}><UserRound size={14} /><span>个人中心</span></button>
+              <button type="button" role="menuitem" onClick={() => { setProfileMenuOpen(false); setSettingsOpen(true) }}><Settings2 size={14} /><span>设置</span></button>
+              <span className="profile-menu-divider" />
+              <button type="button" role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); logout() }}><LogOut size={14} /><span>退出登录</span></button>
+            </div>}
           </div>
         </div>
       </aside>
@@ -1166,18 +1239,18 @@ function App() {
           </div>
           <div className="topbar-actions">
             <button className="search-button" onClick={() => setSearchOpen(true)}><Search size={17} /><span>搜索</span><kbd>⌘ K</kbd></button>
-            <button className="icon-button" aria-label="高级工具" onClick={() => selectSection('toolkit')} title="高级工具"><Grid2X2 size={18} /></button>
             <button className="primary-button top-new-button" onClick={() => setShowNew(true)}><Plus size={17} />新建作品</button>
           </div>
         </header>}
 
         <div className="content-wrap">
-          {activeSection === 'editor' && currentProject && <Editor project={currentProject} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenSkill={openSkillRunner} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
+          {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page workspace-empty"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>还没有作品</h2><p>新建或导入作品后，工作台会直接显示正文和助手。</p><div className="empty-state-actions"><button className="primary-button" onClick={() => setShowNew(true)}><BookPlus size={17} />新建作品</button><button className="secondary-button" onClick={() => setImportProjectOpen(true)}><Download size={16} />导入文稿</button></div></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
-          {activeSection === 'deconstruct' && <Deconstruct onNotify={notify} onRunSkill={openSkillRunner} />}
-          {activeSection === 'toolkit' && <Toolkit onNotify={notify} skills={skillCatalog} skillsLoading={skillsLoading} onRefreshSkills={refreshSkills} onRunSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} onNavigate={selectSection} />}
+          {activeSection === 'skill-market' && <SkillMarket user={user} onNotify={notify} onSkillsChanged={refreshSkills} />}
+          {activeSection === 'stats' && <WritingStats stats={dashboard} projects={projects} />}
+          {activeSection === 'profile' && <ProfileCenter user={user} stats={dashboard} projects={projects} onNavigate={selectSection} onOpenSettings={() => setSettingsOpen(true)} onOpenProject={openProject} />}
         </div>
       </main>
 
@@ -1199,6 +1272,168 @@ function App() {
       {toast && <div className={`toast ${toastKind(toast)}`} role="status" aria-live="polite">{toastKind(toast) === 'loading' ? <LoaderCircle size={16} className="spin" /> : toastKind(toast) === 'error' ? <Info size={16} /> : <Check size={16} />}{toast}</div>}
     </div>
   )
+}
+
+function composerTriggerAt(value, cursor) {
+  const text = String(value || '')
+  const position = Number.isFinite(cursor) ? cursor : text.length
+  const before = text.slice(0, position)
+  const lineStart = before.lastIndexOf('\n') + 1
+  const line = before.slice(lineStart)
+  if (/^\/[^\s]*$/.test(line)) {
+    return { type: 'command', query: line.slice(1).toLowerCase(), start: lineStart, end: position }
+  }
+  const mention = before.match(/(?:^|\s)@([^\s@]*)$/)
+  if (mention) {
+    const start = before.lastIndexOf('@')
+    return { type: 'file', query: mention[1].toLowerCase(), start, end: position }
+  }
+  return null
+}
+
+function writingLevel(words) {
+  const value = Number(words || 0)
+  if (!value) return 0
+  if (value < 500) return 1
+  if (value < 1500) return 2
+  if (value < 3000) return 3
+  return 4
+}
+
+function WritingCalendar({ days = [] }) {
+  const calendarDays = days.length ? days : Array.from({ length: 365 }, (_, index) => {
+    const date = new Date()
+    date.setHours(0, 0, 0, 0)
+    date.setDate(date.getDate() - (364 - index))
+    return { date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`, words: 0 }
+  })
+  const firstDate = new Date(`${calendarDays[0].date}T00:00:00`)
+  const leadingDays = (firstDate.getDay() + 6) % 7
+  const calendarCells = [...Array.from({ length: leadingDays }, () => null), ...calendarDays]
+  const months = []
+  for (const day of calendarDays) {
+    const key = day.date.slice(0, 7)
+    if (months.at(-1)?.key !== key) months.push({ key, label: `${Number(key.slice(5, 7))}月` })
+  }
+
+  return <div className="writing-calendar">
+    <div className="calendar-months">{months.map((month) => <span key={month.key}>{month.label}</span>)}</div>
+    <div className="calendar-body">
+      <div className="calendar-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
+      <div className="calendar-grid" role="img" aria-label="过去一年每日写作字数日历">
+        {calendarCells.map((day, index) => day
+          ? <span key={day.date} className={`calendar-cell level-${writingLevel(day.words)}`} title={`${day.date} · ${formatNumber(day.words)} 字`} aria-label={`${day.date}，写作 ${formatNumber(day.words)} 字`} />
+          : <span key={`blank-${index}`} className="calendar-cell blank" aria-hidden="true" />)}
+      </div>
+    </div>
+    <div className="calendar-legend"><span>少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`calendar-cell level-${level}`} />)}<span>多</span></div>
+  </div>
+}
+
+function WritingStats({ stats, projects }) {
+  const rankedProjects = [...projects].sort((left, right) => Number(String(right.words || '0').replaceAll(',', '')) - Number(String(left.words || '0').replaceAll(',', ''))).slice(0, 5)
+  const metricCards = [
+    { label: '累计字数', value: formatNumber(stats?.totalWords), suffix: '字', icon: FileText, tone: 'coral' },
+    { label: '本月写作', value: formatNumber(stats?.monthWords), suffix: '字', icon: CalendarDays, tone: 'teal' },
+    { label: '今日新增', value: formatNumber(stats?.todayWords), suffix: '字', icon: PenLine, tone: 'purple' },
+    { label: '作品数量', value: formatNumber(stats?.projectCount), suffix: '部', icon: BookOpen, tone: 'yellow' },
+    { label: '章节总数', value: formatNumber(stats?.chapterCount), suffix: '章', icon: List, tone: 'blue' },
+    { label: '写作日均', value: formatNumber(stats?.averageWordsPerWritingDay), suffix: '字', icon: BarChart3, tone: 'green' },
+  ]
+
+  return <div className="page inner-page analytics-page">
+    <div className="page-heading analytics-heading">
+      <div><span className="section-overline">WRITING INSIGHTS</span><h1>写作统计</h1><p>每一次保存都算数。这里记录你的创作节奏，而不只是最终字数。</p></div>
+      <div className="analytics-period"><CalendarDays size={16} /><span>过去 365 天</span></div>
+    </div>
+
+    <section className="writing-calendar-card">
+      <div className="calendar-summary">
+        <div className="writing-days-total"><small>累计写作</small><div><strong>{formatNumber(stats?.totalWritingDays)}</strong><span>天</span></div><p>{stats?.firstWritingDate ? `从 ${stats.firstWritingDate.replaceAll('-', '.')} 开始记录` : '从今天开始留下第一格'}</p></div>
+        <div className="streak-summary">
+          <div><span className="streak-icon current"><Flame size={18} /></span><p><small>当前连续</small><strong>{formatNumber(stats?.currentStreak)} 天</strong></p></div>
+          <div><span className="streak-icon best"><Trophy size={18} /></span><p><small>最长连续</small><strong>{formatNumber(stats?.longestStreak)} 天</strong></p></div>
+        </div>
+      </div>
+      <WritingCalendar days={stats?.calendar || []} />
+    </section>
+
+    <section className="analytics-metrics" aria-label="写作指标">
+      {metricCards.map(({ label, value, suffix, icon: Icon, tone }) => <article className="analytics-metric-card" key={label}>
+        <span className={`metric-icon ${tone}`}><Icon size={17} /></span>
+        <small>{label}</small>
+        <div><strong>{value}</strong><span>{suffix}</span></div>
+      </article>)}
+    </section>
+
+    <div className="analytics-detail-grid">
+      <WritingPulse stats={stats} />
+      <section className="project-ranking">
+        <div className="section-heading compact"><div><span className="section-overline">作品贡献</span><h2>字数分布</h2></div><span className="tiny-meta">{projects.length} 部作品</span></div>
+        <div className="ranking-list">
+          {rankedProjects.length ? rankedProjects.map((project, index) => {
+            const words = Number(String(project.words || '0').replaceAll(',', ''))
+            const share = stats?.totalWords ? Math.round((words / stats.totalWords) * 100) : 0
+            return <div className="ranking-item" key={project.id}>
+              <span className="ranking-index">{String(index + 1).padStart(2, '0')}</span>
+              <span className={`mini-cover ${project.cover}`}>{project.title.slice(0, 1)}</span>
+              <div><strong>{project.title}</strong><span><i style={{ width: `${share}%` }} /></span></div>
+              <p><strong>{formatNumber(words)}</strong><small>字</small></p>
+            </div>
+          }) : <div className="ranking-empty"><BookOpen size={21} /><p>创建第一部作品后，这里会显示字数贡献。</p></div>}
+        </div>
+      </section>
+    </div>
+  </div>
+}
+
+function ProfileCenter({ user, stats, projects, onNavigate, onOpenSettings, onOpenProject }) {
+  const joinedAt = user?.createdAt ? new Date(user.createdAt) : null
+  const joinedDays = joinedAt && !Number.isNaN(joinedAt.getTime()) ? Math.max(1, Math.floor((Date.now() - joinedAt.getTime()) / 86_400_000) + 1) : 1
+  const recentProjects = [...projects].sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0)).slice(0, 3)
+  const milestones = [
+    { label: '第一部作品', description: '建立属于自己的故事世界', earned: Number(stats?.projectCount || 0) >= 1, icon: BookPlus },
+    { label: '万字作者', description: '累计完成 10,000 字', earned: Number(stats?.totalWords || 0) >= 10000, icon: PenLine },
+    { label: '七日执笔', description: '累计写作达到 7 天', earned: Number(stats?.totalWritingDays || 0) >= 7, icon: Flame },
+    { label: '完成一本', description: '至少有一部作品已完结', earned: Number(stats?.completedProjects || 0) >= 1, icon: Trophy },
+  ]
+
+  return <div className="page inner-page profile-page">
+    <section className="profile-hero">
+      <div className="profile-avatar-large">{user?.name?.slice(0, 1) || '作'}</div>
+      <div className="profile-hero-copy"><span className="section-overline">AUTHOR PROFILE</span><h1>{user?.name || '创作者'}</h1><p>{user?.email}</p><div><span><Clock3 size={13} />加入创作空间第 {formatNumber(joinedDays)} 天</span><span><PenLine size={13} />累计写作 {formatNumber(stats?.totalWritingDays)} 天</span></div></div>
+      <button className="secondary-button profile-settings-button" onClick={onOpenSettings}><Settings2 size={16} />模型与 API 设置</button>
+    </section>
+
+    <section className="profile-overview-grid">
+      <article><small>累计创作</small><div><strong>{formatNumber(stats?.totalWords)}</strong><span>字</span></div><p>所有作品正文总和</p></article>
+      <article><small>作品空间</small><div><strong>{formatNumber(stats?.projectCount)}</strong><span>部</span></div><p>{formatNumber(stats?.chapterCount)} 个章节</p></article>
+      <article><small>连续写作</small><div><strong>{formatNumber(stats?.currentStreak)}</strong><span>天</span></div><p>历史最佳 {formatNumber(stats?.longestStreak)} 天</p></article>
+      <article><small>本月进度</small><div><strong>{formatNumber(stats?.monthWords)}</strong><span>字</span></div><p>今天新增 {formatNumber(stats?.todayWords)} 字</p></article>
+    </section>
+
+    <div className="profile-content-grid">
+      <section className="profile-panel">
+        <div className="section-heading compact"><div><span className="section-overline">创作成就</span><h2>里程碑</h2></div><span className="tiny-meta">{milestones.filter((item) => item.earned).length} / {milestones.length} 已获得</span></div>
+        <div className="milestone-grid">
+          {milestones.map(({ label, description, earned, icon: Icon }) => <div className={`milestone-card ${earned ? 'earned' : ''}`} key={label}><span><Icon size={18} /></span><div><strong>{label}</strong><small>{description}</small></div>{earned && <Check size={14} />}</div>)}
+        </div>
+      </section>
+
+      <section className="profile-panel account-panel">
+        <div className="section-heading compact"><div><span className="section-overline">账号信息</span><h2>个人资料</h2></div></div>
+        <dl><div><dt>创作者名称</dt><dd>{user?.name || '—'}</dd></div><div><dt>登录邮箱</dt><dd>{user?.email || '—'}</dd></div><div><dt>加入时间</dt><dd>{joinedAt && !Number.isNaN(joinedAt.getTime()) ? joinedAt.toLocaleDateString('zh-CN') : '—'}</dd></div></dl>
+        <button className="text-button" onClick={() => onNavigate('stats')}><BarChart3 size={15} />查看完整写作统计<ChevronRight size={15} /></button>
+      </section>
+    </div>
+
+    <section className="profile-panel profile-recent-projects">
+      <div className="section-heading compact"><div><span className="section-overline">最近创作</span><h2>继续你的故事</h2></div><button className="text-button" onClick={() => onNavigate('works')}>管理全部作品 <ArrowUpRight size={15} /></button></div>
+      <div className="profile-project-list">
+        {recentProjects.length ? recentProjects.map((project) => <button key={project.id} onClick={() => onOpenProject(project)}><span className={`row-cover ${project.cover}`}>{project.title.slice(0, 1)}</span><span><strong>{project.title}</strong><small>{project.genre} · {project.chapters || 0} 章 · {project.words || 0} 字</small></span><em>{project.progress || 0}%</em><ChevronRight size={16} /></button>) : <div className="ranking-empty"><BookOpen size={21} /><p>还没有作品，去工作台开始第一本书。</p></div>}
+      </div>
+    </section>
+  </div>
 }
 
 function AiTaskTray({ tasks, onCancel, onRetry }) {
@@ -1346,8 +1581,6 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
               <div className="section-heading compact"><div><span className="section-overline">工作区</span><h2>需要时再打开</h2></div></div>
               <div className="overview-link-list">
                 <button onClick={() => onNavigate('library')}><span className="quick-action-icon teal"><Library size={16} /></span><span><strong>素材库</strong><small>人物、设定与灵感</small></span><ChevronRight size={15} /></button>
-                <button onClick={() => onNavigate('toolkit')}><span className="quick-action-icon yellow"><Target size={16} /></span><span><strong>高级工具</strong><small>题材趋势、自然化润色与章节诊断</small></span><ChevronRight size={15} /></button>
-                <button onClick={() => onNavigate('deconstruct')}><span className="quick-action-icon purple"><BookOpenCheck size={16} /></span><span><strong>拆文台</strong><small>分析所提供参考正文的结构</small></span><ChevronRight size={15} /></button>
               </div>
             </section>
           </section>
@@ -1514,7 +1747,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
               </form>
               <div className="assistant-composer-tools">
                 <button type="button" className={`composer-toggle ${webSearch ? 'active' : ''}`} aria-pressed={webSearch} title={webSearch ? '已开启联网搜索：夜雨会先检索再回答' : '开启后夜雨会先联网检索再回答'} onClick={() => setWebSearch((value) => !value)}><Globe size={13} /><span>联网搜索</span></button>
-                <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{skillMeta[item.name]?.label || item.name}</option>)}</select></label>
+                <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{item.displayName || skillMeta[item.name]?.label || item.name}</option>)}</select></label>
                 <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               </div>
             </>
@@ -1563,6 +1796,10 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
   const findings = Array.isArray(result.findings) ? result.findings : []
   const events = Array.isArray(run.events) ? run.events : []
   const plan = Array.isArray(run.plan) ? run.plan : []
+  const attachedFiles = Array.isArray(run.source?.attachedFiles) ? run.source.attachedFiles : []
+  const exploredCount = Math.max(1, references.length + attachedFiles.length)
+  const contextCount = Math.max(1, attachedFiles.length + (run.source?.selectedText ? 1 : 0))
+  const traceSummary = String(proposal?.summary || result.summary || '').trim()
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
@@ -1585,8 +1822,36 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
   }
 
   return <article className={`agent-turn ${run.status}`}>
+    <details className="agent-exploration" open>
+      <summary className="agent-trace-row">
+        <Search size={14} />
+        <strong>已探索</strong>
+        <span>{exploredCount} 个{attachedFiles.length ? '文件' : '章节'} · {contextCount} 条上下文</span>
+        <ChevronRight size={13} className="agent-trace-chevron" />
+      </summary>
+      <div className="agent-exploration-body">
+        <div className="agent-trace-detail">
+          <FileText size={13} />
+          <span>{run.source?.chapterTitle || '当前章节'}</span>
+          <small>{originalText.replace(/\s/g, '').length.toLocaleString()} 字</small>
+        </div>
+        {attachedFiles.map((file) => <div className="agent-trace-detail" key={`${run.id}:${file.name}`}>
+          <Paperclip size={13} />
+          <span>{file.name}</span>
+          <small>{file.kind || '外部文件'}</small>
+        </div>)}
+      </div>
+    </details>
+
+    {traceSummary && <div className="agent-trace-row agent-summary-row">
+      <List size={14} />
+      <strong>章节摘要</strong>
+      <span>{traceSummary}</span>
+      <Info size={12} />
+    </div>}
+
     <details className="agent-reasoning" open={run.status !== 'completed'}>
-      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>{run.status === 'running' ? `正在处理 · ${formatAgentDuration(elapsedMs)}` : `思考了 ${formatAgentDuration(run.durationMs)}`}</strong><span>{statusLabel}</span></summary>
+      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>推理</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
       <div className="agent-reasoning-body">
         <p>展示的是可核验的执行摘要、工具状态和耗时，不包含模型隐藏思维链。</p>
         {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
@@ -1616,19 +1881,71 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
 
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
 
-    {showDiff && changedHunks.length > 0 && <section className="agent-diff">
-      <header><div><FileText size={14} /><strong>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</strong></div><span className="diff-add">+{addedCharacters}</span><span className="diff-remove">-{removedCharacters}</span></header>
-      <div className="agent-diff-list">{changedHunks.map((hunk, index) => <article className={`agent-diff-hunk ${hunk.accepted ? '' : 'rejected'}`} key={hunk.id}>
-        <div className="agent-diff-hunk-heading"><span>修改 {index + 1}</span><small>{hunk.reason}</small><div><button type="button" className={hunk.accepted ? 'active' : ''} title="接受修改" onClick={() => toggleHunk(hunk.id, true)}><Check size={12} /></button><button type="button" className={!hunk.accepted ? 'active reject' : ''} title="拒绝修改" onClick={() => toggleHunk(hunk.id, false)}><X size={12} /></button></div></div>
-        {hunk.original && <pre className="diff-line removed"><span>-</span>{hunk.original}</pre>}
-        {hunk.replacement && <pre className="diff-line added"><span>+</span>{hunk.replacement}</pre>}
-      </article>)}</div>
-      <footer><span>{changedHunks.filter((hunk) => hunk.accepted).length} / {changedHunks.length} 项已接受</span><button type="button" disabled={run.applied || !changedHunks.some((hunk) => hunk.accepted)} onClick={() => onApply(run, acceptedText)}>{run.applied ? <Check size={13} /> : <PenLine size={13} />}{run.applied ? '已应用' : '应用到正文'}</button></footer>
-    </section>}
+    {showDiff && changedHunks.length > 0 && <details className="agent-write-stage" open>
+      <summary className="agent-trace-row">
+        <PenLine size={14} />
+        <strong>写入章节</strong>
+        <span>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</span>
+        <ChevronRight size={13} className="agent-trace-chevron" />
+      </summary>
+      <section className="agent-diff">
+        <header><div><FileText size={14} /><strong>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</strong></div><span className="diff-add">+{addedCharacters}</span><span className="diff-remove">-{removedCharacters}</span></header>
+        <div className="agent-diff-list">{changedHunks.map((hunk, index) => <article className={`agent-diff-hunk ${hunk.accepted ? '' : 'rejected'}`} key={hunk.id}>
+          <div className="agent-diff-hunk-heading"><span>修改 {index + 1}</span><small>{hunk.reason}</small><div><button type="button" className={hunk.accepted ? 'active' : ''} title="接受修改" onClick={() => toggleHunk(hunk.id, true)}><Check size={12} /></button><button type="button" className={!hunk.accepted ? 'active reject' : ''} title="拒绝修改" onClick={() => toggleHunk(hunk.id, false)}><X size={12} /></button></div></div>
+          {hunk.original && <pre className="diff-line removed"><span>-</span>{hunk.original}</pre>}
+          {hunk.replacement && <pre className="diff-line added"><span>+</span>{hunk.replacement}</pre>}
+        </article>)}</div>
+        <footer><span>{changedHunks.filter((hunk) => hunk.accepted).length} / {changedHunks.length} 项已接受</span><button type="button" disabled={run.applied || !changedHunks.some((hunk) => hunk.accepted)} onClick={() => onApply(run, acceptedText)}>{run.applied ? <Check size={13} /> : <PenLine size={13} />}{run.applied ? '已应用' : '应用到正文'}</button></footer>
+      </section>
+    </details>}
   </article>
 }
 
-function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenSkill, applyRequest, onApplyRequestHandled }) {
+function AgentComposerMenu({ title, description, options, value, loading, onSelect }) {
+  function moveFocus(event) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const buttons = [...event.currentTarget.querySelectorAll('[role="option"]:not(:disabled)')]
+    if (!buttons.length) return
+    const currentIndex = buttons.indexOf(document.activeElement)
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? buttons.length - 1
+        : event.key === 'ArrowDown'
+          ? (currentIndex + 1 + buttons.length) % buttons.length
+          : (currentIndex - 1 + buttons.length) % buttons.length
+    buttons[nextIndex]?.focus()
+  }
+
+  return <div className="agent-control-popover" role="listbox" aria-label={title} onKeyDown={moveFocus}>
+    <div className="agent-control-popover-heading">
+      <div><strong>{title}</strong><small>{description}</small></div>
+      {loading && <LoaderCircle size={14} className="spin" />}
+    </div>
+    <div className="agent-control-option-list">
+      {options.map((option, index) => {
+        const selected = option.value === value
+        return <button
+          type="button"
+          role="option"
+          aria-selected={selected}
+          autoFocus={selected || (!value && index === 0)}
+          className={`agent-control-option ${selected ? 'selected' : ''}`}
+          key={option.value || 'default'}
+          onClick={() => onSelect(option.value)}
+        >
+          <span className="agent-control-option-mark">{selected && <Check size={12} />}</span>
+          <span className="agent-control-option-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+          {option.badge && <em>{option.badge}</em>}
+        </button>
+      })}
+      {!loading && options.length <= 1 && <div className="agent-control-empty"><Bot size={15} /><span>暂未读取到其他模型，请先在设置中测试连接。</span></div>}
+    </div>
+  </div>
+}
+
+function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
   const [renameValue, setRenameValue] = useState('')
@@ -1663,6 +1980,26 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantRunning, setAssistantRunning] = useState(false)
   const [assistantElapsedMs, setAssistantElapsedMs] = useState(0)
+  const [assistantAttachments, setAssistantAttachments] = useState([])
+  const [assistantSuggestion, setAssistantSuggestion] = useState(null)
+  const [assistantSuggestionIndex, setAssistantSuggestionIndex] = useState(0)
+  const [assistantAttachmentLoading, setAssistantAttachmentLoading] = useState(false)
+  const [openChapterIds, setOpenChapterIds] = useState([])
+  const [styleMenuOpen, setStyleMenuOpen] = useState(false)
+  const [editorFontSize, setEditorFontSize] = useState(16)
+  const [editorLineHeight, setEditorLineHeight] = useState(2.05)
+  const [editorBold, setEditorBold] = useState(false)
+  const [editorItalic, setEditorItalic] = useState(false)
+  const [speaking, setSpeaking] = useState(false)
+  const [agentModel, setAgentModel] = useState('')
+  const [agentModels, setAgentModels] = useState([])
+  const [agentModelsLoading, setAgentModelsLoading] = useState(false)
+  const [agentReasoningEffort, setAgentReasoningEffort] = useState('')
+  const [agentContextWindow, setAgentContextWindow] = useState(100000)
+  const [agentSettingSaving, setAgentSettingSaving] = useState(false)
+  const [agentWebSearch, setAgentWebSearch] = useState(false)
+  const [agentMode, setAgentMode] = useState('build')
+  const [agentPickerOpen, setAgentPickerOpen] = useState(null)
   const [, setHistoryVersion] = useState(0)
   const historyRef = useRef({ past: [], future: [] })
   const historyTimerRef = useRef(null)
@@ -1672,8 +2009,10 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   const assistantTaskIdRef = useRef(null)
   const assistantTurnIdRef = useRef(null)
   const assistantStreamRef = useRef(null)
+  const assistantInputRef = useRef(null)
+  const assistantFileInputRef = useRef(null)
+  const agentControlsRef = useRef(null)
   const displayChapter = activeChapter || chapters.at(-1) || { id: 1, title: '第一章', words: '0' }
-  const activeIndex = Math.max(0, chapters.findIndex((chapter) => String(chapter.id) === String(displayChapter.id)))
   const visibleChapters = useMemo(() => [...chapters]
     .filter((chapter) => !unfinishedOnly || chapter.state !== 'done' || String(chapter.id) === String(displayChapter.id))
     .sort((left, right) => chapterOrder === 'asc' ? Number(left.id) - Number(right.id) : Number(right.id) - Number(left.id)), [chapterOrder, chapters, displayChapter.id, unfinishedOnly])
@@ -1683,6 +2022,219 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     saving: '正在自动保存',
     error: '保存失败，点击重试',
   }[draftStatus] || '已自动保存'
+
+  useEffect(() => {
+    let mounted = true
+    const applyAgentSettings = (settings) => {
+      if (!mounted) return
+      setAgentModel(settings?.model || '')
+      setAgentReasoningEffort(settings?.reasoningEffort || '')
+      setAgentContextWindow(Math.max(100, Number(settings?.contextWindow) || 100000))
+    }
+    api.getSettings()
+      .then(({ settings }) => applyAgentSettings(settings))
+      .catch(() => {})
+    const handleSettingsUpdate = (event) => applyAgentSettings(event.detail)
+    window.addEventListener('story:model-settings-updated', handleSettingsUpdate)
+    return () => {
+      mounted = false
+      window.removeEventListener('story:model-settings-updated', handleSettingsUpdate)
+    }
+  }, [])
+
+  useEffect(() => {
+    setOpenChapterIds(displayChapter?.id == null ? [] : [String(displayChapter.id)])
+  }, [project.id])
+
+  useEffect(() => {
+    if (displayChapter?.id == null) return
+    const id = String(displayChapter.id)
+    setOpenChapterIds((current) => current.includes(id) ? current : [...current, id].slice(-5))
+  }, [displayChapter.id])
+
+  useEffect(() => {
+    if (!agentPickerOpen) return undefined
+    function closeOnOutsideClick(event) {
+      if (!agentControlsRef.current?.contains(event.target)) setAgentPickerOpen(null)
+    }
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setAgentPickerOpen(null)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [agentPickerOpen])
+
+  async function loadAgentModels() {
+    if (agentModelsLoading || agentModels.length) return
+    setAgentModelsLoading(true)
+    try {
+      const response = await api.getModels()
+      setAgentModels(response.models || [])
+    } catch (error) {
+      onNotify?.(error.message || '模型列表获取失败，请检查连接设置')
+    } finally {
+      setAgentModelsLoading(false)
+    }
+  }
+
+  async function updateAgentSetting(field, value) {
+    const previous = field === 'model' ? agentModel : agentReasoningEffort
+    if (field === 'model') setAgentModel(value)
+    else setAgentReasoningEffort(value)
+    setAgentSettingSaving(true)
+    try {
+      const response = await api.updateSettings({ [field]: value })
+      window.dispatchEvent(new CustomEvent('story:model-settings-updated', { detail: response.settings }))
+    } catch (error) {
+      if (field === 'model') setAgentModel(previous)
+      else setAgentReasoningEffort(previous)
+      onNotify?.(error.message || '模型设置保存失败')
+    } finally {
+      setAgentSettingSaving(false)
+    }
+  }
+
+  function toggleAgentPicker(picker) {
+    setAssistantSuggestion(null)
+    setAgentPickerOpen((current) => current === picker ? null : picker)
+    if (picker === 'model' && agentPickerOpen !== 'model') loadAgentModels()
+  }
+
+  function refreshAssistantSuggestion(value, cursor) {
+    const trigger = composerTriggerAt(value, cursor)
+    setAssistantSuggestion(trigger)
+    setAssistantSuggestionIndex(0)
+    if (trigger) setAgentPickerOpen(null)
+  }
+
+  function replaceAssistantTrigger(replacement) {
+    if (!assistantSuggestion) return
+    const next = `${assistantInput.slice(0, assistantSuggestion.start)}${replacement}${assistantInput.slice(assistantSuggestion.end)}`
+    const cursor = assistantSuggestion.start + replacement.length
+    setAssistantInput(next)
+    setAssistantSuggestion(null)
+    requestAnimationFrame(() => {
+      assistantInputRef.current?.focus()
+      assistantInputRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  function selectAssistantCommand(command) {
+    replaceAssistantTrigger(command.insertText)
+  }
+
+  async function selectAssistantFile(file) {
+    if (assistantAttachmentLoading) return
+    const existing = assistantAttachments.find((item) => item.key === file.key)
+    if (existing) {
+      replaceAssistantTrigger(`@${existing.name} `)
+      return
+    }
+    setAssistantAttachmentLoading(true)
+    try {
+      let content = file.content || ''
+      if (file.chapterId != null && String(file.chapterId) !== String(displayChapter.id)) {
+        const response = await api.getChapterDraft(project.id, file.chapterId)
+        content = response.content || ''
+      } else if (file.chapterId != null) {
+        content = draft
+      }
+      const attachment = { ...file, content: String(content).slice(0, 60000) }
+      setAssistantAttachments((current) => [...current, attachment].slice(-6))
+      replaceAssistantTrigger(`@${file.name} `)
+    } catch (error) {
+      onNotify(error.message || '文件内容读取失败')
+    } finally {
+      setAssistantAttachmentLoading(false)
+    }
+  }
+
+  function openExternalFilePicker() {
+    assistantFileInputRef.current?.click()
+  }
+
+  async function handleExternalFiles(event) {
+    const files = [...(event.target.files || [])]
+    event.target.value = ''
+    if (!files.length) return
+    const remaining = Math.max(0, 6 - assistantAttachments.length)
+    if (!remaining) {
+      onNotify('一次最多添加 6 个上下文文件')
+      return
+    }
+    setAssistantAttachmentLoading(true)
+    try {
+      const accepted = files.slice(0, remaining)
+      const attachments = await Promise.all(accepted.map(async (file, index) => {
+        if (file.size > 2 * 1024 * 1024) throw new Error(`文件 ${file.name} 超过 2 MB`)
+        const content = await file.text()
+        return {
+          key: `external:${Date.now()}:${index}:${file.name}`,
+          name: file.name,
+          kind: '外部文件',
+          description: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+          content: content.slice(0, 60000),
+        }
+      }))
+      setAssistantAttachments((current) => [...current, ...attachments].slice(-6))
+      const mentions = `${attachments.map((file) => `@${file.name}`).join(' ')} `
+      if (assistantSuggestion?.type === 'file') replaceAssistantTrigger(mentions)
+      else setAssistantInput((current) => `${current}${current && !/\s$/.test(current) ? ' ' : ''}${mentions}`)
+      onNotify(`已添加 ${attachments.length} 个外部文件`)
+    } catch (error) {
+      onNotify(error.message || '外部文件读取失败')
+    } finally {
+      setAssistantAttachmentLoading(false)
+    }
+  }
+
+  function removeAssistantAttachment(key) {
+    const target = assistantAttachments.find((item) => item.key === key)
+    setAssistantAttachments((current) => current.filter((item) => item.key !== key))
+    if (target) {
+      setAssistantInput((current) => current.replace(new RegExp(`@${target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'g'), ''))
+    }
+  }
+
+  function handleAssistantInputChange(event) {
+    const value = event.target.value
+    setAssistantInput(value)
+    refreshAssistantSuggestion(value, event.target.selectionStart)
+  }
+
+  function handleAssistantComposerKeyDown(event) {
+    const options = assistantSuggestion?.type === 'command'
+      ? filteredAgentCommands
+      : [{ key: 'external:file-picker', external: true }, ...filteredAgentFiles]
+    if (assistantSuggestion && options.length) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        setAssistantSuggestionIndex((current) => {
+          const direction = event.key === 'ArrowDown' ? 1 : -1
+          return (current + direction + options.length) % options.length
+        })
+        return
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && !(event.ctrlKey || event.metaKey)) {
+        event.preventDefault()
+        const option = options[assistantSuggestionIndex] || options[0]
+        if (assistantSuggestion.type === 'command') selectAssistantCommand(option)
+        else if (option.external) openExternalFilePicker()
+        else void selectAssistantFile(option)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setAssistantSuggestion(null)
+        return
+      }
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submitAssistant(event)
+  }
 
   useEffect(() => {
     if (historyTimerRef.current) {
@@ -1768,6 +2320,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   useEffect(() => () => {
     if (historyTimerRef.current) window.clearTimeout(historyTimerRef.current)
     assistantAbortRef.current?.abort()
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
   }, [])
 
   useEffect(() => {
@@ -1839,7 +2392,23 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
 
   async function selectEditorChapter(chapter) {
     setMobileRailOpen(false)
+    setOpenChapterIds((current) => {
+      const id = String(chapter.id)
+      return current.includes(id) ? current : [...current, id].slice(-5)
+    })
     await onSelectChapter?.(chapter)
+  }
+
+  async function closeEditorTab(event, chapter) {
+    event.stopPropagation()
+    const id = String(chapter.id)
+    const closingIndex = editorTabs.findIndex((item) => String(item.id) === id)
+    const remaining = editorTabs.filter((item) => String(item.id) !== id)
+    setOpenChapterIds((current) => current.filter((item) => String(item) !== id))
+    if (String(displayChapter.id) === id && remaining.length) {
+      const nextChapter = remaining[Math.min(Math.max(0, closingIndex), remaining.length - 1)]
+      await onSelectChapter?.(nextChapter)
+    }
   }
 
   async function confirmRename(event) {
@@ -1856,19 +2425,32 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     setDeleteTarget(null)
   }
 
-  function applyFormat(prefix, suffix = prefix) {
-    const textarea = textareaRef.current
-    if (!textarea || draftLoading) return
-    const start = textarea.selectionStart
-    const end = textarea.selectionEnd
-    const selected = draft.slice(start, end)
-    const next = `${draft.slice(0, start)}${prefix}${selected}${suffix}${draft.slice(end)}`
-    commitDraftChange(next)
-    requestAnimationFrame(() => {
-      textarea.focus()
-      textarea.selectionStart = start + prefix.length
-      textarea.selectionEnd = end + prefix.length
+  function toggleEditorBold() {
+    setEditorBold((current) => {
+      const next = !current
+      onNotify(next ? '已开启正文加粗显示，不会修改正文内容' : '已关闭正文加粗显示')
+      return next
     })
+  }
+
+  function toggleEditorItalic() {
+    setEditorItalic((current) => {
+      const next = !current
+      onNotify(next ? '已开启正文斜体显示，不会修改正文内容' : '已关闭正文斜体显示')
+      return next
+    })
+  }
+
+  function cleanInlineMarkdownMarkers() {
+    const cleaned = draft
+      .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+      .replace(/_([^_\n]+)_/g, '$1')
+    if (cleaned === draft) {
+      onNotify('正文中没有可清理的格式标记')
+      return
+    }
+    commitDraftChange(cleaned)
+    onNotify('已清理正文中的 Markdown 格式标记，可用撤销恢复')
   }
 
   function rememberDraft(previous) {
@@ -1924,6 +2506,16 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     if (key === 'z') {
       event.preventDefault()
       undoDraft()
+      return
+    }
+    if (key === 'b') {
+      event.preventDefault()
+      toggleEditorBold()
+      return
+    }
+    if (key === 'i') {
+      event.preventDefault()
+      toggleEditorItalic()
     }
   }
 
@@ -1986,6 +2578,10 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   function selectAllText() {
     const textarea = textareaRef.current
     if (!textarea) return
+    if (!draft) {
+      onNotify('本章还没有正文')
+      return
+    }
     textarea.focus()
     textarea.select()
     onNotify('已选中本章全文')
@@ -2002,6 +2598,12 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   }
 
   function readChapterAloud() {
+    if (speaking) {
+      window.speechSynthesis.cancel()
+      setSpeaking(false)
+      onNotify('已停止朗读')
+      return
+    }
     if (!draft.trim()) {
       onNotify('本章还没有正文')
       return
@@ -2011,7 +2613,16 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
       return
     }
     window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(draft))
+    const utterance = new SpeechSynthesisUtterance(draft)
+    utterance.lang = 'zh-CN'
+    utterance.rate = 0.95
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => {
+      setSpeaking(false)
+      onNotify('朗读中断，请检查系统语音服务')
+    }
+    window.speechSynthesis.speak(utterance)
+    setSpeaking(true)
     onNotify('已开始朗读本章')
   }
 
@@ -2110,24 +2721,55 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     })
   }
 
-  async function extractMemories() {
-    if (!project?.id || !displayChapter?.id || !draft.trim() || memoryLoading) {
-      if (!draft.trim()) onNotify('先写一点正文，再整理本章记忆')
+  async function extractMemories(targetChapter = displayChapter, { automatic = false } = {}) {
+    const chapter = targetChapter?.id == null ? displayChapter : targetChapter
+    const isCurrentChapter = String(chapter.id) === String(displayChapter.id)
+    if (!project?.id || !chapter?.id || (isCurrentChapter && !draft.trim()) || memoryLoading) {
+      if (isCurrentChapter && !draft.trim()) onNotify('先写一点正文，再整理本章记忆')
       return
     }
     setMemoryLoading(true)
     try {
-      const response = await api.extractChapterMemories(project.id, displayChapter.id)
+      const response = await api.extractChapterMemories(project.id, chapter.id)
       if (response.status !== 'completed') {
-        onNotify(response.message || '作品记忆整理未完成')
+        onNotify(response.message || (automatic ? '章节已完成，但自动整理记忆未完成' : '作品记忆整理未完成'))
         return
       }
-      setMemoryCandidates((response.candidates || []).map((candidate, index) => ({ ...candidate, id: `candidate-${index}`, selected: true })))
+      const candidates = (response.candidates || []).map((candidate, index) => ({
+        ...candidate,
+        id: `candidate-${chapter.id}-${index}`,
+        sourceChapterId: chapter.id,
+        selected: true,
+      }))
+      if (!candidates.length) {
+        onNotify(automatic ? '章节已完成，本章没有需要新增的长期记忆' : '本章没有整理出新的长期记忆')
+        return
+      }
+      setMemoryCandidates(candidates)
       setMemoryReviewOpen(true)
+      if (automatic) onNotify(`章节已完成 · 已整理 ${candidates.length} 条待确认记忆`)
     } catch (error) {
-      onNotify(error.message || '作品记忆整理失败')
+      onNotify(error.message || (automatic ? '章节已完成，但自动整理记忆失败' : '作品记忆整理失败'))
     } finally {
       setMemoryLoading(false)
+    }
+  }
+
+  async function toggleChapterCompletion(chapter) {
+    const nextState = chapter.state === 'done' ? 'draft' : 'done'
+    setMenuOpenId(null)
+    if (nextState === 'done' && String(chapter.id) === String(displayChapter.id) && draftStatus !== 'saved') {
+      try {
+        await onSave?.({ silent: true })
+      } catch {
+        onNotify('正文保存失败，暂未标记完成')
+        return
+      }
+    }
+    const updated = await onUpdateChapterState?.(chapter, nextState)
+    if (updated && nextState === 'done') {
+      onNotify('章节已完成，正在整理长期记忆…')
+      await extractMemories(updated, { automatic: true })
     }
   }
 
@@ -2167,18 +2809,165 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     })
   }
 
+  function appendLocalCommandResult(commandText, resultText) {
+    const id = `local-${Date.now()}`
+    setAssistantMessages((current) => [...current.slice(-18),
+      { id: `${id}-user`, role: 'user', text: commandText },
+      {
+        id,
+        role: 'agent',
+        status: 'completed',
+        text: resultText,
+        durationMs: 0,
+        statusMessage: '已在本地执行命令',
+        events: [{ id: `${id}:command`, type: 'lifecycle', label: '已在本地执行命令', status: 'completed' }],
+      },
+    ])
+    setAssistantInput('')
+    setAssistantAttachments([])
+    setAssistantSuggestion(null)
+  }
+
+  async function runLocalAssistantCommand(message) {
+    const command = parseSlashCommand(message)
+    if (!command || !['help', 'status', 'projects', 'use', 'chapters', 'chapter', 'draft', 'history', 'new', 'undo', 'apply', 'skills', 'tasks', 'task', 'cancel', 'retry', 'confirm', 'quit'].includes(command.name)) return false
+    if (command.name === 'quit') {
+      setAssistantOpen(false)
+      setAssistantInput('')
+      setAssistantSuggestion(null)
+      return true
+    }
+    if (command.name === 'new') {
+      await clearAssistant()
+      setAssistantInput('')
+      setAssistantAttachments([])
+      setAssistantSuggestion(null)
+      return true
+    }
+    if (command.name === 'undo') {
+      undoDraft()
+      appendLocalCommandResult(message, '已执行正文撤销。')
+      return true
+    }
+    if (command.name === 'apply') {
+      const run = [...assistantMessages].reverse().find((item) => {
+        const result = item.response?.result || {}
+        return item.role === 'agent' && !item.applied && (result.edit_proposal?.revised_text || result.output)
+      })
+      if (!run) throw new Error('当前没有可应用的正文建议')
+      const result = run.response?.result || {}
+      await applyAssistantRevision(run, result.edit_proposal?.revised_text || result.output)
+      setAssistantInput('')
+      setAssistantAttachments([])
+      setAssistantSuggestion(null)
+      return true
+    }
+    if (command.name === 'chapter') {
+      const target = resolveSelection(chapters, command.argument, '章节')
+      await selectEditorChapter(target)
+      appendLocalCommandResult(message, `已切换到《${target.title}》。`)
+      return true
+    }
+    if (command.name === 'use') {
+      const target = resolveSelection(projects, command.argument, '作品')
+      await onOpenProject?.(target)
+      appendLocalCommandResult(message, `已切换到《${target.title}》。`)
+      return true
+    }
+    if (command.name === 'help') {
+      appendLocalCommandResult(message, editorAgentCommands.map((item) => `${item.usage}　${item.description}`).join('\n'))
+      return true
+    }
+    if (command.name === 'status') {
+      const effort = agentReasoningOptions.find((item) => item.value === agentReasoningEffort)?.label || '自动'
+      appendLocalCommandResult(message, `作品：${project.title}\n章节：${displayChapter.title}\n正文：${wordCount.toLocaleString()} 字\n模型：${agentModel || '默认模型'}\n思考强度：${effort}`)
+      return true
+    }
+    if (command.name === 'chapters') {
+      appendLocalCommandResult(message, chapters.map((chapter, index) => `${String(index + 1).padStart(2, '0')}　${String(chapter.id) === String(displayChapter.id) ? '● ' : ''}${chapter.title}　${chapter.words || 0} 字`).join('\n') || '当前作品还没有章节。')
+      return true
+    }
+    if (command.name === 'projects') {
+      appendLocalCommandResult(message, projects.map((item, index) => `${String(index + 1).padStart(2, '0')}　${String(item.id) === String(project.id) ? '● ' : ''}${item.title}　${item.type} · ${item.genre}`).join('\n') || '当前还没有作品。')
+      return true
+    }
+    if (command.name === 'skills') {
+      const storySkills = skills.filter((skill) => skill.name?.startsWith('story') || skill.source === 'market')
+      appendLocalCommandResult(message, storySkills.length ? storySkills.map((skill) => `${skill.status === 'ready' ? '●' : '○'} ${skill.displayName || skill.name}　${skill.description || skill.status}`).join('\n') : '当前没有可用的 Story Skills。')
+      return true
+    }
+    if (command.name === 'tasks') {
+      const response = await api.getAiTasks(project.id)
+      const tasks = response.tasks || []
+      appendLocalCommandResult(message, tasks.length ? tasks.slice(0, 20).map((task) => `${task.id}　${task.status}　${task.skill || 'story'}\n${task.message || ''}`).join('\n\n') : '当前作品还没有 Agent 任务。')
+      return true
+    }
+    if (command.name === 'task') {
+      if (!command.argument) throw new Error('请提供任务 ID')
+      const response = await api.getAiTask(command.argument)
+      const task = response.task
+      appendLocalCommandResult(message, `任务：${task.id}\n状态：${task.status}\nSkill：${task.skill || 'story'}\n指令：${task.message || ''}\n${task.error || task.statusMessage || ''}`)
+      return true
+    }
+    if (command.name === 'cancel') {
+      const taskId = command.argument || assistantTaskIdRef.current
+      if (!taskId) throw new Error('没有可取消的任务，请提供任务 ID')
+      const response = await api.cancelAiTask(taskId)
+      appendLocalCommandResult(message, `任务 ${response.task.id} 当前状态：${response.task.status}`)
+      return true
+    }
+    if (command.name === 'retry') {
+      if (!command.argument) throw new Error('请提供任务 ID')
+      const response = await api.retryAiTask(command.argument)
+      appendLocalCommandResult(message, `任务已重新排队：${response.task.id}`)
+      return true
+    }
+    if (command.name === 'confirm') {
+      const response = await api.getWritingAssistantSession()
+      if (!response.session?.proposal) throw new Error('当前没有待确认的建书方案')
+      const created = await api.confirmWritingAssistant(response.session.id, response.session.proposal)
+      await onOpenProject?.(created.project)
+      appendLocalCommandResult(message, `《${created.project.title}》已创建并打开。`)
+      return true
+    }
+    if (command.name === 'draft') {
+      appendLocalCommandResult(message, draft ? `${draft.slice(0, 2400)}${draft.length > 2400 ? `\n\n…（共 ${draft.length} 字符）` : ''}` : '当前章节还没有正文。')
+      return true
+    }
+    if (command.name === 'history') {
+      const history = assistantMessages.filter((item) => item.role === 'user').slice(-8)
+      appendLocalCommandResult(message, history.length ? history.map((item, index) => `${index + 1}. ${item.text}`).join('\n') : '当前还没有对话历史。')
+      return true
+    }
+    return false
+  }
+
   async function submitAssistant(event, quickMessage = '') {
     event?.preventDefault()
     const message = String(quickMessage || assistantInput).trim()
     if (!message || assistantRunning || assistantLoading || draftLoading) return
+    try {
+      if (await runLocalAssistantCommand(message)) return
+    } catch (error) {
+      onNotify(error.message || '命令执行失败')
+      return
+    }
     const command = resolveEditorAgentCommand(message, project)
+    const explicitCommand = message.startsWith('/')
+    const modeSkill = !explicitCommand && agentMode === 'review'
+      ? 'story-review'
+      : !explicitCommand && agentMode === 'plan'
+        ? `story-${project?.type === '短篇' ? 'short' : 'long'}-analyze`
+        : command.skill
+    const effectiveSkill = agentWebSearch ? 'story-search' : modeSkill
     const textarea = textareaRef.current
     const selectionStart = textarea?.selectionStart ?? draft.length
     const selectionEnd = textarea?.selectionEnd ?? selectionStart
     const selectedText = draft.slice(selectionStart, selectionEnd)
-    const editRequested = isEditorAgentEdit(command.message, command.skill)
+    const editRequested = isEditorAgentEdit(command.message, effectiveSkill)
     const requestId = `agent-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const startedAt = performance.now()
+    const attachedFiles = assistantAttachments.map(({ key, name, kind, content }) => ({ key, name, kind, content }))
     const source = {
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
@@ -2186,11 +2975,14 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
       selectionStart,
       selectionEnd,
       selectedText,
+      attachedFiles: attachedFiles.map(({ name, kind }) => ({ name, kind })),
     }
     const userMessage = { id: `${requestId}-user`, role: 'user', text: message }
-    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, editRequested, requestedSkill: command.skill }
+    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, editRequested, requestedSkill: effectiveSkill }
     setAssistantMessages((current) => [...current.slice(-18), userMessage, runMessage])
     setAssistantInput('')
+    setAssistantAttachments([])
+    setAssistantSuggestion(null)
     setAssistantRunning(true)
     setAssistantElapsedMs(0)
     const controller = new AbortController()
@@ -2204,7 +2996,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
       setAssistantThread(thread)
       const created = await api.createAgentTurn(thread.id, {
         message: command.message,
-        skill: command.skill,
+        skill: effectiveSkill,
         payload: {
           project_id: project.id,
           chapter_id: displayChapter.id,
@@ -2217,6 +3009,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
           content: selectedText || draft,
           source_text: draft,
           selected_text: selectedText,
+          attached_files: attachedFiles,
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
@@ -2428,10 +3221,67 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   const projectForeshadows = foreshadows.filter((item) => item.projectId === project?.id)
   const characterIdeas = matchedIdeas.filter((idea) => /人物|角色|主角|配角/.test(`${idea.label}${idea.title}`))
   const termIdeas = matchedIdeas.filter((idea) => /词条|设定|世界|地点|规则/.test(`${idea.label}${idea.title}`))
+  const availableAgentModels = [...new Set([...(agentModel ? [agentModel] : []), ...agentModels])]
+  const agentModelOptions = [
+    { value: '', label: '默认模型', description: '使用连接设置中的默认模型', badge: '默认' },
+    ...availableAgentModels.map((model) => ({ value: model, label: model, description: '通过当前 API 连接提供' })),
+  ]
+  const agentSessionUsage = assistantMessages
+    .filter((message) => message.role === 'agent')
+    .reduce((total, run) => {
+      const usage = agentRunTokenUsage(run)
+      total.inputTokens += usage.inputTokens
+      total.outputTokens += usage.outputTokens
+      total.cachedInputTokens += usage.cachedInputTokens
+      total.reasoningTokens += usage.reasoningTokens
+      total.estimated ||= usage.estimated
+      return total
+    }, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, estimated: false })
+  const latestAgentRun = [...assistantMessages].reverse().find((message) => message.role === 'agent')
+  const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
+  const agentContextUsed = Math.max(0, latestAgentUsage
+    ? latestAgentUsage.inputTokens + latestAgentUsage.outputTokens
+    : Math.ceil(String(draft || '').length / 2.2))
+  const agentContextPercent = Math.min(100, Math.round((agentContextUsed / Math.max(100, agentContextWindow)) * 100))
+  const agentContextLabel = `上下文已使用 ${agentContextPercent}% · ${compactTokenCount(agentContextUsed)} / ${compactTokenCount(agentContextWindow)} Tokens`
+  const agentFileOptions = [
+    {
+      key: `project:${project.id}`,
+      name: `${project.title}.story.md`,
+      kind: '作品设定',
+      description: `${project.type} · ${project.genre} · 作品设定`,
+      content: `# ${project.title}\n\n篇幅：${project.type}\n题材：${project.genre}\n流派：${project.style || '未设置'}\n创作基调：${project.tone || '未设置'}`,
+    },
+    ...chapters.map((chapter) => ({
+      key: `chapter:${chapter.id}`,
+      name: `${String(chapter.id).padStart(2, '0')}-${chapter.title}.md`,
+      kind: '章节正文',
+      description: `${String(chapter.id) === String(displayChapter.id) ? '当前章节 · ' : ''}${chapter.words || 0} 字`,
+      chapterId: chapter.id,
+    })),
+  ]
+  const suggestionQuery = assistantSuggestion?.query || ''
+  const agentSkillCommands = skills
+    .filter((skill) => skill.name?.startsWith('story') || skill.source === 'market')
+    .map((skill) => ({
+      name: `skill:${skill.name}`,
+      usage: skill.name,
+      description: skill.source === 'market' ? `社区 Skill · ${skill.displayName || skill.name}` : skill.description || '运行这个 Story Skill',
+      insertText: `/skill ${skill.name} `,
+      kind: 'skill',
+      status: skill.status,
+    }))
+  const filteredAgentCommands = [...editorAgentCommands, ...agentSkillCommands]
+    .filter((command) => !suggestionQuery || command.name.includes(suggestionQuery) || command.description.includes(suggestionQuery))
+    .slice(0, 40)
+  const filteredAgentFiles = agentFileOptions
+    .filter((file) => !suggestionQuery || `${file.name} ${file.kind} ${file.description}`.toLowerCase().includes(suggestionQuery))
+    .slice(0, 40)
   const anchorIdeas = matchedIdeas.filter((idea) => idea.pinned || /剧情|冲突|场景|线索|锚点/.test(`${idea.label}${idea.title}${(idea.tags || []).join('')}`)).slice(0, 4)
   const searchCount = searchQuery.trim() ? (draft.toLowerCase().match(new RegExp(searchQuery.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length : 0
   const splitBefore = draft.slice(0, splitPosition).trim()
   const splitAfter = draft.slice(splitPosition).trim()
+  const editorTabs = openChapterIds.map((id) => chapters.find((chapter) => String(chapter.id) === String(id))).filter(Boolean)
 
   function openForeshadowEditor(target = null) {
     setForeshadowTarget(target)
@@ -2440,7 +3290,23 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
 
   return <>
     <div className={`page editor-page ${readingMode ? 'reading-mode' : ''} ${assistantOpen ? '' : 'assistant-hidden'}`}>
+      <div className="editor-document-tabs" aria-label="已打开章节">
+        {editorTabs.map((chapter) => {
+          const current = String(chapter.id) === String(displayChapter.id)
+          return <div className={`editor-document-tab ${current ? 'active' : ''}`} key={chapter.id}>
+            <button type="button" className="editor-document-tab-main" onClick={() => selectEditorChapter(chapter)} disabled={draftLoading && !current}>
+              <FileText size={13} />
+              <span>{chapter.title}</span>
+            </button>
+            <button type="button" className="editor-tab-close" aria-label={`关闭 ${chapter.title}`} title="关闭标签" onClick={(event) => closeEditorTab(event, chapter)}><X size={12} /></button>
+          </div>
+        })}
+        <button type="button" className="editor-new-tab" aria-label="新建章节" title="新建章节" onClick={onNewChapter}><Plus size={16} /></button>
+      </div>
+
       <div className="editor-topline">
+        <button type="button" className="mobile-chapter-button icon-button" aria-label="打开章节目录" title="打开章节目录" onClick={() => setMobileRailOpen(true)}><PanelLeft size={17} /></button>
+        <div className="editor-document-context"><span>{project?.title}</span><ChevronRight size={13} /><strong>{displayChapter.title}</strong></div>
         {lastAiRestore && String(lastAiRestore.chapterId) === String(displayChapter.id) && <button className="ai-restore-button" onClick={() => { commitDraftChange(lastAiRestore.content); onAiRestored?.(); onNotify('已恢复应用 AI 修改前的正文') }}><Undo2 size={14} />恢复 AI 修改前正文</button>}
         <button className="editor-status" onClick={() => draftStatus === 'error' && onSave()} title={draftStatus === 'error' ? '点击重试保存' : statusText}>
           <span className={draftStatus === 'saved' ? 'saved-dot' : 'unsaved-dot'} />{draftLoading ? '正在载入章节' : statusText}
@@ -2449,21 +3315,6 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
           <button className="icon-button" aria-label="导出本章" title="导出本章" onClick={exportChapter}><Download size={17} /></button>
           <button className="icon-button" aria-label="导出全书" title="导出全书" disabled={exportingBook || draftLoading} onClick={exportProject}>{exportingBook ? <LoaderCircle size={17} className="spin" /> : <BookOpen size={17} />}</button>
           <button className="dark-button save-button" disabled={draftLoading || saveBusy} onClick={() => onSave()}>{saveBusy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{saveBusy ? '保存中' : '保存'}</button>
-        </div>
-      </div>
-
-      <div className="editor-heading">
-        <div><span className="section-overline">{project?.title} · 第 {displayChapter.id} 章</span><h1>{displayChapter.title}</h1></div>
-        <div className="workspace-chapter-picker">
-          <select aria-label="当前章节" value={String(displayChapter.id)} disabled={draftLoading} onChange={(event) => {
-            const chapter = chapters.find((item) => String(item.id) === event.target.value)
-            if (chapter) void selectEditorChapter(chapter)
-          }}>
-            {chapters.map((chapter) => <option key={chapter.id} value={String(chapter.id)}>{chapter.title}</option>)}
-          </select>
-          <span>{chapters.length ? activeIndex + 1 : 0} / {chapters.length}</span>
-          <button type="button" className="icon-button small" aria-label="新建章节" title="新建章节" onClick={onNewChapter}><Plus size={15} /></button>
-          <button type="button" className="icon-button small" aria-label="章节大纲" title="章节大纲" onClick={() => setOutlineOpen(true)}><List size={15} /></button>
         </div>
       </div>
 
@@ -2491,14 +3342,14 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
                   <span className="chapter-words">{chapter.words} 字 · {chapter.state === 'done' ? '已完成' : '草稿'}</span>
                 </button>
                 <button className="chapter-menu-btn" aria-label="章节操作" title="章节操作" onClick={(event) => { event.stopPropagation(); setMenuOpenId(menuOpenId === chapter.id ? null : chapter.id) }}><MoreHorizontal size={14} /></button>
-                {menuOpenId === chapter.id && <div className="chapter-menu" role="menu"><button onClick={() => startRename(chapter)}>重命名</button><button onClick={() => { onUpdateChapterState?.(chapter, chapter.state === 'done' ? 'draft' : 'done'); setMenuOpenId(null) }}>{chapter.state === 'done' ? '恢复为草稿' : '标记为完成'}</button><button className="danger" onClick={() => { setDeleteTarget(chapter); setMenuOpenId(null) }}>删除</button></div>}
+                {menuOpenId === chapter.id && <div className="chapter-menu" role="menu"><button onClick={() => startRename(chapter)}>重命名</button><button onClick={() => void toggleChapterCompletion(chapter)}>{chapter.state === 'done' ? '恢复为草稿' : '标记为完成'}</button><button className="danger" onClick={() => { setDeleteTarget(chapter); setMenuOpenId(null) }}>删除</button></div>}
               </div>
             })}
           </div>}
           {railTab === '大纲' && <div className="rail-outline-list">{chapters.length ? chapters.map((chapter) => <button key={chapter.id} onClick={() => selectEditorChapter(chapter)}><span>{String(chapter.id).padStart(2, '0')}</span><strong>{chapter.title}</strong><small>{chapter.words} 字</small></button>) : <p className="rail-empty">还没有章节大纲。</p>}</div>}
           {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
           {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
-          {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={extractMemories} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
+          {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={() => void extractMemories()} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
           {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}
         </aside>
@@ -2512,9 +3363,20 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
             </div>
             <span className="toolbar-divider" />
             <div className="toolbar-group">
-              <button className="toolbar-button active" aria-label="正文样式" title="正文样式" disabled><Type size={16} /></button>
-              <button className="toolbar-button" aria-label="加粗" title="为选中文字添加 Markdown 加粗" onClick={() => applyFormat('**')}><strong>B</strong></button>
-              <button className="toolbar-button" aria-label="斜体" title="为选中文字添加 Markdown 斜体" onClick={() => applyFormat('_')}><Italic size={16} /></button>
+              <div className="editor-style-anchor">
+                <button className={`toolbar-button ${styleMenuOpen || editorFontSize !== 16 || editorLineHeight !== 2.05 ? 'active' : ''}`} aria-label="正文样式" aria-expanded={styleMenuOpen} title="调整正文字号与行距" onClick={() => setStyleMenuOpen((open) => !open)}><Type size={16} /></button>
+                {styleMenuOpen && <div className="editor-style-menu" role="dialog" aria-label="正文样式设置">
+                  <div className="editor-style-menu-heading"><strong>正文样式</strong><button type="button" aria-label="关闭正文样式" onClick={() => setStyleMenuOpen(false)}><X size={13} /></button></div>
+                  <p className="editor-style-note">仅调整编辑区显示，不写入正文。</p>
+                  <span>字号</span>
+                  <div className="editor-style-options">{[{ value: 15, label: '小' }, { value: 16, label: '标准' }, { value: 18, label: '大' }].map((option) => <button type="button" key={option.value} className={editorFontSize === option.value ? 'active' : ''} onClick={() => { setEditorFontSize(option.value); onNotify(`正文字号已切换为${option.label}`) }}>{option.label}</button>)}</div>
+                  <span>行距</span>
+                  <div className="editor-style-options">{[{ value: 1.8, label: '紧凑' }, { value: 2.05, label: '舒适' }, { value: 2.35, label: '宽松' }].map((option) => <button type="button" key={option.value} className={editorLineHeight === option.value ? 'active' : ''} onClick={() => { setEditorLineHeight(option.value); onNotify(`正文行距已切换为${option.label}`) }}>{option.label}</button>)}</div>
+                  {/\*\*[^*\n]+\*\*|_[^_\n]+_/.test(draft) && <button type="button" className="editor-clean-markers" onClick={cleanInlineMarkdownMarkers}><Wand2 size={13} />清理正文中的 ** / _ 标记</button>}
+                </div>}
+              </div>
+              <button className={`toolbar-button ${editorBold ? 'active' : ''}`} aria-pressed={editorBold} aria-label="加粗显示" title="整篇加粗显示，不修改正文（Ctrl+B）" onClick={toggleEditorBold}><strong>B</strong></button>
+              <button className={`toolbar-button ${editorItalic ? 'active' : ''}`} aria-pressed={editorItalic} aria-label="斜体显示" title="整篇斜体显示，不修改正文（Ctrl+I）" onClick={toggleEditorItalic}><Italic size={16} /></button>
             </div>
             <span className="toolbar-divider" />
             <div className="toolbar-group">
@@ -2528,7 +3390,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
               <button className="toolbar-button" aria-label="高频词分析" title="高频词分析" onClick={() => frequentWords.length ? setFrequencyOpen(true) : onNotify('当前正文还没有可分析的重复词')}><Highlighter size={15} /></button>
               <button className="toolbar-button" aria-label="自动排版" title="自动排版" onClick={autoFormatChapter}><AlignLeft size={15} /></button>
               <button className="toolbar-button" aria-label="按光标拆章" title="按光标拆章（本地操作）" onClick={openSplitDialog}><Split size={15} /></button>
-              <button className="toolbar-button" aria-label="朗读本章" title="朗读本章" onClick={readChapterAloud}><Volume2 size={15} /></button>
+              <button className={`toolbar-button ${speaking ? 'active speaking' : ''}`} aria-label={speaking ? '停止朗读' : '朗读本章'} title={speaking ? '停止朗读' : '朗读本章'} onClick={readChapterAloud}><Volume2 size={15} /></button>
             </div>
             <span className="toolbar-spacer" />
             <div className="toolbar-group toolbar-group-end">
@@ -2544,7 +3406,11 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
           {searchOpen && <div className="editor-searchbar"><Search size={14} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); jumpToSearch(event.shiftKey ? -1 : 1) } }} placeholder="搜索本章正文…" aria-label="搜索本章正文" /><span>{searchCount ? `${searchCount} 处` : searchQuery ? '未找到' : '输入关键词'}</span><button className="icon-button small" aria-label="上一个搜索结果" title="上一个" onClick={() => jumpToSearch(-1)}><ChevronLeft size={15} /></button><button className="icon-button small" aria-label="下一个搜索结果" title="下一个" onClick={() => jumpToSearch(1)}><ChevronRight size={15} /></button><button className="icon-button small" aria-label="关闭搜索" title="关闭搜索" onClick={() => { setSearchOpen(false); setSearchQuery('') }}><X size={14} /></button></div>}
           <div className="writing-body">
             {draftLoading && <div className="writing-loading"><LoaderCircle size={19} className="spin" /><span>正在载入章节正文</span></div>}
-            <textarea ref={textareaRef} value={draft} onChange={(event) => handleDraftInput(event.target.value)} onKeyDown={handleEditorKeyDown} disabled={draftLoading} spellCheck="false" aria-label="章节正文" placeholder="开始写下这一章的正文…" />
+            <header className="manuscript-heading">
+              <span>{project?.title} · 第 {displayChapter.id} 章</span>
+              <h1>{displayChapter.title}</h1>
+            </header>
+            <textarea ref={textareaRef} value={draft} onChange={(event) => handleDraftInput(event.target.value)} onKeyDown={handleEditorKeyDown} disabled={draftLoading} spellCheck="false" aria-label="章节正文" placeholder="开始写下这一章的正文…" style={{ fontSize: `${editorFontSize}px`, lineHeight: editorLineHeight, fontWeight: editorBold ? 700 : 400, fontStyle: editorItalic ? 'italic' : 'normal' }} />
             <div className="writing-footer"><span><FileText size={14} />{wordCount.toLocaleString()} 字</span><span><Clock3 size={14} />预计阅读 {readMinutes} 分钟</span><span className="footer-hint">Ctrl / ⌘ + S 保存 · Z 撤销</span></div>
           </div>
         </section>
@@ -2555,6 +3421,25 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
               <div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>AGENT</span></div>
               <div><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
             </div>
+            <div className="agent-session-strip">
+              <div className="agent-token-usage" title={agentSessionUsage.estimated ? '部分模型未返回 usage，缺失部分为估算值' : '模型返回的 Token 用量'}>
+                <span>Tokens{agentSessionUsage.estimated && agentSessionUsage.inputTokens ? ' ≈' : ''}</span>
+                <span>↑ {compactTokenCount(agentSessionUsage.inputTokens)}</span>
+                <span>↓ {compactTokenCount(agentSessionUsage.outputTokens)}</span>
+                <span>◇ {compactTokenCount(agentSessionUsage.cachedInputTokens)}</span>
+                {agentSessionUsage.reasoningTokens > 0 && <span>◈ {compactTokenCount(agentSessionUsage.reasoningTokens)}</span>}
+              </div>
+              <button type="button" className={`agent-context-progress ${assistantRunning ? 'running' : ''}`} title={agentContextLabel} aria-label={agentContextLabel} onClick={onOpenSettings}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle className="agent-context-track" cx="12" cy="12" r="9" pathLength="100" />
+                  <circle className="agent-context-value" cx="12" cy="12" r="9" pathLength="100" strokeDasharray={`${agentContextPercent} 100`} />
+                </svg>
+              </button>
+            </div>
+            {assistantThread?.compactedTurnCount > 0 && <div className="agent-compaction-note" title={assistantThread.contextSummary || '较早对话已压缩为滚动摘要，并会继续参与后续写作'}>
+              <BrainCircuit size={12} />
+              <span>已压缩 {assistantThread.compactedTurnCount} 轮上下文 · 摘要持续参与写作</span>
+            </div>}
             <div className="agent-conversation" ref={assistantStreamRef}>
               {assistantLoading && <div className="agent-empty"><LoaderCircle size={20} className="spin" /><strong>正在恢复会话</strong><p>读取本章的 Agent Turn 与任务状态。</p></div>}
               {!assistantLoading && assistantMessages.length === 0 && <div className="agent-empty">
@@ -2574,8 +3459,90 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
             <div className="agent-composer-wrap">
               <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span><small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
               <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
-                <textarea value={assistantInput} disabled={assistantRunning || assistantLoading} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submitAssistant(event) }} rows={3} placeholder="让 Agent 续写、审查或修改…" aria-label="输入问题或需求" />
-                <div><span><Code2 size={12} /> 本地 Story Skills</span>{assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}</div>
+                <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
+                {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
+                <textarea
+                  ref={assistantInputRef}
+                  value={assistantInput}
+                  disabled={assistantRunning || assistantLoading}
+                  onChange={handleAssistantInputChange}
+                  onClick={(event) => refreshAssistantSuggestion(event.currentTarget.value, event.currentTarget.selectionStart)}
+                  onKeyDown={handleAssistantComposerKeyDown}
+                  rows={3}
+                  placeholder="让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令"
+                  aria-label="输入问题或需求"
+                  aria-autocomplete="list"
+                  aria-expanded={Boolean(assistantSuggestion)}
+                />
+                {assistantSuggestion && <div className="agent-composer-suggestions" role="listbox" aria-label={assistantSuggestion.type === 'command' ? '命令建议' : '文件建议'}>
+                  <div className="agent-suggestion-list">
+                    {assistantSuggestion.type === 'command' ? <>
+                      {filteredAgentCommands.some((item) => item.kind === 'command') && <div className="agent-suggestion-section-label">命令</div>}
+                      {filteredAgentCommands.filter((item) => item.kind === 'command').map((command) => {
+                        const index = filteredAgentCommands.indexOf(command)
+                        return <button type="button" role="option" aria-selected={index === assistantSuggestionIndex} className={index === assistantSuggestionIndex ? 'active' : ''} key={command.name} onMouseEnter={() => setAssistantSuggestionIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => selectAssistantCommand(command)}><Command size={13} /><strong>{command.usage}</strong><small>{command.description}</small></button>
+                      })}
+                      {filteredAgentCommands.some((item) => item.kind === 'skill') && <div className="agent-suggestion-section-label">Skills</div>}
+                      {filteredAgentCommands.filter((item) => item.kind === 'skill').map((command) => {
+                        const index = filteredAgentCommands.indexOf(command)
+                        return <button type="button" role="option" aria-selected={index === assistantSuggestionIndex} className={index === assistantSuggestionIndex ? 'active' : ''} key={command.name} onMouseEnter={() => setAssistantSuggestionIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => selectAssistantCommand(command)}><Sparkles size={13} /><strong>{command.usage}</strong><small>{command.description}</small><em>{command.status === 'ready' ? '可用' : command.status === 'needs_model' ? '需模型' : command.status || '已安装'}</em></button>
+                      })}
+                    </> : <>
+                      <div className="agent-suggestion-section-label">添加</div>
+                      <button type="button" role="option" aria-selected={assistantSuggestionIndex === 0} className={`agent-external-file-option ${assistantSuggestionIndex === 0 ? 'active' : ''}`} onMouseEnter={() => setAssistantSuggestionIndex(0)} onMouseDown={(event) => event.preventDefault()} onClick={openExternalFilePicker}><Paperclip size={13} /><strong>文件</strong><small>从电脑选择文本文件</small></button>
+                      <div className="agent-suggestion-section-label">当前作品</div>
+                      {filteredAgentFiles.map((file, fileIndex) => {
+                        const index = fileIndex + 1
+                        return <button type="button" role="option" aria-selected={index === assistantSuggestionIndex} className={index === assistantSuggestionIndex ? 'active' : ''} key={file.key} onMouseEnter={() => setAssistantSuggestionIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => void selectAssistantFile(file)}><FileText size={13} /><strong>{file.name}</strong><small>{file.kind} · {file.description}</small>{assistantAttachments.some((item) => item.key === file.key) && <Check size={12} />}</button>
+                      })}
+                    </>}
+                    {((assistantSuggestion.type === 'command' && !filteredAgentCommands.length) || (assistantSuggestion.type === 'file' && !filteredAgentFiles.length)) && <div className="agent-suggestion-empty">没有匹配项</div>}
+                    {assistantAttachmentLoading && <div className="agent-suggestion-loading"><LoaderCircle size={13} className="spin" />正在读取文件</div>}
+                  </div>
+                  <div className="agent-suggestion-footer"><span><kbd>↑</kbd><kbd>↓</kbd>选择</span><span><kbd>↵</kbd>确认</span><span><kbd>Esc</kbd>关闭</span></div>
+                </div>}
+                <div className="agent-composer-footer">
+                  <div className="agent-composer-controls" ref={agentControlsRef}>
+                    <button type="button" className={`agent-mode-trigger ${agentPickerOpen === 'mode' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'mode'} onClick={() => toggleAgentPicker('mode')} title="选择执行模式"><UserRound size={13} /><span>{agentModeOptions.find((option) => option.value === agentMode)?.label || 'Build'}</span></button>
+                    <button type="button" className={`agent-tool-button ${agentWebSearch ? 'active' : ''}`} aria-pressed={agentWebSearch} onClick={() => setAgentWebSearch((active) => !active)} title={agentWebSearch ? '关闭联网搜索' : '开启联网搜索'}><Globe size={13} /><span>联网</span></button>
+                    <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
+                      <Bot size={13} />
+                      <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
+                      <ChevronDown size={11} />
+                    </button>
+                    <button type="button" className={`agent-control-trigger reasoning ${agentPickerOpen === 'reasoning' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'reasoning'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('reasoning')} title="选择思考强度">
+                      <BrainCircuit size={13} />
+                      <span>{agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || '自动'}</span>
+                      <ChevronDown size={11} />
+                    </button>
+                    {agentPickerOpen === 'model' && <AgentComposerMenu
+                      title="选择模型"
+                      description="模型来自当前 API 连接"
+                      options={agentModelOptions}
+                      value={agentModel}
+                      loading={agentModelsLoading}
+                      onSelect={(value) => { setAgentPickerOpen(null); updateAgentSetting('model', value) }}
+                    />}
+                    {agentPickerOpen === 'reasoning' && <AgentComposerMenu
+                      title="思考强度"
+                      description="强度越高，通常耗时和 token 越多"
+                      options={agentReasoningOptions}
+                      value={agentReasoningEffort}
+                      loading={false}
+                      onSelect={(value) => { setAgentPickerOpen(null); updateAgentSetting('reasoningEffort', value) }}
+                    />}
+                    {agentPickerOpen === 'mode' && <AgentComposerMenu
+                      title="执行模式"
+                      description="决定普通消息的默认处理方式"
+                      options={agentModeOptions}
+                      value={agentMode}
+                      loading={false}
+                      onSelect={(value) => { setAgentMode(value); setAgentPickerOpen(null) }}
+                    />}
+                    <button type="button" className="agent-tool-button icon-only" onClick={onOpenSettings} title="打开模型设置" aria-label="打开模型设置"><Settings2 size={14} /></button>
+                  </div>
+                  {assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}
+                </div>
               </form>
             </div>
           </> : <button className="assistant-reopen" aria-label={`展开${ASSISTANT_NAME}`} title={`展开${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}
@@ -2780,6 +3747,240 @@ function MaterialPicker({ ideas, projectId, onClose, onInsert }) {
           <ArrowUpRight size={15} />
         </button>) : <div className="empty-state small"><Library size={20} /><p>{ideas.length ? '没有匹配的素材。' : '素材库为空，先去“素材与灵感”新增内容。'}</p></div>}
       </div>
+    </div>
+  </div>
+}
+
+function formatFileSize(value) {
+  const bytes = Math.max(0, Number(value) || 0)
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${bytes} B`
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '')
+    reader.onerror = () => reject(new Error('读取 Skill 文件失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function SkillMarket({ user, onNotify, onSkillsChanged }) {
+  const [items, setItems] = useState([])
+  const [categories, setCategories] = useState(['写作', '审稿', '人物', '世界观', '效率', '其他'])
+  const [reviewConfig, setReviewConfig] = useState({ mode: 'optional', configured: false, provider: 'static' })
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+  const [category, setCategory] = useState('')
+  const [mineOnly, setMineOnly] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [installingId, setInstallingId] = useState(null)
+  const [reviewingId, setReviewingId] = useState(null)
+
+  async function loadMarket() {
+    setLoading(true)
+    try {
+      const response = await api.getSkillMarket()
+      setItems(response.items || [])
+      if (response.categories?.length) setCategories(response.categories)
+      if (response.review) setReviewConfig(response.review)
+    } catch (error) {
+      onNotify(error.message || '技能市场读取失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void loadMarket() }, [])
+
+  const normalizedQuery = query.trim().toLowerCase()
+  const filtered = items.filter((item) => {
+    const haystack = [item.name, item.description, item.category, item.author?.name, ...(item.tags || [])].join(' ').toLowerCase()
+    return (!normalizedQuery || haystack.includes(normalizedQuery))
+      && (!category || item.category === category)
+      && (!mineOnly || item.isOwner)
+  })
+
+  async function installSkill(item) {
+    setInstallingId(item.id)
+    try {
+      const response = await api.installMarketSkill(item.id)
+      setItems((current) => current.map((entry) => entry.id === item.id ? response.item : entry))
+      await onSkillsChanged?.({ notifyResult: false })
+      onNotify(`已导入 ${item.name}，现在可以在 Skill 选择器中使用`)
+    } catch (error) {
+      onNotify(error.message || 'Skill 导入失败')
+    } finally {
+      setInstallingId(null)
+    }
+  }
+
+  async function uninstallSkill(item) {
+    setInstallingId(item.id)
+    try {
+      await api.uninstallMarketSkill(item.id)
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, installed: false, installCount: Math.max(0, Number(entry.installCount || 0) - 1) } : entry))
+      await onSkillsChanged?.({ notifyResult: false })
+      onNotify(`已从能力目录移除 ${item.name}`)
+    } catch (error) {
+      onNotify(error.message || 'Skill 移除失败')
+    } finally {
+      setInstallingId(null)
+    }
+  }
+
+  async function reviewAgain(item) {
+    setReviewingId(item.id)
+    try {
+      const response = await api.reviewMarketSkill(item.id)
+      setItems((current) => current.map((entry) => entry.id === item.id ? response.item : entry))
+      onNotify(`安全审查通过，${item.name} 已上架`)
+    } catch (error) {
+      onNotify(error.message || 'Skill 审查未通过')
+      await loadMarket()
+    } finally {
+      setReviewingId(null)
+    }
+  }
+
+  async function deleteSkill() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await api.deleteMarketSkill(deleteTarget.id)
+      setItems((current) => current.filter((item) => item.id !== deleteTarget.id))
+      onNotify(`已下架 ${deleteTarget.name}`)
+      setDeleteTarget(null)
+    } catch (error) {
+      onNotify(error.message || 'Skill 下架失败')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const listedItems = items.filter((item) => item.isListed)
+  const totalInstalls = listedItems.reduce((sum, item) => sum + Number(item.installCount || 0), 0)
+  const creatorCount = new Set(listedItems.map((item) => item.author?.id).filter(Boolean)).size
+
+  return <>
+    <div className="page inner-page skill-market-page">
+      <div className="page-heading">
+        <div><span className="section-overline">COMMUNITY SKILLS</span><h1>技能市场</h1><p>发现其他作者分享的创作工作流，也可以发布自己的 Skill。</p></div>
+        <button className="primary-button" onClick={() => setUploadOpen(true)}><UploadCloud size={17} />上传 Skill</button>
+      </div>
+
+      <section className="skill-market-overview">
+        <div><Store size={21} /><span><strong>{listedItems.length}</strong><small>已上架技能</small></span></div>
+        <div><UsersRound size={21} /><span><strong>{creatorCount}</strong><small>社区作者</small></span></div>
+        <div><Download size={21} /><span><strong>{formatNumber(totalInstalls)}</strong><small>累计导入</small></span></div>
+        <p className={reviewConfig.configured ? 'review-ready' : 'review-basic'}>
+          {reviewConfig.configured ? <ShieldCheck size={15} /> : <ShieldAlert size={15} />}
+          {reviewConfig.configured
+            ? '发布前先做归档检查与专用模型严格安全审查；高风险内容不会进入市场。'
+            : '当前仅启用基础文件审查；生产部署应配置专用审查模型后再开放上传。'}
+        </p>
+      </section>
+
+      <div className="skill-market-toolbar">
+        <div className="library-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索技能、作者或标签…" aria-label="搜索技能市场" /></div>
+        <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="按技能分类筛选"><option value="">全部分类</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+        <button className={mineOnly ? 'selected' : ''} onClick={() => setMineOnly((value) => !value)}><UserRound size={14} />只看我的</button>
+      </div>
+
+      {loading ? <div className="skill-market-loading"><LoaderCircle size={22} className="spin" /><span>正在读取社区 Skill</span></div>
+        : filtered.length ? <div className="skill-market-grid">{filtered.map((item) => <article className={`market-skill-card ${item.isListed ? '' : 'pending'}`} key={item.id}>
+          <div className="market-skill-top">
+            <span className="market-skill-icon"><Package size={20} /></span>
+            <span className="market-category">{item.category}</span>
+            <span className={`market-review-badge ${item.isListed ? 'verified' : 'pending'}`}>
+              {item.isListed ? <ShieldCheck size={10} /> : <ShieldAlert size={10} />}
+              {item.isListed ? '审查通过' : '待模型审查'}
+            </span>
+            {item.isOwner && <span className="market-owner">我的</span>}
+          </div>
+          <h2>{item.name}</h2>
+          <p>{item.description}</p>
+          <div className="market-skill-tags">{(item.tags || []).map((tag) => <span key={tag}>#{tag}</span>)}</div>
+          <dl>
+            <div><dt>作者</dt><dd>{item.author?.name || '匿名作者'}</dd></div>
+            <div><dt>版本</dt><dd>v{item.version}</dd></div>
+            <div><dt>文件</dt><dd>{formatFileSize(item.fileSize)}</dd></div>
+          </dl>
+          <footer>
+            <span><Download size={13} />{formatNumber(item.installCount)} 次导入</span>
+            {item.isOwner && <button type="button" className="market-delete" onClick={() => setDeleteTarget(item)}>下架</button>}
+            {!item.isListed && item.isOwner && <button type="button" className="market-download" disabled={reviewingId === item.id} onClick={() => reviewAgain(item)}>{reviewingId === item.id ? <LoaderCircle size={14} className="spin" /> : <ShieldCheck size={14} />}{reviewingId === item.id ? '审查中' : '重新审查'}</button>}
+            {item.isListed && item.installed && <button type="button" className="market-installed" disabled={installingId === item.id} onClick={() => uninstallSkill(item)}>{installingId === item.id ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}{installingId === item.id ? '处理中' : '已导入 · 移除'}</button>}
+            {item.isListed && !item.installed && <button type="button" className="market-download" disabled={installingId === item.id} onClick={() => installSkill(item)}>{installingId === item.id ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}{installingId === item.id ? '导入中' : '导入使用'}</button>}
+          </footer>
+        </article>)}</div>
+          : <div className="empty-state skill-market-empty"><Package size={27} /><h2>{items.length ? '没有匹配的 Skill' : '技能市场还没有内容'}</h2><p>{items.length ? '调整搜索词或筛选条件再试试。' : '成为第一个分享创作 Skill 的作者。'}</p><button className="primary-button" onClick={() => setUploadOpen(true)}><UploadCloud size={16} />上传第一个 Skill</button></div>}
+    </div>
+
+    {uploadOpen && <SkillUploadModal categories={categories} reviewConfig={reviewConfig} user={user} onClose={() => setUploadOpen(false)} onUploaded={(item) => { setItems((current) => [item, ...current]); setUploadOpen(false); onNotify(item.isListed ? `安全审查通过，已上架 ${item.name}` : `${item.name} 已保存，等待专用模型审查后上架`) }} />}
+    {deleteTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !deleting && setDeleteTarget(null)}><div className="modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">下架技能</span><h2>下架《{deleteTarget.name}》？</h2></div><button className="icon-button" disabled={deleting} aria-label="关闭" onClick={() => setDeleteTarget(null)}><X size={18} /></button></div><p className="confirm-text">下架后其他用户将无法继续下载，已下载到本地的文件不会被删除。</p><div className="modal-actions"><button className="secondary-button" disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button><button className="dark-button danger-button" disabled={deleting} onClick={deleteSkill}>{deleting ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}{deleting ? '下架中' : '确认下架'}</button></div></div></div>}
+  </>
+}
+
+function SkillUploadModal({ categories, reviewConfig, user, onClose, onUploaded }) {
+  const [form, setForm] = useState({ name: '', description: '', version: '1.0.0', category: '写作', tags: '' })
+  const [file, setFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit(event) {
+    event.preventDefault()
+    setError('')
+    if (!file) {
+      setError('请选择一个 .md、.markdown 或 .zip Skill 文件')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Skill 文件不能超过 2 MB')
+      return
+    }
+    setUploading(true)
+    try {
+      const contentBase64 = await readFileAsBase64(file)
+      const response = await api.uploadMarketSkill({
+        ...form,
+        tags: form.tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+        fileName: file.name,
+        contentBase64,
+      })
+      onUploaded(response.item)
+    } catch (uploadError) {
+      setError(uploadError.message || 'Skill 上传失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return <div className="modal-backdrop skill-upload-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !uploading && onClose()}>
+    <div className="modal skill-upload-modal" role="dialog" aria-modal="true" aria-labelledby="skill-upload-title">
+      <div className="modal-heading"><div><span className="section-overline">发布到社区</span><h2 id="skill-upload-title">上传 Skill</h2><p className="skill-upload-author">发布者：{user?.name}</p></div><button className="icon-button" disabled={uploading} aria-label="关闭" onClick={onClose}><X size={18} /></button></div>
+      <form onSubmit={submit}>
+        <div className="form-row"><label>Skill 名称<input autoFocus value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} maxLength={80} placeholder="例如：长篇伏笔检查" required /></label><label>版本号<input value={form.version} onChange={(event) => setForm((current) => ({ ...current, version: event.target.value }))} maxLength={32} placeholder="1.0.0" required /></label></div>
+        <label>简介<textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={4} placeholder="说明这个 Skill 能解决什么问题、适合什么场景…" required /></label>
+        <div className="form-row"><label>分类<select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>{categories.map((item) => <option key={item}>{item}</option>)}</select></label><label>标签<input value={form.tags} onChange={(event) => setForm((current) => ({ ...current, tags: event.target.value }))} placeholder="长篇，伏笔，连续性" /></label></div>
+        <label className={`skill-file-picker ${file ? 'selected' : ''}`}>
+          <input type="file" accept=".md,.markdown,.zip,text/markdown,application/zip" onChange={(event) => { setFile(event.target.files?.[0] || null); setError('') }} />
+          <UploadCloud size={24} />
+          <span><strong>{file ? file.name : '选择 Skill 文件'}</strong><small>{file ? `${formatFileSize(file.size)} · 点击可更换` : '支持 Markdown 或 ZIP，最大 2 MB'}</small></span>
+        </label>
+        <div className="skill-upload-safety">
+          {reviewConfig.configured ? <ShieldCheck size={15} /> : <ShieldAlert size={15} />}
+          <span>{reviewConfig.configured
+            ? '提交后将先进行归档规则扫描和专用模型严格安全审查。内容不会自动执行，只有审查通过才会发布。'
+            : '当前开发环境未配置专用审查模型，将只进行基础归档与秘密信息检查；生产环境会安全地阻止未审查发布。'}</span>
+        </div>
+        {error && <p className="skill-upload-error">{error}</p>}
+        <div className="modal-actions"><button type="button" className="secondary-button" disabled={uploading} onClick={onClose}>取消</button><button type="submit" className="dark-button" disabled={uploading}>{uploading ? <LoaderCircle size={15} className="spin" /> : <UploadCloud size={15} />}{uploading ? '上传中' : '发布 Skill'}</button></div>
+      </form>
     </div>
   </div>
 }
@@ -3185,7 +4386,9 @@ function SettingsModal({ onClose, onNotify }) {
   const [saving, setSaving] = useState(false)
   const [modelList, setModelList] = useState([])
   const [fetchingModels, setFetchingModels] = useState(false)
-  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', temperature: 0.7, maxTokens: 4096, contextWindow: 16384 })
+  const [activePane, setActivePane] = useState('connection')
+  const [connectionStatus, setConnectionStatus] = useState('idle')
+  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', temperature: 0.7, maxTokens: 4096, contextWindow: 100000 })
 
   useEffect(() => {
     let mounted = true
@@ -3199,9 +4402,10 @@ function SettingsModal({ onClose, onNotify }) {
           apiBaseUrl: s.apiBaseUrl || '',
           apiKey: '',
           model: s.model || '',
+          reasoningEffort: s.reasoningEffort || '',
           temperature: s.temperature ?? 0.7,
           maxTokens: s.maxTokens ?? 4096,
-          contextWindow: s.contextWindow ?? 16384,
+          contextWindow: s.contextWindow ?? 100000,
         })
       })
       .catch(() => { if (mounted) onNotify('读取设置失败') })
@@ -3216,6 +4420,7 @@ function SettingsModal({ onClose, onNotify }) {
       const response = await api.updateSettings(form)
       setSettings(response.settings)
       setForm((current) => ({ ...current, apiKey: '' }))
+      window.dispatchEvent(new CustomEvent('story:model-settings-updated', { detail: response.settings }))
       onNotify('设置已保存')
     } catch (error) {
       onNotify(error.message)
@@ -3226,11 +4431,18 @@ function SettingsModal({ onClose, onNotify }) {
 
   async function handleFetchModels() {
     setFetchingModels(true)
+    setConnectionStatus('testing')
     try {
-      const response = await api.getModels()
+      const response = await api.getModels({
+        provider: form.provider,
+        apiBaseUrl: form.apiBaseUrl,
+        apiKey: form.apiKey,
+      })
       setModelList(response.models || [])
-      if (!(response.models || []).length) onNotify('未获取到模型列表，请检查 API 配置')
+      setConnectionStatus('connected')
+      if (!(response.models || []).length) onNotify('连接成功，但接口没有返回可用模型')
     } catch (error) {
+      setConnectionStatus('error')
       onNotify(error.message || '获取模型列表失败')
     } finally {
       setFetchingModels(false)
@@ -3239,17 +4451,26 @@ function SettingsModal({ onClose, onNotify }) {
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }))
+    if (['provider', 'apiBaseUrl', 'apiKey'].includes(field)) setConnectionStatus('idle')
   }
 
   const apiKeyPlaceholder = settings?.apiKeyMask ? `已配置 ${settings.apiKeyMask}，留空不修改` : '输入 API Key'
+  const connectionCopy = {
+    idle: settings?.apiKeyMask ? '已保存凭据' : '等待配置',
+    testing: '正在连接',
+    connected: `连接正常${modelList.length ? ` · ${modelList.length} 个模型` : ''}`,
+    error: '连接失败',
+  }[connectionStatus]
 
   return <div className="modal-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <header className="settings-header">
-        <div>
-          <span className="section-overline">模型配置</span>
-          <h2 id="settings-title">设置</h2>
-          <p className="settings-subtitle">配置你的 LLM API，所有 Skill 调用将使用此配置。API Key 加密存储。</p>
+        <div className="settings-title-group">
+          <div className="settings-title-icon"><Settings2 size={18} /></div>
+          <div>
+            <h2 id="settings-title">模型与连接</h2>
+            <p className="settings-subtitle">管理 Agent 使用的模型服务和生成参数。</p>
+          </div>
         </div>
         <button className="icon-button" aria-label="关闭" title="关闭" onClick={onClose}><X size={19} /></button>
       </header>
@@ -3258,62 +4479,102 @@ function SettingsModal({ onClose, onNotify }) {
         <div className="settings-loading"><LoaderCircle size={20} className="spin" /><span>正在读取设置</span></div>
       ) : (
         <form className="settings-form" onSubmit={handleSave}>
-          <label className="settings-field">
-            <span>模型服务商</span>
-            <select value={form.provider} onChange={(e) => updateField('provider', e.target.value)}>
-              <option value="openai">OpenAI 兼容</option>
-              <option value="anthropic">Anthropic（Claude）</option>
-            </select>
-            <small>选择 OpenAI 兼容或 Anthropic 格式；两者均可填自定义 Base URL 走代理</small>
-          </label>
+          <div className="settings-layout">
+            <nav className="settings-nav" aria-label="设置分类">
+              <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>连接与模型</strong><small>服务商、地址和密钥</small></span></button>
+              <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>思考强度与上下文</small></span></button>
+              <div className={`settings-connection-state ${connectionStatus}`}>
+                <span />
+                <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
+              </div>
+            </nav>
 
-          <label className="settings-field">
-            <span>API Base URL</span>
-            <input type="url" value={form.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder={form.provider === 'anthropic' ? 'https://api.anthropic.com/v1（留空用官方）' : 'https://api.openai.com/v1'} />
-            <small>{form.provider === 'anthropic' ? 'Anthropic 兼容地址，留空使用官方 API' : 'OpenAI 兼容 API 地址，留空使用服务端默认'}</small>
-          </label>
+            <div className="settings-pane">
+              {activePane === 'connection' ? <>
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>模型服务</h3><p>兼容官方端点，也支持自定义代理地址。</p></div></div>
+                  <div className="settings-provider-picker">
+                    <button type="button" className={form.provider === 'openai' ? 'active' : ''} onClick={() => updateField('provider', 'openai')}><Bot size={17} /><span><strong>OpenAI 兼容</strong><small>OpenAI、代理及兼容服务</small></span><Check size={15} /></button>
+                    <button type="button" className={form.provider === 'anthropic' ? 'active' : ''} onClick={() => updateField('provider', 'anthropic')}><Sparkles size={17} /><span><strong>Anthropic</strong><small>Claude 官方或兼容服务</small></span><Check size={15} /></button>
+                  </div>
+                </section>
 
-          <label className="settings-field">
-            <span>API Key</span>
-            <input type="password" value={form.apiKey} onChange={(e) => updateField('apiKey', e.target.value)} placeholder={apiKeyPlaceholder} autoComplete="off" />
-            <small>{settings?.apiKeyMask ? `当前已配置 ${settings.apiKeyMask}，留空则不修改` : '加密存储在服务端'}</small>
-          </label>
+                <section className="settings-section settings-connection-fields">
+                  <label className="settings-field">
+                    <span>API Base URL</span>
+                    <input type="url" value={form.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder={form.provider === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'} />
+                    <small>留空时使用官方默认地址；代理地址请包含版本路径。</small>
+                  </label>
 
-          <div className="settings-model-row">
-            <label className="settings-field settings-model-field">
-              <span>模型名</span>
-              <input type="text" value={form.model} onChange={(e) => updateField('model', e.target.value)} placeholder={form.provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini'} list="model-list" />
-              <small>输入或从下拉选择</small>
-            </label>
-            <button type="button" className="settings-fetch-models" disabled={fetchingModels} onClick={handleFetchModels}>
-              {fetchingModels ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />}
-              <span>{fetchingModels ? '获取中' : '获取模型列表'}</span>
-            </button>
-          </div>
-          {modelList.length > 0 && <datalist id="model-list">{modelList.map((m) => <option key={m} value={m} />)}</datalist>}
+                  <label className="settings-field">
+                    <span>API Key</span>
+                    <input type="password" value={form.apiKey} onChange={(e) => updateField('apiKey', e.target.value)} placeholder={apiKeyPlaceholder} autoComplete="new-password" />
+                    <small>{settings?.apiKeyMask ? `当前为 ${settings.apiKeyMask}，留空保持不变。` : '保存后会加密存储，不会回传明文。'}</small>
+                  </label>
 
-          <label className="settings-field">
-            <span>Temperature · {Number(form.temperature).toFixed(1)}</span>
-            <input type="range" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => updateField('temperature', Number(e.target.value))} className="settings-slider" />
-            <small>0 精确确定性，2 高随机性</small>
-          </label>
+                  <div className="settings-model-row">
+                    <label className="settings-field settings-model-field">
+                      <span>模型</span>
+                      <input type="text" value={form.model} onChange={(e) => updateField('model', e.target.value)} placeholder={form.provider === 'anthropic' ? '输入 Claude 模型名' : '输入 OpenAI 兼容模型名'} list="model-list" />
+                      <small>可手动填写，也可测试连接后从服务端列表选择。</small>
+                    </label>
+                    <button type="button" className={`settings-fetch-models ${connectionStatus === 'connected' ? 'success' : ''}`} disabled={fetchingModels} onClick={handleFetchModels}>
+                      {fetchingModels ? <LoaderCircle size={15} className="spin" /> : connectionStatus === 'connected' ? <Check size={15} /> : <Zap size={15} />}
+                      <span>{fetchingModels ? '连接中' : connectionStatus === 'connected' ? '重新测试' : '测试连接'}</span>
+                    </button>
+                  </div>
+                  {modelList.length > 0 && <datalist id="model-list">{modelList.map((model) => <option key={model} value={model} />)}</datalist>}
+                </section>
+              </> : <>
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>推理与输出</h3><p>模型不支持某项参数时，服务端会自动忽略。</p></div></div>
+                  <label className="settings-field">
+                    <span>思考强度</span>
+                    <div className="settings-select-wrap"><BrainCircuit size={16} /><select value={form.reasoningEffort} onChange={(e) => updateField('reasoningEffort', e.target.value)}>
+                      <option value="">自动（使用模型默认值）</option>
+                      <option value="minimal">最低 · 最快响应</option>
+                      <option value="low">低 · 简单编辑</option>
+                      <option value="medium">中 · 日常创作</option>
+                      <option value="high">高 · 复杂推演</option>
+                      <option value="xhigh">极高 · 最深度思考</option>
+                      <option value="max">MAX · 模型支持的最高强度</option>
+                    </select><ChevronDown size={14} /></div>
+                    <small>强度越高通常耗时越长、使用的 token 越多。</small>
+                  </label>
 
-          <div className="settings-number-row">
-            <label className="settings-field">
-              <span>Max Tokens（最大输出）</span>
-              <input type="number" min="256" max="128000" step="256" value={form.maxTokens} onChange={(e) => updateField('maxTokens', Number(e.target.value))} />
-            </label>
-            <label className="settings-field">
-              <span>上下文窗口（Tokens）</span>
-              <input type="number" min="4096" max="1000000" step="1024" value={form.contextWindow} onChange={(e) => updateField('contextWindow', Number(e.target.value))} />
-            </label>
+                  <label className="settings-field">
+                    <span>采样温度 <strong>{Number(form.temperature).toFixed(1)}</strong></span>
+                    <input type="range" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => updateField('temperature', Number(e.target.value))} className="settings-slider" />
+                    <div className="settings-range-labels"><span>稳定</span><span>灵活</span><span>发散</span></div>
+                    <small>推理模型启用思考强度时会自动忽略温度，避免 API 参数冲突。</small>
+                  </label>
+                </section>
+
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>Token 预算</h3><p>支持输入任意精确整数，不再受 1024 步进限制。</p></div></div>
+                  <div className="settings-number-row">
+                    <label className="settings-field">
+                      <span>最大输出 Tokens</span>
+                      <input type="number" min="1" max="128000" step="1" value={form.maxTokens} onChange={(e) => updateField('maxTokens', Number(e.target.value))} />
+                      <small>单次回复的最大输出预算。</small>
+                    </label>
+                    <label className="settings-field">
+                      <span>上下文窗口 Tokens</span>
+                      <input type="number" min="100" max="1000000" step="1" value={form.contextWindow} onChange={(e) => updateField('contextWindow', Number(e.target.value))} />
+                      <small>可直接填写 100000 等整值。</small>
+                    </label>
+                  </div>
+                </section>
+              </>}
+            </div>
           </div>
 
           <div className="settings-actions">
+            <div className="settings-save-note"><LockKeyhole size={14} /><span>更改会应用到所有 Story Skills</span></div>
             <button type="button" className="secondary-button" onClick={onClose}>取消</button>
             <button type="submit" className="dark-button" disabled={saving}>
               {saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}
-              <span>{saving ? '保存中' : '保存设置'}</span>
+              <span>{saving ? '保存中' : '保存并应用'}</span>
             </button>
           </div>
         </form>

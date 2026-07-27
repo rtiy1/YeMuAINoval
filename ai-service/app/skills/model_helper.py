@@ -19,6 +19,11 @@ def _allow_server_fallback(override: Any | None) -> bool:
     return override is None or getattr(override, 'allow_server_fallback', True)
 
 
+def _is_reasoning_model(model: str) -> bool:
+    normalized = str(model or '').lower()
+    return normalized.startswith(('o1', 'o3', 'o4', 'gpt-5')) or 'codex' in normalized
+
+
 def resolve_model_kwargs(
     override: Any | None,
     settings: Settings,
@@ -60,12 +65,16 @@ def resolve_model_kwargs(
         temperature = max(0.0, min(2.0, float(ov.temperature)))
     base_url = (ov.api_base_url if ov and ov.api_base_url else None) or settings.openai_base_url
     max_tokens = (ov.max_tokens if ov and ov.max_tokens is not None else None)
+    reasoning_effort = ov.reasoning_effort if ov and ov.reasoning_effort else None
     kwargs = {
         'provider': 'openai',
         'model': model,
         'api_key': api_key,
-        'temperature': temperature,
     }
+    if reasoning_effort:
+        kwargs['reasoning_effort'] = reasoning_effort
+    if not reasoning_effort and not _is_reasoning_model(model):
+        kwargs['temperature'] = temperature
     if base_url:
         kwargs['base_url'] = base_url
     if max_tokens:

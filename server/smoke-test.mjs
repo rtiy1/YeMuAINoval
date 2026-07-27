@@ -9,13 +9,28 @@ const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-api-'))
 const dataFile = path.join(tempDir, 'db.json')
 const agentRequests = []
 const aiServer = http.createServer(async (req, res) => {
-  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/memories/extract'].includes(req.url)) {
+  if (req.method === 'GET' && req.url === '/v1/skills') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+      skills: [
+        { name: 'story', version: '1.0.0', description: 'router', status: 'ready', executor: 'router-v1' },
+        { name: 'story-community', version: '1.0.0', description: 'host', status: 'needs_model', executor: 'community-prompt-only-v1' },
+      ],
+    }))
+    return
+  }
+  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/memories/extract', '/v1/responses'].includes(req.url)) {
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'not found' }))
     return
   }
   let raw = ''
   for await (const chunk of req) raw += chunk
   const body = JSON.parse(raw || '{}')
+  if (req.url === '/v1/responses') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ verdict: 'allow', risk_level: 'low', summary: '安全审查通过', findings: [] }) }] }],
+    }))
+    return
+  }
   if (req.url === '/v1/memories/extract') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', message: '已整理候选记忆', candidates: [{ type: 'chapter_summary', title: '本章摘要', content: '测试摘要', importance: 3, reason: '正文明确' }] }))
     return
@@ -72,6 +87,8 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
     STORY_DATA_FILE: dataFile, AI_SERVICE_URL: aiServiceUrl, AI_TASK_QUEUE_ENABLED: 'false',
     ALLOW_SHARED_MODEL_KEY: 'false', REGISTRATION_MODE: 'open', AI_DAILY_REQUEST_LIMIT: '0',
     AI_CONCURRENT_REQUEST_LIMIT: '3', AI_REQUESTS_PER_MINUTE: '30',
+    SKILL_REVIEW_MODE: 'required', SKILL_REVIEW_API_URL: `${aiServiceUrl}/v1/responses`,
+    SKILL_REVIEW_API_KEY: 'smoke-review-key', SKILL_REVIEW_MODEL: 'smoke-review-model',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -138,6 +155,7 @@ try {
   assert.equal(health.response.status, 200)
   assert.equal(health.payload.users, 0)
   assert.equal(health.payload.storage.backend, 'json')
+  assert.deepEqual(health.payload.skillReview, { mode: 'required', configured: true, provider: 'model' })
 
   const sameOrigin = await call('POST', '/api/auth/refresh', null, { auth: false, origin: baseUrl })
   assert.equal(sameOrigin.response.status, 401)
@@ -163,8 +181,90 @@ try {
   refreshHeader = cookieFrom(registered.response)
   assert.ok(refreshHeader?.startsWith('story_refresh='))
 
+  const skillSource = '---\nname: smoke-test-skill\ndescription: API smoke test\n---\n# Smoke test Skill\n'
+  const uploadedSkill = await call('POST', '/api/skill-market', {
+    name: 'Smoke Test Skill',
+    description: 'Used to verify marketplace upload and download.',
+    version: '1.0.0',
+    category: '写作',
+    tags: ['smoke', 'writing'],
+    fileName: 'smoke-test-skill.md',
+    contentBase64: Buffer.from(skillSource).toString('base64'),
+  })
+  assert.equal(uploadedSkill.response.status, 201)
+  assert.equal(uploadedSkill.payload.item.name, 'Smoke Test Skill')
+  assert.equal(uploadedSkill.payload.item.isOwner, true)
+  assert.equal(uploadedSkill.payload.item.downloads, 0)
+  assert.equal(uploadedSkill.payload.item.review.status, 'approved')
+  assert.equal(uploadedSkill.payload.item.review.reviewer, 'model')
+  assert.equal(uploadedSkill.payload.item.isListed, true)
+  const marketSkillId = uploadedSkill.payload.item.id
+
+  const duplicatedSkill = await call('POST', '/api/skill-market', {
+    name: 'Smoke Test Skill',
+    description: 'Duplicate version.',
+    version: '1.0.0',
+    category: '写作',
+    fileName: 'duplicate.md',
+    contentBase64: Buffer.from(skillSource).toString('base64'),
+  })
+  assert.equal(duplicatedSkill.response.status, 409)
+
+  const invalidSkill = await call('POST', '/api/skill-market', {
+    name: 'Invalid Skill',
+    description: 'Invalid archive content.',
+    version: '1.0.0',
+    category: '其他',
+    fileName: 'invalid.zip',
+    contentBase64: Buffer.from('not a zip').toString('base64'),
+  })
+  assert.equal(invalidSkill.response.status, 400)
+
+  const marketList = await call('GET', '/api/skill-market')
+  assert.equal(marketList.response.status, 200)
+  assert.equal(marketList.payload.items.length, 1)
+  assert.equal(marketList.payload.items[0].id, marketSkillId)
+  assert.deepEqual(marketList.payload.review, { mode: 'required', configured: true, provider: 'model' })
+
+  const importedSkill = await call('POST', `/api/skill-market/${marketSkillId}/install`)
+  assert.equal(importedSkill.response.status, 200)
+  assert.equal(importedSkill.payload.item.installed, true)
+  assert.equal(importedSkill.payload.item.installCount, 1)
+  const marketSkillKey = importedSkill.payload.item.skillKey
+
+  const installedCatalog = await call('GET', '/api/ai/skills')
+  assert.equal(installedCatalog.response.status, 200)
+  assert.equal(installedCatalog.payload.skills.some((skill) => skill.name === 'story-community'), false)
+  assert.equal(installedCatalog.payload.skills.find((skill) => skill.name === marketSkillKey)?.source, 'market')
+
+  const marketRun = await call('POST', '/api/ai/agent/runs', { message: '执行已导入能力', skill: marketSkillKey, payload: {} })
+  assert.equal(marketRun.response.status, 200)
+  assert.equal(agentRequests.at(-1).skill, 'story-community')
+  assert.equal(agentRequests.at(-1).payload.community_skill.key, marketSkillKey)
+  assert.match(agentRequests.at(-1).payload.community_skill.instructions, /Smoke test Skill/)
+
+  const removedImport = await call('DELETE', `/api/skill-market/${marketSkillId}/install`)
+  assert.equal(removedImport.response.status, 204)
+  const blockedMarketRun = await call('POST', '/api/ai/agent/runs', { message: '不导入直接调用', skill: marketSkillKey, payload: {} })
+  assert.equal(blockedMarketRun.response.status, 403)
+
+  const marketDownload = await fetch(`${baseUrl}/api/skill-market/${marketSkillId}/download`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  assert.equal(marketDownload.status, 200)
+  assert.match(marketDownload.headers.get('content-disposition') || '', /smoke-test-skill\.md/)
+  assert.equal(await marketDownload.text(), skillSource)
+
+  const marketListAfterDownload = await call('GET', '/api/skill-market')
+  assert.equal(marketListAfterDownload.payload.items[0].downloads, 1)
+
+  const removedSkill = await call('DELETE', `/api/skill-market/${marketSkillId}`)
+  assert.equal(removedSkill.response.status, 204)
+  const emptyMarket = await call('GET', '/api/skill-market')
+  assert.equal(emptyMarket.payload.items.length, 0)
+
   const initialUsage = await call('GET', '/api/ai/usage')
-  assert.deepEqual(initialUsage.payload.usage, { used: 0, limit: null, remaining: null, active: 0, concurrentLimit: 3 })
+  assert.deepEqual(initialUsage.payload.usage, { used: 2, limit: null, remaining: null, active: 0, concurrentLimit: 3 })
   for (let attempt = 0; attempt < 35; attempt += 1) {
     assert.equal((await call('GET', '/api/ai/usage')).response.status, 200, 'read-only polling must not consume the AI request rate limit')
   }
@@ -251,6 +351,13 @@ try {
   assert.ok(dashboard.payload.stats.projectCount >= 2)
   assert.ok(dashboard.payload.stats.chapterCount >= 3)
   assert.equal(dashboard.payload.stats.todayWords, 17)
+  assert.equal(dashboard.payload.stats.totalWritingDays, 1)
+  assert.equal(dashboard.payload.stats.currentStreak, 1)
+  assert.equal(dashboard.payload.stats.longestStreak, 1)
+  assert.equal(dashboard.payload.stats.monthWords, 17)
+  assert.equal(dashboard.payload.stats.averageWordsPerWritingDay, 17)
+  assert.equal(dashboard.payload.stats.calendar.length, 365)
+  assert.equal(dashboard.payload.stats.calendar.at(-1).words, 17)
 
   const imported = await call('POST', '/api/projects/import', {
     title: '导入测试作品', type: '长篇', genre: '都市现实',
@@ -405,11 +512,12 @@ try {
   })
   const interrupted = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns/${interruptedTurn.payload.turn.id}/interrupt`)
   assert.equal(interrupted.response.status, 200)
-  assert.equal(interrupted.payload.turn.status, 'interrupted')
+  assert.equal(interrupted.payload.turn.status, 'interrupted', JSON.stringify(interrupted.payload.turn))
   assert.equal(interrupted.payload.turn.items.at(-1).type, 'agentMessage')
   assert.equal((await streamTurn(agentThread.payload.thread.id, interruptedTurn.payload.turn.id)).events.at(-1).event, 'turn/completed')
   const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
-  assert.equal((await streamTask(duplicateTask.payload.task.id)).tasks.at(-1).status, 'completed')
+  const duplicateTaskResult = await streamTask(duplicateTask.payload.task.id)
+  assert.equal(duplicateTaskResult.tasks.at(-1).status, 'completed', JSON.stringify(duplicateTaskResult.tasks.at(-1)))
   const reusedTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   assert.equal(reusedTask.response.status, 200)
   assert.equal(reusedTask.payload.task.id, duplicateTask.payload.task.id)

@@ -76,12 +76,21 @@ services:
       REGISTRATION_MODE: ${REGISTRATION_MODE:-owner-only}
       AI_SERVICE_URL: http://ai:8890
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?AI_SERVICE_TOKEN is required}
+      SKILL_REVIEW_MODE: ${SKILL_REVIEW_MODE:-required}
+      SKILL_REVIEW_API_URL: ${SKILL_REVIEW_API_URL:-}
+      SKILL_REVIEW_API_KEY: ${SKILL_REVIEW_API_KEY:-}
+      SKILL_REVIEW_MODEL: ${SKILL_REVIEW_MODEL:-}
+      SKILL_REVIEW_API_STYLE: ${SKILL_REVIEW_API_STYLE:-responses}
+      SKILL_REVIEW_TIMEOUT_MS: ${SKILL_REVIEW_TIMEOUT_MS:-45000}
+      STORY_SKILL_MARKET_DIR: /app/server/data/skill-market
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8787}
       TRUST_PROXY: ${TRUST_PROXY:-1}
       CODESPACES: ${CODESPACES:-false}
       CODESPACE_NAME: ${CODESPACE_NAME:-}
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8787}:8787"
+    volumes:
+      - skill_market_data:/app/server/data/skill-market
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -126,3 +135,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  skill_market_data:

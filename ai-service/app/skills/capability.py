@@ -121,7 +121,7 @@ def _execute_story_router(invocation: SkillInvocation) -> dict[str, Any]:
 def get_story_skill_capability() -> StorySkillCapability:
     from app.workflows.review import execute_review_skill
     from app.skills.deslop import execute_deslop_skill
-    from app.skills.prompt import execute_prompt_skill
+    from app.skills.prompt import execute_community_skill, execute_prompt_skill
     from app.skills.search import execute_search_skill
 
     capability = StorySkillCapability(get_skill_registry())
@@ -129,6 +129,7 @@ def get_story_skill_capability() -> StorySkillCapability:
     capability.register('story-review', 'langgraph-solo-v1', execute_review_skill)
     capability.register('story-deslop', 'deslop-v1', execute_deslop_skill, requires_model=True)
     capability.register('story-search', 'search-v1', execute_search_skill)
+    capability.register('story-community', 'community-prompt-only-v1', execute_community_skill, requires_model=True)
     for skill_name in (
         'story-import',
         'story-long-analyze',

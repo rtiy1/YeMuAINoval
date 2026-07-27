@@ -1,4 +1,5 @@
 import { invokeStoryAgent, classifyTaskError } from './story-agent.mjs'
+import { maybeCompactAgentThread } from './context-compaction.mjs'
 import { updateDb } from './store.mjs'
 
 function appendEvent(task, type, label, status = 'completed', meta = {}) {
@@ -76,6 +77,7 @@ export async function executeWritingTask(taskId, { userId = null, controller = n
       task.updatedAt = new Date().toISOString()
       touchAgentThread(db, task)
     })
+    await maybeCompactAgentThread(taskId).catch(() => undefined)
     return { status: 'completed' }
   } catch (error) {
     let outcome = 'failed'

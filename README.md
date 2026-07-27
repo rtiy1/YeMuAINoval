@@ -205,11 +205,25 @@ npm run test:postgres
 | `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |
 | `AI_CONCURRENT_REQUEST_LIMIT` | — | 每用户并发 AI 请求与任务上限 |
 | `AI_REQUESTS_PER_MINUTE` | — | 每用户 AI HTTP 请求速率上限 |
+| `SKILL_REVIEW_MODE` | — | Skill 市场审查模式：生产建议 `required`，本地可用 `optional` |
+| `SKILL_REVIEW_API_URL` | 生产 ✅ | 专用安全审查模型的完整接口地址 |
+| `SKILL_REVIEW_API_KEY` | 生产 ✅ | 专用审查密钥，仅保存在服务端环境变量 |
+| `SKILL_REVIEW_MODEL` | 生产 ✅ | 专用安全审查模型 ID |
+| `SKILL_REVIEW_API_STYLE` | — | `responses`（默认）或 `chat-completions` |
+| `SKILL_REVIEW_TIMEOUT_MS` | — | 单次 Skill 安全审查超时，默认 45000 ms |
 | `OPENAI_*` | — | 服务端 OpenAI 默认（可被用户配置覆盖） |
 | `ANTHROPIC_*` | — | 服务端 Anthropic 默认 |
 | `TAVILY_API_KEY` | — | 联网搜索 Tavily key；留空回退 DuckDuckGo |
 
 `SOURCE_REPOSITORY_URL` 是 Docker 构建参数，用于页面中的“源代码”入口。部署修改版时，应将它改为能够取得该修改版完整对应源码的公开地址。
+
+### Skill 市场安全审查
+
+上传的 Skill 会先经过路径穿越、压缩炸弹、符号链接、未知二进制与秘密信息检查，再提交给专用模型进行结构化安全审查。模型需要给出 `allow` / `reject`、风险级别、可核验证据和修复建议；只有 `allow` 且不存在高危或严重发现时才会发布。生产 Compose 默认使用 `SKILL_REVIEW_MODE=required`，审查服务未配置、超时或返回异常时均会阻止发布。
+
+`SKILL_REVIEW_API_URL` 应填写完整接口地址，例如 Responses 兼容接口的 `https://api.example.com/v1/responses`。如果供应商只支持 Chat Completions，则将地址填为对应的 `/v1/chat/completions`，并设置 `SKILL_REVIEW_API_STYLE=chat-completions`。审查 Key 不会写入数据库、返回浏览器或记录在 Skill 元数据中。
+
+市场采用“上传 → 模型审查 → 上架 → 用户导入 → 账号内调用”的闭环。待审查内容只有上传者可见；其他用户只能看到已通过专用模型审查的上架版本。导入记录绑定当前账号，导入后会出现在写作助手和编辑器的 Skill 选择器中，并以 `community-prompt-only` 模式运行。社区包中的脚本和二进制不会执行；Skill 未导入、被下架或文件完整性校验失败时，服务端会拒绝调用。
 
 ## 🧠 聊天记忆与联网搜索
 

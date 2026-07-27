@@ -15,12 +15,13 @@ from app.agent_instructions import (
     EXECUTION_BOUNDARY_POLICY,
     STORY_FACT_POLICY,
 )
-from app.schemas import EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest, ModelConfig
+from app.schemas import ContextCompactRequest, EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest, ModelConfig
 from app.skills.model_helper import has_api_key, resolve_model_kwargs
 from app.skills.capability import SkillInvocation
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
 from app.workflows.memory import extract_story_memories
+from app.workflows.context_compaction import compact_story_context
 
 
 class AssistantProtocolTests(unittest.TestCase):
@@ -64,6 +65,14 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertEqual(response.status, 'needs_model')
         self.assertEqual(response.candidates, [])
 
+    def test_context_compaction_requires_model(self):
+        response = compact_story_context(ContextCompactRequest(messages=[
+            {'role': 'user', 'text': '继续写'},
+            {'role': 'assistant', 'text': '上一段结果'},
+        ]))
+        self.assertEqual(response.status, 'needs_model')
+        self.assertEqual(response.summary, '')
+
     def test_web_search_toggle_bypasses_planning_and_uses_results(self):
         from app.workflows.assistant_agent import run_writing_assistant_turn
         request = WritingAssistantTurnRequest(message='最近悬疑短篇有什么趋势？', web_search=True)
@@ -95,7 +104,15 @@ class AssistantProtocolTests(unittest.TestCase):
         kwargs = resolve_model_kwargs(ModelConfig(provider='openai', model='gpt-4o-mini', api_key='k', max_tokens=1024), __import__('app.config', fromlist=['get_settings']).get_settings())
         self.assertEqual(kwargs['provider'], 'openai')
         self.assertEqual(kwargs['max_tokens'], 1024)
+        self.assertIn('temperature', kwargs)
         self.assertNotIn('anthropic_api_url', kwargs)
+
+    def test_reasoning_effort_omits_incompatible_temperature(self):
+        settings = __import__('app.config', fromlist=['get_settings']).get_settings()
+        kwargs = resolve_model_kwargs(ModelConfig(provider='openai', model='gpt-5', api_key='k', reasoning_effort='high', temperature=0.7), settings)
+        self.assertEqual(kwargs['reasoning_effort'], 'high')
+        self.assertNotIn('temperature', kwargs)
+        self.assertEqual(ModelConfig(reasoning_effort='max').reasoning_effort, 'max')
 
     def test_strict_byok_ignores_server_keys_but_accepts_user_key(self):
         settings = Settings(openai_api_key='server-openai', anthropic_api_key='server-anthropic')

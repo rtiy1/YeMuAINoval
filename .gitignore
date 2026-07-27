@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 server/data/db.json
 server/data/*.tmp
+server/data/skill-market/
 .env
 .DS_Store
 .runtime-logs/

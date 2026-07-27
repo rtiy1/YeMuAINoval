@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seed } from './seed.mjs'
@@ -8,6 +8,7 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
 const dataFile = process.env.STORY_DATA_FILE ? path.resolve(process.env.STORY_DATA_FILE) : path.join(dataDir, 'db.json')
 let mutationQueue = Promise.resolve()
+let jsonWriteSequence = 0
 let postgresPoolPromise = null
 let postgresSchemaPromise = null
 
@@ -381,6 +382,8 @@ function normalizeDb(db) {
   db.aiUsage ||= []
   db.foreshadows ||= []
   db.storyMemories ||= []
+  db.skillMarketItems ||= []
+  db.skillMarketInstalls ||= []
   db.ideas ||= []
   db.writingLog ||= []
   for (const project of db.projects) {
@@ -463,9 +466,45 @@ function normalizeDb(db) {
 
 async function writeDb(db) {
   await mkdir(path.dirname(dataFile), { recursive: true })
-  const tempFile = `${dataFile}.tmp`
+  const tempFile = `${dataFile}.${process.pid}.${++jsonWriteSequence}.tmp`
   await writeFile(tempFile, JSON.stringify(db, null, 2), 'utf8')
-  await rename(tempFile, dataFile)
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await rename(tempFile, dataFile)
+        return
+      } catch (error) {
+        const retryableWindowsLock = ['EACCES', 'EBUSY', 'EPERM'].includes(error?.code)
+        if (!retryableWindowsLock || attempt >= 7) throw error
+        await new Promise((resolve) => setTimeout(resolve, 12 * (attempt + 1)))
+      }
+    }
+  } catch (error) {
+    await unlink(tempFile).catch(() => undefined)
+    throw error
+  }
+  for (const skill of db.skillMarketItems) {
+    if (!Object.hasOwn(skill, 'downloads')) skill.downloads = 0
+    if (!Object.hasOwn(skill, 'tags')) skill.tags = []
+    if (!Object.hasOwn(skill, 'status')) skill.status = 'published'
+    if (skill.review && typeof skill.review === 'object') {
+      if (!Object.hasOwn(skill.review, 'verdict')) skill.review.verdict = 'reject'
+      if (!Object.hasOwn(skill.review, 'riskLevel')) skill.review.riskLevel = 'high'
+      if (!Object.hasOwn(skill.review, 'summary')) skill.review.summary = ''
+      if (!Object.hasOwn(skill.review, 'findings')) skill.review.findings = []
+      if (!Object.hasOwn(skill.review, 'reviewer')) skill.review.reviewer = 'static'
+      if (!Object.hasOwn(skill.review, 'reviewedAt')) skill.review.reviewedAt = skill.updatedAt || skill.createdAt || null
+    }
+    if (!Object.hasOwn(skill, 'createdAt')) skill.createdAt = null
+    if (!Object.hasOwn(skill, 'updatedAt')) skill.updatedAt = skill.createdAt
+  }
+  db.skillMarketInstalls = db.skillMarketInstalls
+    .filter((install) => install && install.userId && install.skillId)
+    .map((install) => ({
+      userId: install.userId,
+      skillId: install.skillId,
+      installedAt: install.installedAt || null,
+    }))
 }
 
 export async function loadDb() {
