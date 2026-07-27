@@ -31,29 +31,6 @@
 - 💾 **Redis 聊天记忆** — 夜雨会话持久化到 Redis（AOF），刷新或重启后可恢复；不可用时自动回退数据库
 - 🐳 **Docker 一键部署** — Compose 编排 PostgreSQL + Redis + AI 服务 + Web API，开箱即用
 
-## 📋 TODO List
-
-### ✅ 已完成
-
-- [x] **智能创建闭环** — AI 书名 / 题材 / 主线 / 章节大纲直接生成作品与初始章节，含重复提交与失败恢复
-- [x] **结构化作品记忆** — 六类记忆 CRUD、批量确认、自动注入写作上下文、夜雨整理本章候选
-- [x] **可审阅可撤销 AI 修改** — 逐段 diff、接受 / 拒绝、应用前快照、一键恢复、来源过期保护
-- [x] **夜雨人格与创作协议** — 身份 / 路由 / 事实优先级 / 执行边界 / 质量底线三层提示词
-- [x] **任务重试与防重复** — 幂等键去重、失败分类（超时 / 服务不可用 / 模型配置 / 上下文过长）、一键重试
-- [x] **Redis 持久化聊天记忆** — AOF 持久化，不可用回退 JSON / Postgres
-- [x] **联网搜索** — `story-search` 能力，Tavily 优先、DuckDuckGo 回退，不伪造结果
-- [x] **双模型格式** — OpenAI 兼容 + Anthropic（Claude），含自定义 Base URL
-- [x] **伏笔生命周期** — 计划 / 已埋入 / 已回收 / 已放弃，及三类章节关联
-- [x] **PostgreSQL 关系存储** — 用户、会话、作品、章节、正文和素材已拆表，保留原有 HTTP API
-- [x] **Redis AI 任务 worker** — Stream 消费、幂等、取消、失败重试、陈旧 pending 认领与停机恢复
-- [x] **窄屏与移动端适配** — 三栏布局、工具栏、弹窗、章节菜单触屏优化
-
-### 📝 规划中
-
-- [x] 将 `users / sessions / projects / chapters / drafts / ideas` 从 JSONB 状态逐表拆为关系表
-- [x] AI 任务执行从 Node 进程迁移到 Redis 队列和独立 worker
-- [x] 增加 PostgreSQL Compose 集成测试和备份恢复演练
-- [ ] 真实浏览器点击验收（Playwright / Puppeteer）
 
 > 💡 欢迎提交 Issue 或 Pull Request！
 
@@ -233,9 +210,6 @@ npm run test:postgres
 
 左侧「创作助手」是 Chat 式独立页面：空态只欢迎用户表达想法，不会直接抛出题材选项。用户发出第一条消息后，夜雨再逐步收集篇幅、题材、流派和故事核心，调用 `story-long-write` 或 `story-short-write` 生成可编辑建书方案；确认后复用智能创建事务创建作品并进入编辑器。扫榜、去 AI 味、章节审稿放在「高级工具」，拆文台单独保留为低频学习入口。
 
-### 状态边界
-
-LangGraph 的 `AgentState` / `ReviewState` 只服务于单次工作流运行，不跨 HTTP 请求保存 checkpoint。用户账号、作品、章节、正文、结构化作品记忆、任务状态和助手会话分别持久化到 PostgreSQL / Redis，并在每次调用时重建明确的写作上下文。当前工作流没有中途人工审批节点，因此不额外引入 LangGraph checkpointer；以后若增加可暂停多步代理或节点级断点续跑，再为每个用户线程接入持久化 checkpoint。
 
 ## 📚 API
 
