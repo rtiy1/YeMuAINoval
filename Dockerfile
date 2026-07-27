@@ -20,6 +20,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/skills ./skills
+COPY --from=build /app/src/sse.mjs ./src/sse.mjs
 
 EXPOSE 8787
 CMD ["node", "server/index.mjs"]
