@@ -990,7 +990,7 @@ async function startWritingTask(user, body, forcedThreadId = null) {
     const existing = db.writingTasks.find((item) => item.userId === user.id
       && item.requestKey === requestKey
       && (!threadId || item.threadId === threadId)
-      && ['queued', 'running'].includes(item.status))
+      && (idempotencyKey || ['queued', 'running'].includes(item.status)))
     if (existing) {
       reused = true
       return existing
