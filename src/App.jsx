@@ -1966,7 +1966,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [readingMode, setReadingMode] = useState(false)
-  const [assistantOpen, setAssistantOpen] = useState(true)
+  const [assistantOpen, setAssistantOpen] = useState(() => (
+    typeof window === 'undefined' || !window.matchMedia('(max-width: 760px)').matches
+  ))
   const [mobileRailOpen, setMobileRailOpen] = useState(false)
   const [chapterOrder, setChapterOrder] = useState('asc')
   const [unfinishedOnly, setUnfinishedOnly] = useState(false)

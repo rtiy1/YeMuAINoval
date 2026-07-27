@@ -4889,3 +4889,124 @@ details[open] > summary .agent-trace-chevron {
     width: min(260px, calc(100vw - 24px));
   }
 }
+
+/* Mobile writing workspace: keep the Agent reachable without changing desktop layout. */
+@media (max-width: 760px) {
+  .editor-page .agent-rail {
+    position: fixed;
+    z-index: 40;
+    inset: 0 0 calc(62px + env(safe-area-inset-bottom, 0px));
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    background: #fafafa;
+    border: 0;
+    box-shadow: 0 -12px 34px rgba(24, 29, 26, .12);
+    overscroll-behavior: contain;
+  }
+
+  .editor-page .agent-rail.collapsed {
+    inset: auto 14px calc(76px + env(safe-area-inset-bottom, 0px)) auto;
+    width: 52px;
+    height: 52px;
+    min-height: 52px;
+    padding: 0;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .editor-page .agent-rail.collapsed .assistant-reopen {
+    width: 52px;
+    height: 52px;
+    min-height: 52px;
+    gap: 1px;
+    padding: 0;
+    color: #fff;
+    background: #303936;
+    border: 1px solid rgba(255, 255, 255, .28);
+    border-radius: 50%;
+    box-shadow: 0 9px 24px rgba(25, 34, 30, .28);
+  }
+
+  .editor-page .agent-rail.collapsed .assistant-reopen:hover,
+  .editor-page .agent-rail.collapsed .assistant-reopen:active {
+    color: #fff;
+    background: #3f544d;
+  }
+
+  .editor-page .agent-rail.collapsed .assistant-reopen span {
+    font-size: 8px;
+    line-height: 1;
+  }
+
+  .editor-page .agent-rail.collapsed .assistant-reopen > svg:last-child {
+    display: none;
+  }
+
+  .editor-page .agent-panel-heading {
+    min-height: calc(52px + env(safe-area-inset-top, 0px));
+    flex-basis: calc(52px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 12px 0 15px;
+  }
+
+  .editor-page .agent-session-strip {
+    min-height: 35px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .editor-page .agent-conversation {
+    padding: 14px 13px 20px;
+    overscroll-behavior: contain;
+  }
+
+  .editor-page .agent-composer-wrap {
+    padding: 8px 10px max(9px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .editor-page .assistant-form.agent-composer textarea {
+    min-height: 50px;
+    max-height: 124px;
+  }
+
+  .editor-page .agent-composer-controls {
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .editor-page .agent-mode-trigger {
+    flex: 0 0 auto;
+  }
+
+  .editor-page .agent-control-trigger.model {
+    min-width: 0;
+    max-width: min(34vw, 126px);
+  }
+
+  .editor-page .agent-control-trigger.reasoning {
+    flex: 0 0 auto;
+    max-width: 72px;
+  }
+
+  .editor-page .agent-control-popover {
+    right: -2px;
+    left: -2px;
+    width: auto;
+    max-height: min(54dvh, 420px);
+  }
+
+  .editor-page .agent-composer-suggestions {
+    right: -1px;
+    left: -1px;
+    width: auto;
+    max-height: min(52dvh, 390px);
+  }
+
+  .mobile-nav {
+    height: calc(62px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
