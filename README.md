@@ -6,10 +6,10 @@
 ![Node](https://img.shields.io/badge/node-22-green.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 ![React](https://img.shields.io/badge/React-19-61dafb.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.139-009688.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
-![License](https://img.shields.io/badge/license-私有-lightgrey.svg)
+![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)
 
 **面向网文作者的 AI 创作工作台 · 让「夜雨」陪你把一个想法写成一本小说**
 
@@ -44,14 +44,15 @@
 - [x] **联网搜索** — `story-search` 能力，Tavily 优先、DuckDuckGo 回退，不伪造结果
 - [x] **双模型格式** — OpenAI 兼容 + Anthropic（Claude），含自定义 Base URL
 - [x] **伏笔生命周期** — 计划 / 已埋入 / 已回收 / 已放弃，及三类章节关联
-- [x] **PostgreSQL 过渡存储** — JSONB 单行保持 API 兼容，提供导入 / 导出 / 状态检查命令
+- [x] **PostgreSQL 关系存储** — 用户、会话、作品、章节、正文和素材已拆表，保留原有 HTTP API
+- [x] **Redis AI 任务 worker** — Stream 消费、幂等、取消、失败重试、陈旧 pending 认领与停机恢复
 - [x] **窄屏与移动端适配** — 三栏布局、工具栏、弹窗、章节菜单触屏优化
 
 ### 📝 规划中
 
-- [ ] 将 `users / sessions / projects / chapters / drafts / ideas` 从 JSONB 状态逐表拆为关系表
-- [ ] AI 任务执行从 Node 进程迁移到 Redis 队列和独立 worker，支持多副本扩展
-- [ ] 增加 PostgreSQL Compose 集成测试和备份恢复演练
+- [x] 将 `users / sessions / projects / chapters / drafts / ideas` 从 JSONB 状态逐表拆为关系表
+- [x] AI 任务执行从 Node 进程迁移到 Redis 队列和独立 worker
+- [x] 增加 PostgreSQL Compose 集成测试和备份恢复演练
 - [ ] 真实浏览器点击验收（Playwright / Puppeteer）
 
 > 💡 欢迎提交 Issue 或 Pull Request！
@@ -111,7 +112,7 @@ npm run build
 npm start
 ```
 
-生产环境由 Express 同时托管 API 和 `dist/` 前端资源，默认监听 `127.0.0.1:8787`（可用 `HOST` / `PORT` 修改）。设置 `DATABASE_URL` 后，完整状态存入 PostgreSQL 单行 JSONB，通过事务和行锁保证多进程写入安全。
+生产环境由 Express 同时托管 API 和 `dist/` 前端资源，默认监听 `127.0.0.1:8787`（可用 `HOST` / `PORT` 修改）。设置 `DATABASE_URL` 后，用户、会话、作品、章节、正文和素材写入关系表，其余兼容状态保留在版本化 JSONB 中；写操作通过事务保证一致性。
 
 ## 🐳 Docker Compose 部署
 
@@ -127,13 +128,26 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Web API 默认暴露在 `http://127.0.0.1:8787`。Android 客户端只调用这个 HTTP API，不直接连接 PostgreSQL。Redis 用于持久化夜雨聊天记忆（AOF），AI 任务仍由 Node 进程执行，后续可迁移到独立 worker。
+Redis 使用 AOF，Linux 部署机应启用内存 overcommit，避免后台重写在内存紧张时失败：
+
+```bash
+sudo sysctl -w vm.overcommit_memory=1
+# 并在 /etc/sysctl.conf 中持久化：vm.overcommit_memory = 1
+```
+
+Web API 默认只绑定宿主机 `127.0.0.1:8787`。Android 客户端只调用这个 HTTP API，不直接连接 PostgreSQL。Redis 同时持久化夜雨聊天记忆（AOF）和 AI Stream 任务，独立 worker 负责执行任务。
+
+生产环境应在 app 前配置 HTTPS 反向代理，并把 `WEB_ORIGIN` 设置为实际站点来源。刷新令牌 Cookie 在生产模式带 `Secure`，不应直接把明文 HTTP 端口暴露到公网。Compose 默认按一层代理设置 `TRUST_PROXY=1`；若确实需要改变监听地址，可设置 `APP_BIND`。
 
 > **📌 注意事项**
 >
 > 1. `AUTH_SECRET` 必须设置，用于 JWT 签发与 API Key 加密
 > 2. `WEB_ORIGIN` 用逗号分隔允许访问 API 的 Web 来源
 > 3. 可选配置 `ANTHROPIC_*` / `TAVILY_API_KEY` 启用 Anthropic 默认与联网搜索
+
+`AUTH_SECRET` 必须与数据库备份一起妥善保管并保持不变；更换后，已有登录会话会失效，数据库中已加密的用户模型 Key 也无法解密。
+
+本站默认采用 BYOK：每位用户在设置中保存自己的模型 Key。`ALLOW_SHARED_MODEL_KEY=false` 会禁止回退到服务端模型 Key；`REGISTRATION_MODE=owner-only` 允许空数据库中的首位站长注册，之后自动关闭注册。AI 默认不设每日次数额度，但保留每分钟速率和并发限制保护 worker，可通过 `AI_*_LIMIT` 调整。
 
 ## 🗄️ 数据存储与迁移
 
@@ -159,6 +173,16 @@ docker compose run --rm --no-deps app npm run db:status
 ```
 
 `db:import-json` 是状态替换操作，适合首次迁移或恢复备份；启用 `DATABASE_URL` 后服务不再读取 `server/data/db.json`。
+
+备份与恢复：
+
+```bash
+npm run db:backup -- backups/story-studio.dump
+RESTORE_CONFIRM=1 npm run db:restore -- backups/story-studio.dump
+npm run test:postgres
+```
+
+恢复脚本会暂时停止 app 与 worker，并且无论恢复成功或失败都会重新拉起服务。建议用 cron 或平台定时任务执行备份，并把备份复制到异机对象存储。
 
 </details>
 
@@ -186,13 +210,21 @@ docker compose run --rm --no-deps app npm run db:status
 |------|------|------|
 | `AUTH_SECRET` | ✅ | JWT 签发与 API Key 加密密钥（≥32 字符） |
 | `WEB_ORIGIN` | ✅ | 允许访问 API 的 Web 来源，逗号分隔 |
+| `TRUST_PROXY` | — | Express 信任的反向代理层数；Compose 默认 `1` |
 | `AI_SERVICE_TOKEN` | ✅ | Node 与 AI 服务间的内部令牌 |
 | `AI_SERVICE_URL` | — | AI 服务地址，默认 `http://127.0.0.1:8890` |
 | `DATABASE_URL` | — | PostgreSQL 连接串；留空用 JSON 文件 |
 | `REDIS_URL` | — | Redis 连接串；留空回退数据库 |
+| `ALLOW_SHARED_MODEL_KEY` | — | 是否允许用户回退服务端模型 Key；BYOK 部署保持 `false` |
+| `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed` |
+| `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |
+| `AI_CONCURRENT_REQUEST_LIMIT` | — | 每用户并发 AI 请求与任务上限 |
+| `AI_REQUESTS_PER_MINUTE` | — | 每用户 AI HTTP 请求速率上限 |
 | `OPENAI_*` | — | 服务端 OpenAI 默认（可被用户配置覆盖） |
 | `ANTHROPIC_*` | — | 服务端 Anthropic 默认 |
 | `TAVILY_API_KEY` | — | 联网搜索 Tavily key；留空回退 DuckDuckGo |
+
+`SOURCE_REPOSITORY_URL` 是 Docker 构建参数，用于页面中的“源代码”入口。部署修改版时，应将它改为能够取得该修改版完整对应源码的公开地址。
 
 ## 🧠 聊天记忆与联网搜索
 
@@ -200,6 +232,10 @@ docker compose run --rm --no-deps app npm run db:status
 - **联网搜索**：夜雨对话框输入区有「联网搜索」开关，打开后每轮先联网检索再用结果回答（带来源），与主流 AI 助手一致；不进入建书流程。配置 `TAVILY_API_KEY` 走 Tavily；留空则零配置回退 DuckDuckGo。只有真正发起过搜索才标记为已联网，网络失败时如实返回失败，不伪造结果。
 
 左侧「创作助手」是 Chat 式独立页面：空态只欢迎用户表达想法，不会直接抛出题材选项。用户发出第一条消息后，夜雨再逐步收集篇幅、题材、流派和故事核心，调用 `story-long-write` 或 `story-short-write` 生成可编辑建书方案；确认后复用智能创建事务创建作品并进入编辑器。扫榜、去 AI 味、章节审稿放在「高级工具」，拆文台单独保留为低频学习入口。
+
+### 状态边界
+
+LangGraph 的 `AgentState` / `ReviewState` 只服务于单次工作流运行，不跨 HTTP 请求保存 checkpoint。用户账号、作品、章节、正文、结构化作品记忆、任务状态和助手会话分别持久化到 PostgreSQL / Redis，并在每次调用时重建明确的写作上下文。当前工作流没有中途人工审批节点，因此不额外引入 LangGraph checkpointer；以后若增加可暂停多步代理或节点级断点续跑，再为每个用户线程接入持久化 checkpoint。
 
 ## 📚 API
 
@@ -213,6 +249,7 @@ docker compose run --rm --no-deps app npm run db:status
 - `GET / PUT /api/settings` — 模型配置（API Key 脱敏）
 - `POST /api/ai/models` — 拉取可用模型列表（OpenAI / Anthropic）
 - `GET /api/ai/skills` — 能力目录
+- `GET /api/ai/usage` — 当前用户 AI 调用与并发占用；BYOK 默认每日额度不限
 
 **AI 调用**
 - `POST /api/ai/agent/runs` — 通用 Story Agent 入口
@@ -268,6 +305,10 @@ npm test
 # 提供真实 Redis 时，额外跑持久化与会话跨重启恢复测试
 REDIS_TEST_URL=redis://127.0.0.1:6399/0 npm run test:unit
 ```
+
+## 📄 许可证
+
+本项目源代码采用 [GNU Affero General Public License v3.0 only](LICENSE)，SPDX 标识为 `AGPL-3.0-only`。通过网络部署修改版时，必须按许可证第 13 条向远程用户提供该版本的完整对应源码；应用内已提供可配置的源码入口。第三方依赖及 vendored Story Skills 保留各自的许可证和版权声明，不因本项目许可证而被替换。
 
 ## 📁 项目结构
 

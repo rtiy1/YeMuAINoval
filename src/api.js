@@ -70,6 +70,7 @@ export const api = {
   },
   getMe: () => request('/auth/me'),
   getSkills: () => request('/ai/skills'),
+  getAiUsage: () => request('/ai/usage'),
   runStoryAgent: (input) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input) }),
   createAiTask: (input) => request('/ai/tasks', { method: 'POST', body: JSON.stringify(input) }),
   getAiTasks: (projectId = '') => request(`/ai/tasks${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),

@@ -4,8 +4,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
-COPY ai-service/requirements.txt ./ai-service/requirements.txt
-RUN pip install --no-cache-dir -r ai-service/requirements.txt
+COPY ai-service/requirements.txt ai-service/requirements.lock ./ai-service/
+RUN pip install --no-cache-dir -r ai-service/requirements.lock
 COPY ai-service ./ai-service
 COPY skills ./skills
 

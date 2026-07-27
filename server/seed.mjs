@@ -7,6 +7,7 @@ export const seed = {
   editHistory: {},
   writingSessions: {},
   writingTasks: [],
+  aiUsage: [],
   foreshadows: [],
   storyMemories: [],
   ideas: [],
