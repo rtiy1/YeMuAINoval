@@ -777,6 +777,7 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .ai-task-tray-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 11px; }
 .ai-task-tray-heading span { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
 .ai-task-tray-heading small { color: #8a908a; font-size: 9px; }
+.ai-task-tray-heading > div { display: flex; align-items: center; gap: 5px; }
 .ai-task-item { position: relative; padding: 8px 25px 8px 0; border-top: 1px solid #ebe8e0; }
 .ai-task-item-top { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; }
 .ai-task-item-top span { color: #6d8479; font-variant-numeric: tabular-nums; }
@@ -901,4 +902,24 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 
 @media (max-width: 460px) {
   .dashboard-summary { grid-template-columns: 1fr; }
+}
+
+/* Focused writing workspace:正文 + Agent */
+.editor-page .chapter-rail, .editor-page .mobile-rail-scrim { display: none !important; }
+.editor-page:not(.reading-mode) .editor-layout { grid-template-columns: minmax(420px, 1fr) minmax(330px, 360px); }
+.editor-page.assistant-hidden .editor-layout { grid-template-columns: minmax(420px, 1fr) 42px; }
+.workspace-chapter-picker { display: flex; align-items: center; gap: 7px; color: #989b93; font-family: 'DM Mono', monospace; font-size: 9px; }
+.workspace-chapter-picker select { width: min(260px, 28vw); height: 31px; padding: 0 28px 0 9px; color: #555c56; background: #f4f1e9; border: 1px solid #ddd9cf; border-radius: 4px; outline: none; font-size: 10px; }
+.workspace-empty { height: 100%; display: grid; place-items: center; }
+
+@media (min-width: 761px) and (max-width: 1050px) {
+  .editor-page:not(.reading-mode) .editor-layout { grid-template-columns: minmax(360px, 1fr) minmax(300px, 330px); }
+  .editor-page.assistant-hidden .editor-layout { grid-template-columns: minmax(360px, 1fr) 42px; }
+  .editor-page .agent-rail { display: flex; }
+}
+
+@media (max-width: 760px) {
+  .editor-page { min-height: calc(100dvh - 62px); }
+  .workspace-chapter-picker { width: 100%; }
+  .workspace-chapter-picker select { min-width: 0; width: auto; flex: 1; }
 }
