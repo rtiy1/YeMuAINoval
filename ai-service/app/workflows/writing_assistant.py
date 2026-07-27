@@ -32,7 +32,18 @@ def generate_writing_proposal(request: WritingProposalRequest) -> WritingProposa
         )
 
     package = get_skill_registry().load(selected_skill)
-    references = load_referenced(selected_skill, package.instructions, 120_000)
+    reference_context = (
+        f'生成建书方案\n'
+        f'{json.dumps(requirements.model_dump(), ensure_ascii=False)}\n'
+        + '\n'.join(f'{item.role}: {item.text}' for item in request.messages[-8:])
+    )
+    references = load_referenced(
+        selected_skill,
+        package.instructions,
+        70_000,
+        task_context=reference_context,
+        max_references=5,
+    )
     context_window = resolve_context_window(override, settings)
     contract = truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 80_000)
     reference_block = truncate_for_context(

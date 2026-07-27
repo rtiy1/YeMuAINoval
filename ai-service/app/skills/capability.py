@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Callable
@@ -31,6 +32,9 @@ class SkillInvocation:
 
 
 SkillExecutor = Callable[[SkillInvocation], dict[str, Any]]
+DEFAULT_SKILL_METADATA_CHAR_BUDGET = 8_000
+SKILL_METADATA_CONTEXT_PERCENT = 0.02
+ESTIMATED_CHARS_PER_TOKEN = 4
 
 
 class StorySkillCapability:
@@ -40,7 +44,7 @@ class StorySkillCapability:
         self._requires_model: set[str] = set()
 
     def register(self, skill_name: str, executor_name: str, executor: SkillExecutor, requires_model: bool = False) -> None:
-        self.registry.load(skill_name)
+        self.registry.describe(skill_name)
         self._executors[skill_name] = (executor_name, executor)
         if requires_model:
             self._requires_model.add(skill_name)
@@ -55,6 +59,32 @@ class StorySkillCapability:
             {name: item[0] for name, item in self._executors.items()},
             status_overrides,
         )
+
+    def discovery_catalog(self, context_window: int | None = None) -> list[dict[str, str]]:
+        """生成供模型路由使用的紧凑元数据目录，不包含 Skill 正文或引用。"""
+        budget = DEFAULT_SKILL_METADATA_CHAR_BUDGET
+        if context_window and context_window > 0:
+            budget = max(
+                1_000,
+                int(context_window * SKILL_METADATA_CONTEXT_PERCENT * ESTIMATED_CHARS_PER_TOKEN),
+            )
+        entries = [
+            {
+                'name': item.name,
+                'description': item.description[:1024],
+                'status': item.status,
+            }
+            for item in self.catalog()
+        ]
+        while len(json.dumps(entries, ensure_ascii=False)) > budget:
+            longest = max(entries, key=lambda item: len(item['description']), default=None)
+            if longest and len(longest['description']) > 80:
+                longest['description'] = longest['description'][:max(80, int(len(longest['description']) * 0.8))].rstrip() + '…'
+                continue
+            if len(entries) <= 1:
+                break
+            entries.pop()
+        return entries
 
     def invoke(self, skill_name: str, instruction: str, payload: dict[str, Any] | None = None, model_config_override: Any = None) -> dict[str, Any]:
         self.registry.load(skill_name)

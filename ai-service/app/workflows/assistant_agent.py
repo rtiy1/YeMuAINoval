@@ -23,7 +23,7 @@ from app.schemas import (
     WritingRequirementsPatch,
 )
 from app.skills.capability import SkillInvocation, get_story_skill_capability, route_story_intent
-from app.skills.model_helper import create_chat_model, has_api_key
+from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window
 from app.workflows.story_agent import run_story_agent
 from app.workflows.writing_assistant import generate_writing_proposal
 
@@ -143,7 +143,8 @@ def _fallback_decision(request: WritingAssistantTurnRequest, selected_skill: str
             ]),
             'genre': AssistantPlanQuestion(id='writing_genre', field='genre', question='你希望它落在哪个题材里？', options=[
                 {'label': '现代言情', 'value': '现代言情'}, {'label': '东方玄幻', 'value': '东方玄幻'},
-                {'label': '悬疑推理', 'value': '悬疑推理'}, {'label': '都市现实', 'value': '都市现实'},
+                {'label': '悬疑推理', 'value': '悬疑推理'}, {'label': '无限流', 'value': '无限流'},
+                {'label': '科幻末世', 'value': '科幻末世'}, {'label': '历史架空', 'value': '历史架空'},
             ]),
             'style': AssistantPlanQuestion(id='writing_style', field='style', question='你最想突出哪种阅读体验或核心爽点？', options=[
                 {'label': '逆袭打脸', 'value': '逆袭打脸'}, {'label': '重生复仇', 'value': '重生复仇'},
@@ -177,7 +178,7 @@ def _plan_turn(request: WritingAssistantTurnRequest) -> AssistantDecision:
     if not has_api_key(override, settings):
         return _fallback_decision(request, routed)
 
-    catalog = [item.model_dump() for item in get_story_skill_capability().catalog()]
+    catalog = get_story_skill_capability().discovery_catalog(resolve_context_window(override, settings))
     transcript = '\n'.join(f'{item.role}: {item.text}' for item in request.messages[-20:])
     human_prompt = f'''能力目录：
 {json.dumps(catalog, ensure_ascii=False)}

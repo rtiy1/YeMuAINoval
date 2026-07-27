@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -17,7 +18,8 @@ from app.agent_instructions import (
 )
 from app.schemas import ContextCompactRequest, EditProposal, StoryMemoryCandidate, StoryMemoryExtractRequest, ModelConfig
 from app.skills.model_helper import has_api_key, resolve_model_kwargs
-from app.skills.capability import SkillInvocation
+from app.skills.capability import SkillInvocation, get_story_skill_capability
+from app.skills.reference_loader import select_reference_requests
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
 from app.workflows.memory import extract_story_memories
@@ -35,6 +37,36 @@ class AssistantProtocolTests(unittest.TestCase):
     def test_fallback_asks_at_most_one_question(self):
         decision = _fallback_decision(WritingAssistantTurnRequest(message='我想写一本小说'), 'story')
         self.assertLessEqual(len(decision.questions), 1)
+
+    def test_skill_references_are_selected_progressively_for_current_task(self):
+        instructions = '''# 写作 Skill
+日更续写时加载 `references/workflow-daily.md`。
+大修或回炉时加载 `references/workflow-revision.md`。
+设计开篇时加载 `references/opening-design.md`。
+审查人物关系时加载 `references/character-relations.md`。
+'''
+        selected = select_reference_requests(
+            instructions,
+            '继续日更，续写今天这一章，保持现有大纲',
+            max_references=2,
+        )
+        self.assertIn('references/workflow-daily.md', selected)
+        self.assertNotIn('references/workflow-revision.md', selected)
+        self.assertLessEqual(len(selected), 2)
+        new_book = select_reference_requests(
+            instructions,
+            '从零开一本无限流小说，先设计大纲',
+            max_references=4,
+        )
+        self.assertNotIn('references/workflow-daily.md', new_book)
+        self.assertNotIn('references/workflow-revision.md', new_book)
+
+    def test_skill_discovery_catalog_contains_metadata_only_and_is_budgeted(self):
+        catalog = get_story_skill_capability().discovery_catalog(context_window=100_000)
+        self.assertTrue(catalog)
+        self.assertLessEqual(len(json.dumps(catalog, ensure_ascii=False)), 8_000)
+        self.assertTrue(all(set(item) == {'name', 'description', 'status'} for item in catalog))
+        self.assertTrue(all('SKILL CONTRACT' not in item['description'] for item in catalog))
 
     def test_shared_agent_policy_matches_codex_style_execution_boundaries(self):
         self.assertIn('直接推进到可交付结果', AGENT_EXECUTION_POLICY)

@@ -82,7 +82,7 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['result']['Rubric'], 'fanqie')
         self.assertEqual(payload['result']['Effective Mode'], 'solo')
 
-    async def test_prompt_skill_reports_missing_model_and_loads_references(self):
+    async def test_prompt_skill_defers_references_until_model_execution(self):
         response = await self.client.post(
             '/v1/agents/story',
             headers={'x-service-token': 'test-service-token'},
@@ -92,9 +92,13 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         payload = response.json()
         self.assertEqual(payload['status'], 'needs_model')
         self.assertTrue(payload['result']['contract_loaded'])
-        # story-long-write SKILL.md 引用了大量 references，应非空
-        self.assertIsInstance(payload['result']['references_loaded'], list)
-        self.assertGreater(len(payload['result']['references_loaded']), 0)
+        self.assertEqual(payload['result']['skill_loading'], 'progressive')
+        self.assertEqual(payload['result']['references_loaded'], [])
+        self.assertGreater(payload['result']['references_available'], 0)
+        self.assertEqual(
+            payload['result']['references_deferred'],
+            payload['result']['references_available'],
+        )
 
     async def test_reviewed_community_skill_uses_prompt_only_host(self):
         response = await self.client.post(

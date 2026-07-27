@@ -10,7 +10,7 @@ from app.agent_instructions import compose_system_prompt
 from app.config import get_settings
 from app.schemas import StoryAgentRequest, StoryAgentResponse
 from app.skills.capability import SkillNotReadyError, get_story_skill_capability, route_story_intent
-from app.skills.model_helper import create_chat_model, has_api_key
+from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window
 
 
 class AgentState(TypedDict, total=False):
@@ -44,7 +44,7 @@ def select_skill(state: AgentState) -> dict[str, Any]:
     override = state.get('model_config_override')
     capability = get_story_skill_capability()
     if has_api_key(override, settings):
-        catalog = [item.model_dump() for item in capability.catalog()]
+        catalog = capability.discovery_catalog(resolve_context_window(override, settings))
         model = create_chat_model(override, settings, default_temperature=0).with_structured_output(SkillSelection)
         prompt = ChatPromptTemplate.from_messages([
             ('system', SKILL_ROUTER_SYSTEM_PROMPT),

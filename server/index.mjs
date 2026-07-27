@@ -49,7 +49,11 @@ const STORY_MEMORY_TYPES = new Set(['character_state', 'event', 'world_rule', 'c
 const STORY_MEMORY_STATUSES = new Set(['active', 'archived'])
 const SKILL_MARKET_CATEGORIES = new Set(['写作', '审稿', '人物', '世界观', '效率', '其他'])
 const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
-const GENRE_SUGGESTIONS = ['现代言情', '古代言情', '东方玄幻', '悬疑推理', '都市现实', '科幻末世', '历史架空']
+const GENRE_SUGGESTIONS = [
+  '现代言情', '古代言情', '东方玄幻', '武侠仙侠', '都市高武', '都市脑洞',
+  '悬疑推理', '悬疑灵异', '科幻末世', '无限流', '规则怪谈', '历史架空',
+  '豪门总裁', '宫斗宅斗', '种田经商', '游戏竞技', '快穿', '双男主',
+]
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
 const writingTaskControllers = new Map()
 const registrationMode = process.env.REGISTRATION_MODE || (process.env.NODE_ENV === 'production' ? 'owner-only' : 'open')

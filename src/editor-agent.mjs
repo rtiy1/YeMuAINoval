@@ -29,6 +29,54 @@ export function agentResponseText(response) {
   return response?.status === 'completed' ? '任务已完成。' : 'Agent 没有返回可显示的文本。'
 }
 
+function cleanAgentChoiceText(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/^>\s?/gm, '')
+    .replace(/^\s*---+\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+export function parseAgentChoicePrompt(value) {
+  const lines = String(value || '').replace(/\r\n?/g, '\n').split('\n')
+  const optionPattern = /^\s*(?:[-*+]\s*)?(?:\*\*)?([A-H])(?:\*\*)?\s*(?:[.、:：]|[—–-]{1,2})\s*(.+?)\s*$/i
+  const matches = lines
+    .map((line, index) => {
+      const match = line.match(optionPattern)
+      return match ? { index, key: match[1].toUpperCase(), label: cleanAgentChoiceText(match[2]) } : null
+    })
+    .filter(Boolean)
+
+  if (matches.length < 2 || new Set(matches.map((item) => item.key)).size !== matches.length) return null
+
+  const firstOptionIndex = matches[0].index
+  const lastOptionIndex = matches.at(-1).index
+  let headingIndex = -1
+  for (let index = firstOptionIndex - 1; index >= 0; index -= 1) {
+    if (/障碍问题|需要你选择|请选择|请确认|选择一个|确认一项/.test(lines[index])) {
+      headingIndex = index
+      break
+    }
+  }
+
+  const questionStart = headingIndex >= 0 ? headingIndex + 1 : Math.max(0, firstOptionIndex - 1)
+  const introEnd = headingIndex >= 0 ? headingIndex : questionStart
+  const intro = cleanAgentChoiceText(lines.slice(0, introEnd).join('\n'))
+  const question = cleanAgentChoiceText(lines.slice(questionStart, firstOptionIndex).join('\n')) || '请选择一个方向继续'
+  const hint = cleanAgentChoiceText(lines.slice(lastOptionIndex + 1).join('\n'))
+
+  return {
+    intro,
+    question,
+    hint,
+    options: matches.map(({ key, label }) => ({ key, label, reply: `${key}：${label}` })),
+  }
+}
+
 export function resolveEditorAgentCommand(rawMessage, project) {
   const message = String(rawMessage || '').trim()
   if (!message.startsWith('/')) return { message, skill: 'story' }

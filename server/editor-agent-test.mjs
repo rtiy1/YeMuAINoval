@@ -7,6 +7,7 @@ import {
   agentTurnEvents,
   formatAgentDuration,
   isEditorAgentEdit,
+  parseAgentChoicePrompt,
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from '../src/editor-agent.mjs'
@@ -40,6 +41,36 @@ test('editor agent renders structured result summaries', () => {
     /动机不足：补一处行动依据/,
   )
   assert.equal(agentResponseText({ status: 'completed', result: {} }), '任务已完成。')
+})
+
+test('editor agent converts markdown choices into structured options', () => {
+  const parsed = parseAgentChoicePrompt(`# 项目状态诊断
+
+当前项目没有明确流派，需要先确认。
+
+**障碍问题（1个）：**
+
+你要写哪一种无限流？
+
+- **A** — 副本生存 / 规则怪谈
+- **B** — 现代言情框架加入无限流元素
+- **C** — 还没想好，先帮我确定方向
+
+确定后我直接进入开书流程。`)
+
+  assert.equal(parsed.intro, '项目状态诊断\n\n当前项目没有明确流派，需要先确认。')
+  assert.equal(parsed.question, '你要写哪一种无限流？')
+  assert.deepEqual(parsed.options.map(({ key, label }) => ({ key, label })), [
+    { key: 'A', label: '副本生存 / 规则怪谈' },
+    { key: 'B', label: '现代言情框架加入无限流元素' },
+    { key: 'C', label: '还没想好，先帮我确定方向' },
+  ])
+  assert.equal(parsed.options[0].reply, 'A：副本生存 / 规则怪谈')
+  assert.equal(parsed.hint, '确定后我直接进入开书流程。')
+})
+
+test('editor agent leaves ordinary prose unchanged', () => {
+  assert.equal(parseAgentChoicePrompt('这是普通的章节分析，没有需要选择的内容。'), null)
 })
 
 test('editor agent formats durations and aborts polling', async () => {

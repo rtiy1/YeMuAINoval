@@ -87,6 +87,7 @@ import {
   agentThreadMessages,
   formatAgentDuration,
   isEditorAgentEdit,
+  parseAgentChoicePrompt,
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from './editor-agent.mjs'
@@ -95,6 +96,25 @@ const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
 const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
+const PROJECT_GENRE_GROUPS = [
+  {
+    label: '幻想与冒险',
+    options: ['东方玄幻', '西方奇幻', '武侠仙侠', '玄幻言情', '科幻末世', '无限流', '规则怪谈', '游戏竞技', '轻小说'],
+  },
+  {
+    label: '都市与现实',
+    options: ['都市现实', '都市生活', '都市高武', '都市修真', '都市脑洞', '职场商战', '战神赘婿', '年代'],
+  },
+  {
+    label: '情感与关系',
+    options: ['现代言情', '古代言情', '豪门总裁', '青春甜宠', '职场婚恋', '宫斗宅斗', '种田经商', '快穿', '双男主'],
+  },
+  {
+    label: '悬疑与历史',
+    options: ['悬疑推理', '悬疑灵异', '女频悬疑', '历史架空', '历史脑洞', '民国言情', '抗战谍战', '群像'],
+  },
+]
+const PROJECT_GENRES = PROJECT_GENRE_GROUPS.flatMap((group) => group.options)
 
 const primaryNavItems = [
   { id: 'editor', label: '工作台', icon: PenLine },
@@ -340,7 +360,6 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [smartProposal, setSmartProposal] = useState(null)
   const [smartCreateLoading, setSmartCreateLoading] = useState(false)
-  const [aiTasks, setAiTasks] = useState([])
   const draftRef = useRef('')
   const savedDraftRef = useRef('')
   const activeDraftKeyRef = useRef('')
@@ -385,25 +404,6 @@ function App() {
         if (mounted) setToast('账号数据读取失败，请检查后端服务')
       })
     return () => { mounted = false }
-  }, [user])
-
-  useEffect(() => {
-    if (!user) {
-      setAiTasks([])
-      return undefined
-    }
-    let mounted = true
-    async function refreshTasks() {
-      try {
-        const response = await api.getAiTasks()
-        if (mounted) setAiTasks(response.tasks || [])
-      } catch {
-        // Task history is supplementary; the editor remains usable if it is unavailable.
-      }
-    }
-    void refreshTasks()
-    const timer = window.setInterval(refreshTasks, 1800)
-    return () => { mounted = false; window.clearInterval(timer) }
   }, [user])
 
   useEffect(() => {
@@ -1041,13 +1041,11 @@ function App() {
     try {
       const created = await api.createAiTask({ message, skill, payload, idempotencyKey })
       if (created.task.reused) setToast('已复用进行中的相同任务')
-      setAiTasks((current) => [created.task, ...current.filter((task) => task.id !== created.task.id)].slice(0, 50))
       let task = created.task
       for (let attempt = 0; attempt < 240 && ['queued', 'running'].includes(task.status); attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 700))
         const response = await api.getAiTask(task.id)
         task = response.task
-        setAiTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].slice(0, 50))
       }
       if (task.status === 'completed' && task.result) {
         setRunnerResult({ ...task.result, taskId: task.id })
@@ -1068,25 +1066,6 @@ function App() {
       return await request
     } finally {
       skillSubmissionRef.current = null
-    }
-  }
-
-  async function retryAiTask(taskId) {
-    try {
-      const response = await api.retryAiTask(taskId)
-      setAiTasks((current) => [response.task, ...current.filter((task) => task.id !== response.task.id)].slice(0, 50))
-      setToast(`已重新提交任务 · 第 ${response.task.attempt || 2} 次`)
-    } catch (error) {
-      setToast(error.message || '重新提交 AI 任务失败')
-    }
-  }
-
-  async function cancelAiTask(taskId) {
-    try {
-      const response = await api.cancelAiTask(taskId)
-      setAiTasks((current) => [response.task, ...current.filter((task) => task.id !== taskId)])
-    } catch (error) {
-      setToast(error.message || '取消 AI 任务失败')
     }
   }
 
@@ -1268,7 +1247,6 @@ function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} onNotify={notify} />}
       {searchOpen && <SearchModal projects={projects} chapters={chapters} ideas={ideas} onClose={() => setSearchOpen(false)} onOpenProject={openProject} onSelectChapter={selectChapter} onNavigate={selectSection} />}
       {editProjectTarget && <EditProjectModal project={editProjectTarget} onClose={() => setEditProjectTarget(null)} onSave={(updates) => { editProject(editProjectTarget, updates); setEditProjectTarget(null) }} />}
-      <AiTaskTray tasks={aiTasks} onCancel={cancelAiTask} onRetry={retryAiTask} />
       {toast && <div className={`toast ${toastKind(toast)}`} role="status" aria-live="polite">{toastKind(toast) === 'loading' ? <LoaderCircle size={16} className="spin" /> : toastKind(toast) === 'error' ? <Info size={16} /> : <Check size={16} />}{toast}</div>}
     </div>
   )
@@ -1434,16 +1412,6 @@ function ProfileCenter({ user, stats, projects, onNavigate, onOpenSettings, onOp
       </div>
     </section>
   </div>
-}
-
-function AiTaskTray({ tasks, onCancel, onRetry }) {
-  const [dismissed, setDismissed] = useState(() => new Set())
-  const visible = tasks
-    .filter((task) => !dismissed.has(task.id))
-    .filter((task) => ['queued', 'running'].includes(task.status) || task.createdAt && Date.now() - new Date(task.createdAt).getTime() < 90_000)
-    .slice(0, 4)
-  if (!visible.length) return null
-  return <aside className="ai-task-tray" aria-label="AI 任务"><div className="ai-task-tray-heading"><span><Clock3 size={14} />AI 任务</span><div><small>{visible.filter((task) => ['queued', 'running'].includes(task.status)).length} 进行中</small><button type="button" className="icon-button small" aria-label="关闭 AI 任务面板" title="关闭" onClick={() => setDismissed((current) => new Set([...current, ...visible.map((task) => task.id)]))}><X size={14} /></button></div></div>{visible.map((task) => <div className="ai-task-item" key={task.id}><div className="ai-task-item-top"><strong>{task.skill || '智能路由'}</strong><span>{task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : `${task.progress || 0}%`}</span></div><p>{task.statusMessage || task.message}</p>{['queued', 'running'].includes(task.status) && <button type="button" className="icon-button small" aria-label="取消 AI 任务" title="取消 AI 任务" onClick={() => onCancel(task.id)}><X size={13} /></button>}{['failed', 'cancelled'].includes(task.status) && <button type="button" className="icon-button small task-retry-button" aria-label="重试 AI 任务" title="使用原参数重新提交" onClick={() => onRetry(task.id)}><Redo2 size={13} /></button>}<div className="ai-task-progress"><span style={{ width: `${Math.max(3, Number(task.progress) || 0)}%` }} /></div></div>)}</aside>
 }
 
 function AuthScreen({ mode, error, onModeChange, onSubmit }) {
@@ -1772,7 +1740,39 @@ function ProjectCard({ project, onOpen }) {
   return <button className="project-card" onClick={() => onOpen(project)}><div className={`card-cover ${project.cover}`}><span>{project.title.slice(0, 1)}</span></div><div className="card-content"><div className="card-topline"><span>{project.type}</span><MoreHorizontal size={15} /></div><h3>{project.title}</h3><p>{project.genre}</p><div className="card-footer"><span>{project.words} 字</span><span>{project.progress}%</span></div><div className="mini-progress"><span style={{ width: `${project.progress}%` }} /></div></div></button>
 }
 
-function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
+function AgentChoicePrompt({ prompt, disabled, onChoose }) {
+  const [selected, setSelected] = useState('')
+
+  function choose(option) {
+    if (disabled || selected) return
+    setSelected(option.key)
+    onChoose(option.reply)
+  }
+
+  return <div className="agent-choice-response">
+    {prompt.intro && <p className="agent-choice-intro">{prompt.intro}</p>}
+    <section className="agent-choice-card" aria-label="请选择一个方向">
+      <header><span>需要你确认</span><small>选择一项继续</small></header>
+      <p>{prompt.question}</p>
+      <div className="agent-choice-options">
+        {prompt.options.map((option) => <button
+          type="button"
+          key={option.key}
+          className={selected === option.key ? 'selected' : ''}
+          disabled={disabled || Boolean(selected)}
+          onClick={() => choose(option)}
+        >
+          <strong>{option.key}</strong>
+          <span>{option.label}</span>
+          {selected === option.key ? <Check size={13} /> : <ChevronRight size={13} />}
+        </button>)}
+      </div>
+      {prompt.hint && <small className="agent-choice-hint">{prompt.hint}</small>}
+    </section>
+  </div>
+}
+
+function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled = false }) {
   const result = run.response?.result || {}
   const proposal = result.edit_proposal || null
   const outputText = typeof (proposal?.revised_text ?? result.output) === 'string'
@@ -1800,6 +1800,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
   const exploredCount = Math.max(1, references.length + attachedFiles.length)
   const contextCount = Math.max(1, attachedFiles.length + (run.source?.selectedText ? 1 : 0))
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
+  const choicePrompt = parseAgentChoicePrompt(run.text)
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
@@ -1876,7 +1877,9 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
 
     {run.status !== 'running' && <div className={`agent-answer ${['failed', 'cancelled', 'needs_model', 'needs_input', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`}>
       <div className="agent-answer-heading"><Bot size={15} /><strong>{ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
-      <p>{run.text}</p>
+      {choicePrompt
+        ? <AgentChoicePrompt prompt={choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
+        : <p>{run.text}</p>}
     </div>}
 
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
@@ -3452,9 +3455,16 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><Wand2 size={13} />自然化润色</button>
                 </div>
               </div>}
-              {assistantMessages.map((message) => message.role === 'user'
+              {assistantMessages.map((message, index) => message.role === 'user'
                 ? <div className="agent-user-turn" key={message.id}><p>{message.text}</p></div>
-                : <EditorAgentTurn key={message.id} run={message} elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs} onApply={applyAssistantRevision} />)}
+                : <EditorAgentTurn
+                  key={message.id}
+                  run={message}
+                  elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs}
+                  onApply={applyAssistantRevision}
+                  onChoose={(reply) => submitAssistant(null, reply)}
+                  choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
+                />)}
             </div>
             <div className="agent-composer-wrap">
               <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span><small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
@@ -4191,7 +4201,16 @@ function SmartCreateModal({ proposal, loading, onClose, onCreate }) {
 }
 
 function NewProjectModal({ onClose, onCreate }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-project-title"><div className="modal-heading"><div><span className="section-overline">开始一个新故事</span><h2 id="new-project-title">新建作品</h2></div><button className="icon-button" aria-label="关闭" title="关闭" onClick={onClose}><X size={18} /></button></div><form onSubmit={onCreate}><label>作品名<input name="title" autoFocus placeholder="例如：潮汐之上" /></label><div className="form-row"><label>篇幅<select name="type" defaultValue="长篇"><option>长篇</option><option>短篇</option><option>参考书</option></select></label><label>题材<select name="genre" defaultValue="现代言情"><option>现代言情</option><option>古代言情</option><option>东方玄幻</option><option>悬疑推理</option><option>都市现实</option></select></label></div><label>流派 / 核心爽点<input name="style" maxLength={80} placeholder="例如：重生复仇、甜宠拉扯" /></label><div className="modal-note"><Sparkles size={16} /><span>创建后，你可以先写一句话故事核，其他设定随时补充。</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="dark-button"><Plus size={16} />创建作品</button></div></form></div></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-project-title"><div className="modal-heading"><div><span className="section-overline">开始一个新故事</span><h2 id="new-project-title">新建作品</h2></div><button className="icon-button" aria-label="关闭" title="关闭" onClick={onClose}><X size={18} /></button></div><form onSubmit={onCreate}><label>作品名<input name="title" autoFocus placeholder="例如：潮汐之上" /></label><div className="form-row"><label>篇幅<select name="type" defaultValue="长篇"><option>长篇</option><option>短篇</option><option>参考书</option></select></label><label>题材<select name="genre" defaultValue="现代言情"><ProjectGenreOptions /></select></label></div><label>流派 / 核心爽点<input name="style" maxLength={80} placeholder="例如：重生复仇、甜宠拉扯" /></label><div className="modal-note"><Sparkles size={16} /><span>创建后，你可以先写一句话故事核，其他设定随时补充。</span></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="dark-button"><Plus size={16} />创建作品</button></div></form></div></div>
+}
+
+function ProjectGenreOptions({ value = '' }) {
+  return <>
+    {value && !PROJECT_GENRES.includes(value) && <option value={value}>{value}</option>}
+    {PROJECT_GENRE_GROUPS.map((group) => <optgroup label={group.label} key={group.label}>
+      {group.options.map((genre) => <option value={genre} key={genre}>{genre}</option>)}
+    </optgroup>)}
+  </>
 }
 
 function EditProjectModal({ project, onClose, onSave }) {
@@ -4201,7 +4220,7 @@ function EditProjectModal({ project, onClose, onSave }) {
     onSave(form)
   }
   function update(field, value) { setForm((f) => ({ ...f, [field]: value })) }
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">编辑作品</span><h2>作品设置</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label>作品名<input value={form.title} onChange={(e) => update('title', e.target.value)} maxLength={80} /></label><div className="form-row"><label>篇幅<select value={form.type} onChange={(e) => update('type', e.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label><label>题材<select value={form.genre} onChange={(e) => update('genre', e.target.value)}><option>现代言情</option><option>古代言情</option><option>东方玄幻</option><option>悬疑推理</option><option>都市现实</option></select></label></div><label>流派 / 核心爽点<input value={form.style} onChange={(e) => update('style', e.target.value)} maxLength={80} placeholder="例如：逆袭打脸、克苏鲁悬疑" /></label><label>状态<select value={form.status} onChange={(e) => update('status', e.target.value)}><option>构思中</option><option>连载中</option><option>已完结</option><option>已拆文</option></select></label><label>创作基调<input value={form.tone} onChange={(e) => update('tone', e.target.value)} maxLength={160} placeholder="一句话描述整体气质" /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="dark-button">保存</button></div></form></div></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">编辑作品</span><h2>作品设置</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label>作品名<input value={form.title} onChange={(e) => update('title', e.target.value)} maxLength={80} /></label><div className="form-row"><label>篇幅<select value={form.type} onChange={(e) => update('type', e.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label><label>题材<select value={form.genre} onChange={(e) => update('genre', e.target.value)}><ProjectGenreOptions value={form.genre} /></select></label></div><label>流派 / 核心爽点<input value={form.style} onChange={(e) => update('style', e.target.value)} maxLength={80} placeholder="例如：逆袭打脸、克苏鲁悬疑" /></label><label>状态<select value={form.status} onChange={(e) => update('status', e.target.value)}><option>构思中</option><option>连载中</option><option>已完结</option><option>已拆文</option></select></label><label>创作基调<input value={form.tone} onChange={(e) => update('tone', e.target.value)} maxLength={160} placeholder="一句话描述整体气质" /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="dark-button">保存</button></div></form></div></div>
 }
 
 function SkillRunnerModal({ skill, skills, loading, result, onClose, onRun, draft, initialMessage = '', context = null, canApplyToDraft = false, onApplyOutput, smartCreateMode = false, onUseSmartResult }) {

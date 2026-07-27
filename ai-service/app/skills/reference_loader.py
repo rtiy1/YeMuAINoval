@@ -29,6 +29,10 @@ class ReferenceLoadResult:
     """{相对路径: 文件内容}，按 SKILL.md 中出现顺序排列。"""
     truncated: bool
     """是否因字节预算截断而跳过了部分文件。"""
+    available: int
+    """SKILL.md 中声明的引用数量（未读取正文）。"""
+    deferred: int
+    """本轮未选择、留待后续任务按需加载的引用数量。"""
 
 
 def extract_reference_requests(instructions: str) -> list[str]:
@@ -47,27 +51,124 @@ def extract_reference_requests(instructions: str) -> list[str]:
     return found
 
 
+_MANDATORY_MARKERS = re.compile(r'写作前必须加载|写作前必读|执行前必须加载|全程必读|全程参考', re.IGNORECASE)
+_ASCII_TERM = re.compile(r'[a-z0-9][a-z0-9_-]{1,}', re.IGNORECASE)
+_CHINESE_RUN = re.compile(r'[\u4e00-\u9fff]{2,}')
+_COMMON_BIGRAMS = {
+    '写作', '正文', '章节', '故事', '小说', '用户', '当前', '参考', '加载',
+    '文件', '内容', '进行', '使用', '需要', '根据', '相关', '完成',
+}
+_CONDITIONAL_REFERENCE_TRIGGERS = {
+    'workflow-daily.md': re.compile(r'日更|续写|继续写|接着写'),
+    'workflow-revision.md': re.compile(r'大修|回炉|重写|改写|修改第'),
+    'short-deslop.md': re.compile(r'去\s*ai|去味|自然化|模板腔', re.IGNORECASE),
+    'opening-design.md': re.compile(r'开篇|开头|黄金三章|前\s*3\s*章|前三章'),
+    'cross-book-recall.md': re.compile(r'对标|参考书|跨书|多本'),
+}
+
+
+def _terms(value: str) -> set[str]:
+    text = str(value or '').lower()
+    terms = {match.group(0) for match in _ASCII_TERM.finditer(text)}
+    for match in _CHINESE_RUN.finditer(text):
+        run = match.group(0)
+        terms.update(
+            run[index:index + 2]
+            for index in range(len(run) - 1)
+            if run[index:index + 2] not in _COMMON_BIGRAMS
+        )
+    return terms
+
+
+def _mention_context(instructions: str, path: str) -> str:
+    contexts: list[str] = []
+    cursor = 0
+    while len(contexts) < 8:
+        index = instructions.find(path, cursor)
+        if index < 0:
+            break
+        line_start = instructions.rfind('\n', 0, index) + 1
+        line_end = instructions.find('\n', index + len(path))
+        if line_end < 0:
+            line_end = len(instructions)
+        contexts.append(instructions[line_start:line_end])
+        cursor = index + len(path)
+    return '\n'.join(contexts)
+
+
+def select_reference_requests(
+    instructions: str,
+    task_context: str = '',
+    max_references: int = 8,
+) -> list[str]:
+    """只选择当前任务需要的 references，不读取任何 reference 正文。
+
+    选择依据来自 SKILL.md 中引用附近的触发说明，以及用户指令/结构化任务上下文；
+    未选中的引用保持延迟加载，不进入本轮模型提示。
+    """
+    requests = extract_reference_requests(instructions)
+    if not requests or max_references <= 0:
+        return []
+    task_terms = _terms(task_context)
+    ranked: list[tuple[int, int, bool, str]] = []
+    for order, path in enumerate(requests):
+        context = _mention_context(instructions, path)
+        context_terms = _terms(f'{path}\n{context}')
+        overlap = task_terms & context_terms
+        score = min(len(overlap), 24) * 4
+        score += sum(4 for term in overlap if term.isascii())
+        mandatory = bool(_MANDATORY_MARKERS.search(context))
+        trigger = next(
+            (pattern for suffix, pattern in _CONDITIONAL_REFERENCE_TRIGGERS.items() if path.endswith(suffix)),
+            None,
+        )
+        if trigger and not trigger.search(task_context):
+            score = 0
+            mandatory = False
+        ranked.append((score, -order, mandatory, path))
+
+    selected: list[str] = []
+    # 无条件必读资料也限制为 2 份，避免大型 Skill 用“必读”重新造成全量注入。
+    for _score, _order, _mandatory, path in sorted(
+        (item for item in ranked if item[2]),
+        reverse=True,
+    )[:2]:
+        selected.append(path)
+    for score, _order, _mandatory, path in sorted(ranked, reverse=True):
+        if len(selected) >= max_references:
+            break
+        if score <= 0 or path in selected:
+            continue
+        selected.append(path)
+    return selected
+
+
 def load_referenced(
     skill_name: str,
     instructions: str,
     budget_bytes: int = 200_000,
+    task_context: str = '',
+    max_references: int = 8,
 ) -> ReferenceLoadResult:
-    """加载 SKILL.md 中引用的 references，按字节预算截断。
+    """渐进加载当前任务选中的 references，按数量和字节预算截断。
 
     Args:
         skill_name: skill 名称。
         instructions: SKILL.md 契约全文。
         budget_bytes: 累计字节预算，超过后跳过剩余文件。
+        task_context: 用户指令及本轮结构化上下文，用于匹配引用触发条件。
+        max_references: 单轮最多读取的引用数量。
 
     Returns:
         ReferenceLoadResult，含加载的 {路径: 内容} 和是否截断标记。
     """
     registry = get_skill_registry()
     requests = extract_reference_requests(instructions)
+    selected = select_reference_requests(instructions, task_context, max_references)
     loaded: dict[str, str] = {}
     accumulated = 0
     truncated = False
-    for relative_path in requests:
+    for relative_path in selected:
         if accumulated >= budget_bytes:
             truncated = True
             break
@@ -75,9 +176,18 @@ def load_referenced(
             content = registry.read_reference(skill_name, relative_path)
         except (OSError, SkillRegistryError, UnicodeError):
             continue
+        content_size = len(content.encode('utf-8'))
+        if accumulated + content_size > budget_bytes:
+            truncated = True
+            break
         loaded[relative_path] = content
-        accumulated += len(content.encode('utf-8'))
-    return ReferenceLoadResult(references=loaded, truncated=truncated)
+        accumulated += content_size
+    return ReferenceLoadResult(
+        references=loaded,
+        truncated=truncated,
+        available=len(requests),
+        deferred=max(0, len(requests) - len(loaded)),
+    )
 
 
 def format_references_block(references: dict[str, str]) -> str:

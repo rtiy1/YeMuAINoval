@@ -28,6 +28,14 @@ class SkillPackage:
     instructions: str
 
 
+@dataclass(frozen=True)
+class SkillMetadata:
+    name: str
+    version: str | None
+    description: str
+    root: Path
+
+
 class SkillRegistry:
     def __init__(self, root: str | Path):
         self.root = Path(root).expanduser().resolve()
@@ -59,6 +67,38 @@ class SkillRegistry:
             description=metadata.get('description', ''),
             root=skill_dir,
             instructions=instructions,
+        )
+
+    def describe(self, name: str) -> SkillMetadata:
+        """只读取 Skill frontmatter，不加载完整契约正文。
+
+        能力发现和路由阶段只需要 name/version/description。完整 SKILL.md
+        必须等具体 Skill 被选中执行时再由 ``load`` 读取。
+        """
+        skill_dir = self._skill_dir(name)
+        skill_file = self._inside_root(skill_dir / 'SKILL.md')
+        if not skill_file.is_file():
+            raise SkillRegistryError(f'skill is not installed: {name}')
+        frontmatter_lines: list[str] = []
+        with skill_file.open('r', encoding='utf-8') as handle:
+            first = handle.readline()
+            if first.strip() == '---':
+                frontmatter_lines.append(first)
+                for line in handle:
+                    frontmatter_lines.append(line)
+                    if line.strip() == '---':
+                        break
+                    if sum(len(item) for item in frontmatter_lines) > 64_000:
+                        raise SkillRegistryError(f'skill frontmatter is too large: {name}')
+        metadata = parse_frontmatter(''.join(frontmatter_lines))
+        manifest_name = metadata.get('name', name)
+        if manifest_name != name:
+            raise SkillRegistryError(f'skill manifest name mismatch: {name}')
+        return SkillMetadata(
+            name=name,
+            version=metadata.get('version'),
+            description=metadata.get('description', '')[:1000],
+            root=skill_dir,
         )
 
     def read_reference(self, skill_name: str, relative_path: str) -> str:
@@ -113,13 +153,13 @@ class SkillRegistry:
         for skill_file in sorted(self.root.glob('*/SKILL.md')):
             name = skill_file.parent.name
             try:
-                package = self.load(name)
+                metadata = self.describe(name)
                 executor = executors.get(name)
                 override = (status_overrides or {}).get(name)
                 descriptors.append(SkillDescriptor(
                     name=name,
-                    version=package.version,
-                    description=package.description,
+                    version=metadata.version,
+                    description=metadata.description,
                     status=override or ('ready' if executor else 'registered'),
                     executor=executor,
                 ))

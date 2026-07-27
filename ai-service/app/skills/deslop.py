@@ -14,25 +14,21 @@ from app.model_content import model_content_text
 from app.model_usage import model_token_usage
 from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
-from app.skills.reference_loader import format_references_block, load_referenced
+from app.skills.reference_loader import extract_reference_requests, format_references_block, load_referenced
 from app.skills.registry import get_skill_registry
 from app.skills.script_checks import deduplicate_findings, run_check_scripts
 
 
 logger = logging.getLogger(__name__)
 
-REFERENCE_BUDGET_BYTES = 150_000
+REFERENCE_BUDGET_BYTES = 60_000
 
 
 def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
     settings = get_settings()
     package = get_skill_registry().load('story-deslop')
     override = invocation.model_config_override
-
-    # 按需加载引用
-    ref_result = load_referenced('story-deslop', package.instructions, REFERENCE_BUDGET_BYTES)
-    references_loaded = sorted(ref_result.references.keys())
-    references_block = format_references_block(ref_result.references)
+    references_available = len(extract_reference_requests(package.instructions))
 
     # 从 payload 取正文；缺正文时只做诊断
     content = invocation.payload.get('content') or ''
@@ -54,10 +50,13 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
             'skill': 'story-deslop',
             'execution_scope': 'deslop',
             'contract_loaded': True,
-            'references_loaded': references_loaded,
-            'references_truncated': ref_result.truncated,
+            'skill_loading': 'progressive',
+            'references_available': references_available,
+            'references_loaded': [],
+            'references_deferred': references_available,
+            'references_truncated': False,
             'checks': checks,
-            'message': '该 Skill 已加载契约、引用与确定性检查；改写正文需要配置 API Key。',
+            'message': '该 Skill 已加载契约与确定性检查；引用资料会在模型改写时渐进加载。请先配置 API Key。',
         }
 
     if not content:
@@ -66,11 +65,23 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
             'skill': 'story-deslop',
             'execution_scope': 'deslop',
             'contract_loaded': True,
-            'references_loaded': references_loaded,
+            'skill_loading': 'progressive',
+            'references_available': references_available,
+            'references_loaded': [],
+            'references_deferred': references_available,
             'checks': [],
             'message': '请提供需要去 AI 味的正文（payload.content）。',
         }
 
+    ref_result = load_referenced(
+        'story-deslop',
+        package.instructions,
+        REFERENCE_BUDGET_BYTES,
+        task_context=f'{invocation.instruction}\n{json.dumps(checks, ensure_ascii=False, default=str)[:12_000]}',
+        max_references=3,
+    )
+    references_loaded = sorted(ref_result.references.keys())
+    references_block = format_references_block(ref_result.references)
     context_window = resolve_context_window(override, settings)
     model = create_chat_model(override, settings, default_temperature=0.3)
 
@@ -103,7 +114,10 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
             'status': 'failed',
             'skill': 'story-deslop',
             'execution_scope': 'deslop',
+            'skill_loading': 'progressive',
             'references_loaded': references_loaded,
+            'references_available': ref_result.available,
+            'references_deferred': ref_result.deferred,
             'checks': checks,
             'message': '模型执行失败，请检查模型地址、密钥和上下文长度。',
         }
@@ -113,7 +127,10 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
         'status': 'completed',
         'skill': 'story-deslop',
         'execution_scope': 'deslop',
+        'skill_loading': 'progressive',
         'references_loaded': references_loaded,
+        'references_available': ref_result.available,
+        'references_deferred': ref_result.deferred,
         'references_truncated': ref_result.truncated,
         'checks': checks,
         'output': output,
