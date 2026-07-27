@@ -1333,6 +1333,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
 
   let turnStarted = false
   let lastTurnVersion = ''
+  let lastPlanVersion = ''
   let lastHeartbeat = Date.now()
   const itemVersions = new Map()
   try {
@@ -1350,6 +1351,16 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       if (!turnStarted) {
         turnStarted = true
         res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
+      }
+      const planVersion = JSON.stringify(publicTurn.plan || [])
+      if (planVersion !== lastPlanVersion) {
+        lastPlanVersion = planVersion
+        res.write(`event: turn/plan/updated\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          explanation: '夜雨会先读取当前写作上下文，再执行创作能力并整理结果。',
+          plan: publicTurn.plan || [],
+        })}\n\n`)
       }
       for (const item of publicTurn.items) {
         const version = `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta || {})}`

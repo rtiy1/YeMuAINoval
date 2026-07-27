@@ -69,6 +69,10 @@ test('editor agent restores persisted thread turns', () => {
         { id: 'item-agent', type: 'agentMessage', status: 'completed' },
       ],
       source: { chapterId: '1', sourceText: '原文' },
+      plan: [
+        { step: '读取上下文', status: 'completed' },
+        { step: '生成写作结果', status: 'completed' },
+      ],
       task: {
         id: 'task-1',
         status: 'completed',
@@ -88,6 +92,7 @@ test('editor agent restores persisted thread turns', () => {
   assert.equal(messages[1].source.sourceText, '原文')
   assert.equal(messages[1].turnId, 'turn-1')
   assert.equal(messages[1].events[0].label, '执行写作 Skill')
+  assert.deepEqual(messages[1].plan.map((item) => item.status), ['completed', 'completed'])
 })
 
 test('editor agent maps in-progress and interrupted items to timeline events', () => {

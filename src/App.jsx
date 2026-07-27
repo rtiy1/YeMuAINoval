@@ -1621,6 +1621,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
   const checks = Array.isArray(result.checks) ? result.checks : []
   const findings = Array.isArray(result.findings) ? result.findings : []
   const events = Array.isArray(run.events) ? run.events : []
+  const plan = Array.isArray(run.plan) ? run.plan : []
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
@@ -1647,6 +1648,13 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
       <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>{run.status === 'running' ? `正在处理 · ${formatAgentDuration(elapsedMs)}` : `思考了 ${formatAgentDuration(run.durationMs)}`}</strong><span>{statusLabel}</span></summary>
       <div className="agent-reasoning-body">
         <p>展示的是可核验的执行摘要、工具状态和耗时，不包含模型隐藏思维链。</p>
+        {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
+          <div className="agent-plan-heading"><List size={13} /><strong>执行计划</strong><span>{plan.filter((item) => item.status === 'completed').length}/{plan.length}</span></div>
+          <ol>{plan.map((item, index) => <li className={item.status} key={`${item.step}-${index}`}>
+            {item.status === 'completed' ? <Check size={11} /> : item.status === 'inProgress' ? <LoaderCircle size={11} className="spin" /> : <span className="agent-plan-dot" />}
+            <span>{item.step}</span>
+          </li>)}</ol>
+        </div>}
         <div className="agent-tool-stack">
           {(events.length ? events : [{ id: `${run.id}:local`, type: 'lifecycle', label: run.statusMessage || '正在创建任务', status: 'running' }]).map((event) => <div className={`agent-tool-row ${event.status === 'completed' ? 'done' : event.status}`} key={event.id}>
             <AgentEventIcon event={event} />
@@ -2286,6 +2294,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
         taskId: task.id,
         items: turn.items || [],
         events: agentTurnEvents(turn),
+        plan: turn.plan || [],
         progress: task.progress || 0,
       } : item))
       await monitorAssistantTurn(thread.id, turn.id, task.id, requestId, controller, startedAt)
@@ -2328,6 +2337,7 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
         : item.text,
       items: turn?.items || item.items || [],
       events: turn ? agentTurnEvents(turn) : task.events || item.events || [],
+      plan: turn?.plan || item.plan || [],
       progress: task.progress || 0,
       statusMessage: task.statusMessage || '',
       durationMs: performance.now() - startedAt,
@@ -2341,6 +2351,13 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
       await api.streamAgentTurn(threadId, turnId, {
         signal: controller.signal,
         onEvent: (event, payload) => {
+          if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+              ...item,
+              plan: Array.isArray(payload.plan) ? payload.plan : item.plan || [],
+            } : item))
+            return
+          }
           if (!event.startsWith('turn/') || !payload?.turn) return
           latestTurn = payload.turn
           if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)

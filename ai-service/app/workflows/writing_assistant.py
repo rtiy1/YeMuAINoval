@@ -1,6 +1,13 @@
 import json
 import logging
 
+from app.agent_instructions import (
+    DATA_BOUNDARY_POLICY,
+    EXECUTION_BOUNDARY_POLICY,
+    NIGHT_RAIN_IDENTITY,
+    STORY_FACT_POLICY,
+    compose_system_prompt,
+)
 from app.config import get_settings
 from app.schemas import WritingProposal, WritingProposalRequest, WritingProposalResponse
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
@@ -35,7 +42,12 @@ def generate_writing_proposal(request: WritingProposalRequest) -> WritingProposa
         120_000,
     )
     transcript = '\n'.join(f'{item.role}: {item.text}' for item in request.messages[-20:])
-    system_prompt = f'''你是叙事工坊的建书编排器，正在执行 {selected_skill}。根据已确认的创作需求生成可直接创建作品的结构化方案。
+    system_prompt = compose_system_prompt(
+        NIGHT_RAIN_IDENTITY,
+        STORY_FACT_POLICY,
+        EXECUTION_BOUNDARY_POLICY,
+        DATA_BOUNDARY_POLICY,
+        f'''你正在执行 {selected_skill}，根据已确认的创作需求生成可直接创建作品的结构化方案。
 
 必须遵守：
 1. type 必须是“{requirements.type}”，genre 和 style 保持用户选择，不擅自替换。
@@ -47,7 +59,8 @@ def generate_writing_proposal(request: WritingProposalRequest) -> WritingProposa
 SKILL CONTRACT:
 {contract}
 
-{reference_block}'''
+{reference_block}''',
+    )
     human_prompt = f'''已确认需求：
 {json.dumps(requirements.model_dump(), ensure_ascii=False)}
 

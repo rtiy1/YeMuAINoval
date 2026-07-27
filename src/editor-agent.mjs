@@ -106,6 +106,7 @@ export function agentThreadMessages(thread) {
       source: turn.source || {},
       editRequested: turn.editRequested === true,
       requestedSkill: task.skill || null,
+      plan: Array.isArray(turn.plan) ? turn.plan : [],
       items: turn.items || [],
       events: agentTurnEvents(turn),
       progress: task.progress || 0,

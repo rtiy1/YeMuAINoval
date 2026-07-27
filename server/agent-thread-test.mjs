@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   agentThreadPublic,
   agentTurnItems,
+  agentTurnPlan,
   agentTurnPublic,
   normalizeAgentThreads,
   taskResultText,
@@ -53,6 +54,37 @@ test('failed turns do not displace older completed context', () => {
   ])
 })
 
+test('turn plan advances with context, skill and result events', () => {
+  assert.deepEqual(agentTurnPlan({
+    status: 'queued',
+    skill: 'story-review',
+    events: [],
+  }).map((item) => item.status), ['inProgress', 'pending', 'pending'])
+
+  assert.deepEqual(agentTurnPlan({
+    status: 'running',
+    skill: 'story-review',
+    events: [
+      { type: 'context', status: 'completed' },
+      { type: 'skill', status: 'running' },
+    ],
+  }).map((item) => item.status), ['completed', 'inProgress', 'pending'])
+
+  const completed = agentTurnPlan({
+    status: 'completed',
+    skill: 'story-deslop',
+    input: { payload: { reviewable_edit: true } },
+    events: [
+      { type: 'context', status: 'completed' },
+      { type: 'skill', status: 'completed' },
+      { type: 'result', status: 'completed' },
+    ],
+  })
+  assert.deepEqual(completed.map((item) => item.status), ['completed', 'completed', 'completed'])
+  assert.match(completed[1].step, /模板化/)
+  assert.match(completed[2].step, /逐段可审阅/)
+})
+
 test('turn public response exposes Codex-style items and lifecycle', () => {
   const thread = { id: 'thread-1' }
   const turn = { id: 'turn-1', taskId: 'task-1', message: '续写', createdAt: '2026-01-01T00:00:00.000Z' }
@@ -64,6 +96,7 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
     events: [
       { id: 'event-1', type: 'context', label: '读取上下文', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:00:01.000Z' },
       { id: 'event-2', type: 'skill', label: '执行写作 Skill', status: 'completed', startedAt: '2026-01-01T00:00:01.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
+      { id: 'event-3', type: 'result', label: '整理结果', status: 'completed', startedAt: '2026-01-01T00:00:02.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
     ],
     result: { result: { output: '续写结果' } },
     updatedAt: '2026-01-01T00:00:02.000Z',
@@ -78,6 +111,7 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
   assert.equal(output.status, 'completed')
   assert.equal(output.threadId, 'thread-1')
   assert.equal(output.items.at(-1).content[0].text, '续写结果')
+  assert.deepEqual(output.plan.map((item) => item.status), ['completed', 'completed', 'completed'])
 })
 
 test('thread public response restores task source without exposing raw input', () => {

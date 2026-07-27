@@ -81,6 +81,47 @@ export function turnStatus(task) {
   return itemStatus(task?.status)
 }
 
+function hasEvent(task, type, statuses = null) {
+  return (task?.events || []).some((event) => event.type === type && (!statuses || statuses.has(event.status)))
+}
+
+function executionStep(task) {
+  const skill = task?.result?.selected_skill || task?.skill || 'story'
+  if (skill === 'story-review') return '审查章节并定位可核验问题'
+  if (skill === 'story-deslop') return '重写文本并降低模板化表达'
+  if (/-write$/.test(skill)) return '生成符合上下文的写作结果'
+  if (/(?:-analyze|-scan)$/.test(skill)) return '分析结构、节奏与连续性'
+  return '选择并执行合适的创作能力'
+}
+
+export function agentTurnPlan(task) {
+  if (!task) return []
+  const terminal = TERMINAL_TASK_STATUSES.has(task?.status)
+  const contextCompleted = hasEvent(task, 'context', new Set(['completed']))
+  const skillStarted = hasEvent(task, 'skill')
+  const skillCompleted = hasEvent(task, 'skill', new Set(['completed']))
+  const resultCompleted = hasEvent(task, 'result', new Set(['completed']))
+
+  return [
+    {
+      step: '读取作品、章节与连续性上下文',
+      status: contextCompleted ? 'completed' : terminal ? 'pending' : 'inProgress',
+    },
+    {
+      step: executionStep(task),
+      status: skillCompleted
+        ? 'completed'
+        : skillStarted && !terminal
+          ? 'inProgress'
+          : 'pending',
+    },
+    {
+      step: task?.input?.payload?.reviewable_edit === true ? '整理逐段可审阅修改' : '整理结果并完成检查',
+      status: resultCompleted ? 'completed' : skillCompleted && !terminal ? 'inProgress' : 'pending',
+    },
+  ]
+}
+
 export function agentTurnItems(turn, task) {
   const items = [{
     id: `${turn.id}:user`,
@@ -125,6 +166,7 @@ export function agentTurnPublic(thread, turn, task, taskPublic) {
     threadId: thread.id,
     taskId: turn.taskId,
     status: turnStatus(task),
+    plan: agentTurnPlan(task),
     items: agentTurnItems(turn, task),
     message: turn.message,
     editRequested: turn.editRequested === true,

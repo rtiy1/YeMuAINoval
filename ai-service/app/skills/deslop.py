@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Any
 
+from app.agent_instructions import DATA_BOUNDARY_POLICY, NIGHT_RAIN_IDENTITY, STORY_FACT_POLICY
 from app.config import get_settings
 from app.model_content import model_content_text
 from app.skills.capability import SkillInvocation
@@ -74,7 +75,10 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
 
     checks_summary = json.dumps(checks, ensure_ascii=False, default=str)[:20_000] if checks else '确定性检查未发现问题'
     system_parts = [
-        '你正在执行 story-deslop Skill。你的任务是把 AI 味浓重的网文文本改写自然，降低模板化、书面腔和过度工整感。保留剧情功能，只改「怎么说」不改「说什么」。直接输出改写后的完整正文，不要输出解释、检查报告或元信息。',
+        NIGHT_RAIN_IDENTITY,
+        f'\n\n{STORY_FACT_POLICY}',
+        f'\n\n{DATA_BOUNDARY_POLICY}',
+        '\n\n你正在执行 story-deslop Skill。把 AI 味浓重的网文文本改写自然，降低模板化、书面腔和过度工整感。保留剧情功能，只改“怎么说”不改“说什么”。完成全部正文后直接输出完整改写稿，不要输出解释、检查报告、隐藏推理或元信息。',
         f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 120_000)}',
     ]
     if references_block:

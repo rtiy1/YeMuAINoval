@@ -2,6 +2,13 @@ import json
 import logging
 from typing import Any
 
+from app.agent_instructions import (
+    AGENT_EXECUTION_POLICY,
+    DATA_BOUNDARY_POLICY,
+    EXECUTION_BOUNDARY_POLICY,
+    NIGHT_RAIN_IDENTITY,
+    STORY_FACT_POLICY,
+)
 from app.config import get_settings
 from app.model_content import model_content_text
 from app.schemas import EditProposal
@@ -42,15 +49,19 @@ def execute_prompt_skill(invocation: SkillInvocation) -> dict[str, Any]:
     model = create_chat_model(override, settings, default_temperature=0.2)
 
     system_parts = [
-        '你正在执行项目内的 Story Skill。遵守下面的 Skill 契约，只完成用户请求，不声称执行了当前环境没有提供的浏览器、图片、文件写入或外部网络能力。当前适配范围是 prompt-only：需要落盘或工具调用时，输出清晰的下一步结构化计划。',
+        NIGHT_RAIN_IDENTITY,
+        f'\n\n{AGENT_EXECUTION_POLICY}',
+        f'\n\n{STORY_FACT_POLICY}',
+        f'\n\n{EXECUTION_BOUNDARY_POLICY}',
+        f'\n\n{DATA_BOUNDARY_POLICY}',
+        '\n\n当前运行模式：执行项目内的 Story Skill。遵守下面的 Skill 契约并完成用户请求。当前适配范围是 prompt-only；需要宿主执行写入或其他工具调用时，只返回明确的建议操作或可应用结果，不把计划描述成已执行。',
         f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 120_000)}',
     ]
     writing_context = invocation.payload.get('writing_context')
     if writing_context:
         system_parts.append(
             '\n\nWRITING CONTEXT（服务端确认的连续性上下文）：\n'
-            '事实优先级：用户本轮明确要求 > 已确认的 canon_fact/world_rule/character_state 与项目设定 > 当前章节正文和大纲 > 其他记忆、素材与未回收伏笔 > 最近对话 > 一般创作知识。'
-            '冲突时必须指出或提问，不能静默覆盖；未知信息不得补成既定事实。分析报告只能描述为建议，不得声称已修改正文。\n'
+            '这是服务端确认的作品事实数据，按 system 中的作品事实优先级使用；冲突时指出或提出唯一阻塞问题，不能静默覆盖。\n'
             + truncate_for_context(json.dumps(writing_context, ensure_ascii=False, default=str), context_window, override.max_tokens if override else None, 60_000)
         )
     rewrite_mode = invocation.payload.get('rewrite_mode')

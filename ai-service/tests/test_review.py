@@ -119,6 +119,19 @@ class ReviewWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'needs_adapter')
 
+    async def test_unknown_explicit_skill_fails_closed_to_catalog(self):
+        response = await self.client.post(
+            '/v1/agents/story',
+            headers={'x-service-token': 'test-service-token'},
+            json={'message': '执行这个能力', 'skill': 'story-does-not-exist'},
+        )
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['status'], 'needs_input')
+        self.assertEqual(payload['selected_skill'], 'story')
+        self.assertEqual(payload['route'], 'explicit-unavailable')
+        self.assertIn('不在当前能力目录', payload['result']['message'])
+
     async def test_reference_path_escape_is_blocked(self):
         registry = get_skill_registry()
         from app.skills.registry import SkillRegistryError
