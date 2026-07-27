@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from app.agent_instructions import DATA_BOUNDARY_POLICY, compose_system_prompt
 from app.config import get_settings
 from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key
@@ -21,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULTS = 8
 HTTP_TIMEOUT = 15.0
+SEARCH_SUMMARY_SYSTEM_PROMPT = compose_system_prompt(
+    DATA_BOUNDARY_POLICY,
+    '''你是夜雨的联网搜索摘要模块。只根据本次检索结果，用中文简明回答用户问题，并在相关句末用 [序号] 标注来源。区分网页明确陈述与自己的推断；结果不足、相互冲突或时效不明时如实说明。不要编造未出现在结果中的事实、来源或已经执行的操作，不展示隐藏推理。''',
+)
 
 
 def _extract_query(invocation: SkillInvocation) -> str:
@@ -108,7 +113,7 @@ def _summarize(query: str, results: list[dict[str, str]], invocation: SkillInvoc
     try:
         model = create_chat_model(invocation.model_config_override, get_settings(), default_temperature=0.2)
         reply = model.invoke([
-            ('system', '你是夜雨的联网搜索摘要模块。根据检索到的网页结果，用中文简明回答用户问题，并在句末用 [序号] 标注来源。若结果不足以回答，如实说明。不要编造未出现在结果中的事实。'),
+            ('system', SEARCH_SUMMARY_SYSTEM_PROMPT),
             ('human', f'问题：{query}\n\n检索结果：\n{context}'),
         ])
         return str(reply.content).strip()

@@ -4,7 +4,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.agent_instructions import (
+    AGENT_EXECUTION_POLICY,
+    EXECUTION_BOUNDARY_POLICY,
+    NIGHT_RAIN_IDENTITY,
+    STORY_FACT_POLICY,
+    compose_system_prompt,
+)
 from app.config import get_settings
+from app.model_content import model_content_text
 from app.schemas import (
     AssistantPlanQuestion,
     StoryAgentRequest,
@@ -40,7 +48,7 @@ def _web_search_turn(request: WritingAssistantTurnRequest) -> WritingAssistantTu
     if result.get('status') == 'failed' or (not results and not result.get('summary')):
         reply = result.get('message') or '联网搜索失败，请稍后重试或配置 TAVILY_API_KEY。'
     elif result.get('summary'):
-        reply = result['summary']
+        reply = model_content_text(result['summary'])
     else:
         lines = [f'已检索到 {len(results)} 条结果：']
         for index, item in enumerate(results[:8], 1):
@@ -56,25 +64,22 @@ def _web_search_turn(request: WritingAssistantTurnRequest) -> WritingAssistantTu
         result=result,
     )
 
-ASSISTANT_SYSTEM_PROMPT = '''你是“夜雨”，叙事工坊里克制、敏锐、有文学判断力的创作搭档。你不靠空泛鼓励取悦作者，不堆叠网络流行语；发现设定矛盾、人物动机不足或定位含混时应给出明确意见，但最终决定权始终属于作者。
+ASSISTANT_SYSTEM_PROMPT = compose_system_prompt(
+    NIGHT_RAIN_IDENTITY,
+    AGENT_EXECUTION_POLICY,
+    STORY_FACT_POLICY,
+    EXECUTION_BOUNDARY_POLICY,
+    '''路由职责：
+1. 对写书和短篇创作任务，先从自然对话提取已有信息，不把所有字段一次性做成问卷。
+2. 已经明确的信息不得重复询问，不得擅自替换作者选择；无法确定时保持 null。
+3. 非写作任务上下文足够时直接 ready 并选择 Skill；缺正文、项目或执行材料时只返回最关键的缺失项。
+4. requirements 只返回本轮新识别且有文本依据的信息；missing 基于合并后的需求判断；questions 最多 1 项。
 
-一、路由与提问
-1. 只从能力目录选择 Skill，不编造工具。用户强制指定 Skill 时必须遵从。
-2. 对写书/短篇创作任务，先从自然对话提取已有信息，只追问真正阻塞下一步的信息。
-3. 每轮最多提出 2 个具体、互不重复的问题；提供少量高质量选项并允许自由输入。
-4. 不把所有字段一次性做成问卷。已经明确的信息不得重复询问，不得擅自替换用户选择；无法确定时保持 null。
-5. 非写作任务上下文足够时直接 ready；缺正文、项目或执行材料时明确说明需要什么。
-
-二、作品事实优先级
-发生冲突时按以下顺序处理：用户本轮明确要求 > 已确认的不可违背事实、世界规则、角色状态与项目设定 > 当前章节正文和大纲 > 其他作品记忆、素材与未回收伏笔 > 最近对话 > 一般创作知识。不得静默覆盖高优先级信息；应指出冲突或提出必要问题，未知信息不得补成既定事实。
-
-三、建议与执行边界
-分析、诊断和建议类 Skill 必须明确“以下是建议，尚未修改正文”。只有实际返回可应用文本且作者确认后，才能描述为改写结果。不得声称已执行尚未发生的写入、建书、浏览器、图片或外部网络操作。
-
-四、创作质量底线
+创作质量底线：
 在给出创作判断时关注：主角目标是否明确、冲突是否升级、人物行为是否有动机、信息是否重复、爽点是否有事件支撑、章末是否形成期待、是否未经允许改写设定，以及是否出现模板腔、总结腔和明显 AI 套话。
 
-回复简洁、有主见、像一位资深网文策划。输出必须符合结构化 schema。'''
+回复简洁、有主见、像一位资深网文策划。输出必须符合 AssistantDecision schema。''',
+)
 
 
 class AssistantDecision(BaseModel):
@@ -83,7 +88,7 @@ class AssistantDecision(BaseModel):
     reply: str = Field(min_length=1, max_length=1000)
     requirements: WritingRequirementsPatch = Field(default_factory=WritingRequirementsPatch)
     missing: list[Literal['type', 'genre', 'style', 'premise', 'platform', 'title', 'intent', 'context']] = Field(default_factory=list)
-    questions: list[AssistantPlanQuestion] = Field(default_factory=list, max_length=2)
+    questions: list[AssistantPlanQuestion] = Field(default_factory=list, max_length=1)
     ready: bool = False
 
 
@@ -190,12 +195,26 @@ def _plan_turn(request: WritingAssistantTurnRequest) -> AssistantDecision:
         decision = model.invoke([('system', ASSISTANT_SYSTEM_PROMPT), ('human', human_prompt)])
         names = {item['name'] for item in catalog}
         if explicit_skill:
-            decision.selected_skill = explicit_skill
-            decision.route_reason = 'explicit'
+            if explicit_skill in names:
+                decision.selected_skill = explicit_skill
+                decision.route_reason = 'explicit'
+            else:
+                return AssistantDecision(
+                    selected_skill='story',
+                    route_reason='explicit-unavailable',
+                    reply='指定的 Skill 不在当前能力目录中，请选择已安装能力或直接描述目标。',
+                    missing=['intent'],
+                    questions=[AssistantPlanQuestion(
+                        id='available_skill_intent',
+                        field='intent',
+                        question='你希望我完成写作、审稿、分析、搜索还是其他哪类任务？',
+                    )],
+                    ready=False,
+                )
         elif decision.selected_skill not in names:
             decision.selected_skill = routed
             decision.route_reason = 'story-router-fallback'
-        decision.questions = decision.questions[:2]
+        decision.questions = decision.questions[:1]
         return decision
     except Exception:
         logger.exception('writing assistant planning failed; using fallback')
@@ -216,7 +235,7 @@ def run_writing_assistant_turn(request: WritingAssistantTurnRequest) -> WritingA
             selected_skill = 'story-long-write'
         missing = _writing_missing(requirements)
         if missing:
-            questions = [question for question in decision.questions if question.field in missing][:2]
+            questions = [question for question in decision.questions if question.field in missing][:1]
             if not questions:
                 fallback = _fallback_decision(request, selected_skill)
                 questions = fallback.questions
@@ -283,7 +302,7 @@ def run_writing_assistant_turn(request: WritingAssistantTurnRequest) -> WritingA
         model_config=request.model_config_override,
     ))
     result = agent_response.result
-    reply = str(result.get('message') or result.get('summary') or decision.reply) if isinstance(result, dict) else decision.reply
+    reply = model_content_text(result.get('message') or result.get('summary') or decision.reply) if isinstance(result, dict) else decision.reply
     response_phase = 'completed' if agent_response.status == 'completed' else 'collecting_requirements'
     return WritingAssistantTurnResponse(
         status=agent_response.status,

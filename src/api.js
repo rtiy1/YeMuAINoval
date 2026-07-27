@@ -1,6 +1,29 @@
+import { consumeSseStream } from './sse.mjs'
+
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 let accessToken = null
 let refreshPromise = null
+
+function responseErrorMessage(payload, status) {
+  const value = payload?.error ?? payload?.detail ?? payload?.message
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const text = value.map((item) => typeof item === 'string' ? item : item?.msg || item?.message || item?.text).filter(Boolean).join('；')
+    if (text) return text
+  }
+  if (value && typeof value === 'object') {
+    for (const key of ['message', 'msg', 'text', 'detail', 'error']) {
+      if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim()
+    }
+    try {
+      const serialized = JSON.stringify(value)
+      if (serialized && serialized !== '{}') return serialized
+    } catch {
+      // Fall through to the status-based message.
+    }
+  }
+  return `请求失败（${status}）`
+}
 
 async function rawRequest(path, options = {}) {
   const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) }
@@ -46,10 +69,38 @@ async function request(path, options = {}, retry = true) {
   }
 
   if (!response.ok) {
-    throw new Error(payload?.error || `请求失败（${response.status}）`)
+    throw new Error(responseErrorMessage(payload, response.status))
   }
 
   return payload
+}
+
+async function streamRequest(path, { signal, onEvent } = {}, retry = true) {
+  const headers = { Accept: 'text/event-stream' }
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
+    headers,
+    signal,
+  })
+  if (response.status === 401 && retry && !path.startsWith('/auth/')) {
+    const session = await refreshSession()
+    if (session) return streamRequest(path, { signal, onEvent }, false)
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(responseErrorMessage(payload, response.status))
+  }
+  await consumeSseStream(response.body, async ({ event, data }) => {
+    let payload = null
+    try {
+      payload = data ? JSON.parse(data) : null
+    } catch {
+      payload = data
+    }
+    if (event === 'error') throw new Error(payload?.error || '任务流读取失败')
+    await onEvent?.(event, payload)
+  })
 }
 
 export const api = {
@@ -71,10 +122,17 @@ export const api = {
   getMe: () => request('/auth/me'),
   getSkills: () => request('/ai/skills'),
   getAiUsage: () => request('/ai/usage'),
-  runStoryAgent: (input) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input) }),
-  createAiTask: (input) => request('/ai/tasks', { method: 'POST', body: JSON.stringify(input) }),
+  runStoryAgent: (input, options = {}) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
+  getAgentThread: (projectId, chapterId) => request(`/ai/threads?projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(chapterId)}`),
+  createAgentThread: (projectId, chapterId) => request('/ai/threads', { method: 'POST', body: JSON.stringify({ projectId, chapterId }) }),
+  archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
+  createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
+  getAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { signal: options.signal }),
+  streamAgentTurn: (threadId, turnId, options = {}) => streamRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`, options),
+  interruptAgentTurn: (threadId, turnId) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/interrupt`, { method: 'POST' }),
+  createAiTask: (input, options = {}) => request('/ai/tasks', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAiTasks: (projectId = '') => request(`/ai/tasks${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
-  getAiTask: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}`),
+  getAiTask: (taskId, options = {}) => request(`/ai/tasks/${encodeURIComponent(taskId)}`, { signal: options.signal }),
   retryAiTask: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}/retry`, { method: 'POST' }),
   cancelAiTask: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }),
   getWritingContext: (projectId, chapterId) => request(`/projects/${encodeURIComponent(projectId)}/chapters/${encodeURIComponent(chapterId)}/context`),

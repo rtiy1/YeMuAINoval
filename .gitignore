@@ -9,5 +9,6 @@ server/data/*.tmp
 .env
 .DS_Store
 .runtime-logs/
+.novel-agent/
 backups/
 .zcode/plans/

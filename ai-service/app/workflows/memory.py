@@ -1,6 +1,7 @@
 import json
 import logging
 
+from app.agent_instructions import DATA_BOUNDARY_POLICY, STORY_FACT_POLICY, compose_system_prompt
 from app.config import get_settings
 from app.schemas import StoryMemoryExtractRequest, StoryMemoryExtractResponse
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
@@ -8,7 +9,10 @@ from app.skills.model_helper import create_chat_model, has_api_key, resolve_cont
 
 logger = logging.getLogger(__name__)
 
-MEMORY_SYSTEM_PROMPT = '''你是夜雨的作品记忆整理模块。阅读当前章节和可信作品上下文，只提取对后续连续性有长期价值的候选记忆。
+MEMORY_SYSTEM_PROMPT = compose_system_prompt(
+    STORY_FACT_POLICY,
+    DATA_BOUNDARY_POLICY,
+    '''你是夜雨的作品记忆整理模块。阅读当前章节和可信作品上下文，只提取对后续连续性有长期价值的候选记忆。
 
 允许类型：
 - character_state：角色当前目标、关系、伤势、持有物、已知信息等可变化状态
@@ -23,7 +27,9 @@ MEMORY_SYSTEM_PROMPT = '''你是夜雨的作品记忆整理模块。阅读当前
 2. 已有记忆优先；若新内容与其冲突，使用 replaces_memory_id 指向需要更新的记录并在 reason 说明依据，不能静默覆盖。
 3. 不重复现有记忆，不把临时氛围或泛泛文学评价当作事实。
 4. 每项给出简短理由，供作者确认；你只生成候选项，不声称已经写入作品。
-5. 至少生成一条 chapter_summary，除非正文无法形成有效摘要。'''
+5. 至少生成一条 chapter_summary，除非正文无法形成有效摘要。
+6. 输出必须符合 StoryMemoryExtractResponse schema，不展示隐藏推理。''',
+)
 
 
 def extract_story_memories(request: StoryMemoryExtractRequest) -> StoryMemoryExtractResponse:

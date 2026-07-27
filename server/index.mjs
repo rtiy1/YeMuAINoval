@@ -26,6 +26,7 @@ import { invokeStoryAgent } from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
+import { agentThreadPublic, agentTurnPublic, threadConversation } from './agent-thread.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -147,6 +148,21 @@ function cleanOptionalText(value, field, maxLength) {
   const text = value.trim()
   if (text.length > maxLength) throw Object.assign(new Error(`${field} 不能超过 ${maxLength} 个字符`), { status: 400 })
   return text
+}
+
+function serviceErrorMessage(value, fallback) {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const message = value.map((item) => serviceErrorMessage(item, '')).filter(Boolean).join('；')
+    if (message) return message
+  }
+  if (value && typeof value === 'object') {
+    for (const key of ['message', 'msg', 'text', 'detail', 'error']) {
+      const message = serviceErrorMessage(value[key], '')
+      if (message) return message
+    }
+  }
+  return fallback
 }
 
 function cleanIntegerRange(value, field, min, max, fallback = null) {
@@ -742,6 +758,7 @@ const aiInvocationPaths = [
   /^\/api\/ai\/agent\/runs$/,
   /^\/api\/ai\/tasks$/,
   /^\/api\/ai\/tasks\/[^/]+\/retry$/,
+  /^\/api\/ai\/threads\/[^/]+\/turns$/,
   /^\/api\/ai\/reviews\/chapter$/,
   /^\/api\/writing-assistant\/messages$/,
   /^\/api\/projects\/[^/]+\/chapters\/[^/]+\/memory-candidates$/,
@@ -829,15 +846,30 @@ function taskRequestKey(userId, input, idempotencyKey = '') {
   return crypto.createHash('sha256').update(idempotencyKey ? `${userId}:${idempotencyKey}` : stable).digest('hex')
 }
 
-function createWritingTask({ userId, input, requestKey, parentTaskId = null, attempt = 1 }) {
+function createTaskEvent(taskId, sequence, type, label, status = 'completed', meta = {}) {
+  const timestamp = new Date().toISOString()
+  return {
+    id: `${taskId}:${sequence}`,
+    type,
+    label,
+    status,
+    meta: meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {},
+    startedAt: timestamp,
+    ...(status === 'running' ? {} : { completedAt: timestamp }),
+  }
+}
+
+function createWritingTask({ userId, input, requestKey, parentTaskId = null, attempt = 1, threadId = null }) {
   const projectId = input.payload.project_id || input.payload.projectId || null
   const chapterId = input.payload.chapter_id || input.payload.chapterId || null
   const timestamp = new Date().toISOString()
+  const id = crypto.randomUUID()
   return {
-    id: crypto.randomUUID(), userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
-    skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt,
+    id, userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
+    skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt, threadId,
     status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
     result: null, error: null, errorCode: null, retryable: false, cancelRequested: false,
+    events: [createTaskEvent(id, 1, 'lifecycle', attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队')],
     createdAt: timestamp, updatedAt: timestamp,
   }
 }
@@ -849,8 +881,55 @@ function writingTaskPublic(task) {
     statusMessage: task.statusMessage || '', result: task.result || null, error: task.error || null,
     errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
     parentTaskId: task.parentTaskId || null, reused: task.reused === true,
+    threadId: task.threadId || null, turnId: task.turnId || null,
+    events: Array.isArray(task.events) ? task.events.slice(-100) : [],
     cancelRequested: task.cancelRequested === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
   }
+}
+
+function findAgentThread(db, threadId, userId, { active = false } = {}) {
+  const thread = db.agentThreads.find((item) => item.id === threadId && item.userId === userId)
+  if (!thread) throw Object.assign(new Error('Agent 会话不存在'), { status: 404 })
+  if (active && thread.status !== 'active') throw Object.assign(new Error('Agent 会话已经归档'), { status: 409 })
+  return thread
+}
+
+function appendAgentTurn(thread, task, input) {
+  const timestamp = new Date().toISOString()
+  thread.turns ||= []
+  const turn = {
+    id: crypto.randomUUID(),
+    taskId: task.id,
+    message: input.message,
+    editRequested: input.payload.reviewable_edit === true,
+    createdAt: timestamp,
+  }
+  task.turnId = turn.id
+  thread.turns.push(turn)
+  thread.turns = thread.turns.slice(-40)
+  thread.updatedAt = timestamp
+  return turn
+}
+
+function findAgentTurn(thread, turnId) {
+  const turn = thread.turns.find((item) => item.id === turnId)
+  if (!turn) throw Object.assign(new Error('Agent 轮次不存在'), { status: 404 })
+  return turn
+}
+
+function streamDelay(req, milliseconds) {
+  if (req.destroyed) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      req.removeListener('close', closed)
+      resolve(true)
+    }, milliseconds)
+    function closed() {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    req.once('close', closed)
+  })
 }
 
 async function executeWritingTaskLocally(taskId, userId) {
@@ -876,6 +955,8 @@ async function dispatchWritingTask(task) {
         current.errorCode = 'service_unavailable'
         current.statusMessage = '任务入队失败，可稍后重试'
         current.retryable = true
+        current.events ||= []
+        current.events.push(createTaskEvent(current.id, current.events.length + 1, 'lifecycle', current.statusMessage, 'failed', { errorCode: current.errorCode }))
         current.updatedAt = new Date().toISOString()
       }).catch(() => undefined)
       throw error
@@ -883,6 +964,77 @@ async function dispatchWritingTask(task) {
     return
   }
   queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })
+}
+
+async function startWritingTask(user, body, forcedThreadId = null) {
+  const input = validateStoryAgentInput(body || {})
+  const threadId = forcedThreadId || cleanOptionalText(body?.threadId, 'Agent 会话 ID', 120) || null
+  const projectId = input.payload.project_id || input.payload.projectId || null
+  const chapterId = input.payload.chapter_id || input.payload.chapterId || null
+  if (threadId) {
+    const db = await loadDb()
+    const thread = findAgentThread(db, threadId, user.id, { active: true })
+    if (!projectId || thread.projectId !== projectId || String(thread.chapterId) !== String(chapterId)) {
+      throw Object.assign(new Error('Agent 会话与当前作品章节不匹配'), { status: 409 })
+    }
+    input.payload = { ...input.payload, conversation: threadConversation(thread, db.writingTasks) }
+  } else if (projectId) {
+    const db = await loadDb()
+    const project = findOr404(db, projectId, user.id)
+    if (chapterId) chapterOr404(db, project, chapterId)
+  }
+  const idempotencyKey = cleanOptionalText(body?.idempotencyKey, '幂等键', 160)
+  const requestKey = taskRequestKey(user.id, input, idempotencyKey)
+  let reused = false
+  const task = await updateDb((db) => {
+    const existing = db.writingTasks.find((item) => item.userId === user.id
+      && item.requestKey === requestKey
+      && (!threadId || item.threadId === threadId)
+      && (idempotencyKey || ['queued', 'running'].includes(item.status)))
+    if (existing) {
+      reused = true
+      return existing
+    }
+    const thread = threadId ? findAgentThread(db, threadId, user.id, { active: true }) : null
+    recordQueuedAiUsage(db, user.id, 'ai-task')
+    const created = createWritingTask({ userId: user.id, input, requestKey, threadId })
+    db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
+    if (thread) appendAgentTurn(thread, created, input)
+    return created
+  })
+  if (!reused) await dispatchWritingTask(task)
+  return { task, reused }
+}
+
+async function interruptWritingTask(userId, taskId) {
+  const task = await updateDb((db) => {
+    const current = db.writingTasks.find((item) => item.id === taskId && item.userId === userId)
+    if (!current) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
+    if (['completed', 'failed', 'cancelled'].includes(current.status)) return current
+    current.cancelRequested = true
+    current.status = 'cancelled'
+    current.statusMessage = '任务已取消，可重新提交'
+    current.errorCode = 'cancelled'
+    current.retryable = true
+    const timestamp = new Date().toISOString()
+    current.events ||= []
+    for (const event of current.events) {
+      if (event.status === 'running') {
+        event.status = 'cancelled'
+        event.completedAt = timestamp
+      }
+    }
+    current.events.push(createTaskEvent(current.id, current.events.length + 1, 'lifecycle', '用户停止了任务', 'cancelled'))
+    current.updatedAt = timestamp
+    if (current.threadId) {
+      const thread = db.agentThreads.find((item) => item.id === current.threadId)
+      if (thread) thread.updatedAt = current.updatedAt
+    }
+    return current
+  })
+  writingTaskControllers.get(task.id)?.abort()
+  await publishTaskCancellation(task.id)
+  return task
 }
 
 async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
@@ -903,7 +1055,7 @@ async function requestWritingAssistantTurn(user, session, message, skill = null,
     signal: AbortSignal.timeout(120_000),
   })
   const result = await response.json().catch(() => null)
-  if (!response.ok) throw Object.assign(new Error(result?.detail || '写作助手处理失败'), { status: response.status >= 500 ? 502 : response.status })
+  if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, '写作助手处理失败')), { status: response.status >= 500 ? 502 : response.status })
   return result
 }
 
@@ -921,7 +1073,7 @@ async function requestWritingProposal(user, session) {
     signal: AbortSignal.timeout(120_000),
   })
   const payload = await response.json().catch(() => null)
-  if (!response.ok) throw Object.assign(new Error(payload?.detail || '写作助手生成方案失败'), { status: response.status >= 500 ? 502 : response.status })
+  if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(payload?.detail, '写作助手生成方案失败')), { status: response.status >= 500 ? 502 : response.status })
   return payload
 }
 
@@ -990,7 +1142,7 @@ app.get('/api/ai/skills', async (req, res, next) => {
       signal: AbortSignal.timeout(15_000),
     })
     const payload = await response.json().catch(() => null)
-    if (!response.ok) throw Object.assign(new Error(payload?.detail || 'Skill 目录读取失败'), { status: response.status >= 500 ? 502 : response.status })
+    if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(payload?.detail, 'Skill 目录读取失败')), { status: response.status >= 500 ? 502 : response.status })
     res.json(payload)
   } catch (error) {
     if (isNetworkError(error)) {
@@ -1007,6 +1159,234 @@ app.get('/api/ai/usage', async (req, res, next) => {
     res.json({ usage: aiUsageSummary(db, req.user.id) })
   } catch (error) {
     next(error)
+  }
+})
+
+app.get('/api/ai/threads', async (req, res, next) => {
+  try {
+    const projectId = cleanOptionalText(req.query.projectId, '作品 ID', 120)
+    const chapterId = cleanOptionalText(req.query.chapterId, '章节 ID', 120)
+    const db = await loadDb()
+    if (!projectId && !chapterId) {
+      const includeArchived = req.query.includeArchived === 'true'
+      const threads = db.agentThreads
+        .filter((item) => item.userId === req.user.id && (includeArchived || item.status === 'active'))
+        .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+        .slice(0, 50)
+        .map((thread) => agentThreadPublic(thread, db.writingTasks, writingTaskPublic))
+      res.json({ threads })
+      return
+    }
+    if (!projectId || !chapterId) throw Object.assign(new Error('作品 ID 和章节 ID 必须同时提供'), { status: 400 })
+    const project = findOr404(db, projectId, req.user.id)
+    chapterOr404(db, project, chapterId)
+    const thread = db.agentThreads
+      .filter((item) => item.userId === req.user.id
+        && item.projectId === projectId
+        && String(item.chapterId) === String(chapterId)
+        && item.status === 'active')
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0] || null
+    res.json({ thread: thread ? agentThreadPublic(thread, db.writingTasks, writingTaskPublic) : null })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads', async (req, res, next) => {
+  try {
+    const projectId = cleanText(req.body?.projectId, '作品 ID', 120)
+    const chapterId = cleanText(String(req.body?.chapterId ?? ''), '章节 ID', 120)
+    let reused = false
+    const thread = await updateDb((db) => {
+      const project = findOr404(db, projectId, req.user.id)
+      chapterOr404(db, project, chapterId)
+      const existing = db.agentThreads
+        .filter((item) => item.userId === req.user.id
+          && item.projectId === projectId
+          && String(item.chapterId) === String(chapterId)
+          && item.status === 'active')
+        .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0]
+      if (existing) {
+        reused = true
+        return existing
+      }
+      const timestamp = new Date().toISOString()
+      const created = {
+        id: crypto.randomUUID(),
+        userId: req.user.id,
+        projectId,
+        chapterId: String(chapterId),
+        status: 'active',
+        turns: [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      db.agentThreads.push(created)
+      return created
+    })
+    const db = await loadDb()
+    res.status(reused ? 200 : 201).json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic), reused })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/ai/threads/:threadId', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    res.json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/ai/threads/:threadId', async (req, res, next) => {
+  try {
+    await updateDb((db) => {
+      const thread = findAgentThread(db, req.params.threadId, req.user.id)
+      thread.status = 'archived'
+      thread.updatedAt = new Date().toISOString()
+    })
+    res.status(204).end()
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/resume', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id, { active: true })
+    res.json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/turns', async (req, res, next) => {
+  try {
+    const initialDb = await loadDb()
+    const initialThread = findAgentThread(initialDb, req.params.threadId, req.user.id, { active: true })
+    const body = {
+      ...(req.body || {}),
+      threadId: initialThread.id,
+      payload: {
+        ...(req.body?.payload || {}),
+        project_id: initialThread.projectId,
+        chapter_id: initialThread.chapterId,
+      },
+    }
+    const { task, reused } = await startWritingTask(req.user, body, initialThread.id)
+    const db = await loadDb()
+    const thread = findAgentThread(db, initialThread.id, req.user.id)
+    const turn = thread.turns.find((item) => item.taskId === task.id)
+    if (!turn) throw Object.assign(new Error('Agent 轮次创建失败'), { status: 500 })
+    const currentTask = db.writingTasks.find((item) => item.id === task.id) || task
+    res.status(reused ? 200 : 202).json({
+      turn: agentTurnPublic(thread, turn, currentTask, writingTaskPublic),
+      task: { ...writingTaskPublic(currentTask), reused },
+      reused,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/ai/threads/:threadId/turns/:turnId', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    const turn = findAgentTurn(thread, req.params.turnId)
+    const task = db.writingTasks.find((item) => item.id === turn.taskId)
+    res.json({ turn: agentTurnPublic(thread, turn, task, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/turns/:turnId/interrupt', async (req, res, next) => {
+  try {
+    const initialDb = await loadDb()
+    const initialThread = findAgentThread(initialDb, req.params.threadId, req.user.id)
+    const initialTurn = findAgentTurn(initialThread, req.params.turnId)
+    await interruptWritingTask(req.user.id, initialTurn.taskId)
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    const turn = findAgentTurn(thread, req.params.turnId)
+    const task = db.writingTasks.find((item) => item.id === turn.taskId)
+    res.json({ turn: agentTurnPublic(thread, turn, task, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
+  res.status(200)
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  res.flushHeaders()
+
+  let turnStarted = false
+  let lastTurnVersion = ''
+  let lastPlanVersion = ''
+  let lastHeartbeat = Date.now()
+  const itemVersions = new Map()
+  try {
+    while (!req.destroyed) {
+      const db = await loadDb()
+      const thread = db.agentThreads.find((item) => item.id === req.params.threadId && item.userId === req.user.id)
+      const turn = thread?.turns.find((item) => item.id === req.params.turnId)
+      const task = turn ? db.writingTasks.find((item) => item.id === turn.taskId) : null
+      if (!thread || !turn || !task) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: 'Agent 轮次不存在' })}\n\n`)
+        break
+      }
+      const publicTurn = agentTurnPublic(thread, turn, task, writingTaskPublic)
+      const turnVersion = `${publicTurn.status}:${publicTurn.updatedAt || ''}`
+      if (!turnStarted) {
+        turnStarted = true
+        res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
+      }
+      const planVersion = JSON.stringify(publicTurn.plan || [])
+      if (planVersion !== lastPlanVersion) {
+        lastPlanVersion = planVersion
+        res.write(`event: turn/plan/updated\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          explanation: '夜雨会先读取当前写作上下文，再执行创作能力并整理结果。',
+          plan: publicTurn.plan || [],
+        })}\n\n`)
+      }
+      for (const item of publicTurn.items) {
+        const version = `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta || {})}`
+        if (itemVersions.get(item.id) === version) continue
+        itemVersions.set(item.id, version)
+        const event = item.status === 'inProgress' ? 'item/started' : 'item/completed'
+        res.write(`event: ${event}\ndata: ${JSON.stringify({ threadId: thread.id, turnId: turn.id, item })}\n\n`)
+      }
+      if (turnVersion !== lastTurnVersion) {
+        lastTurnVersion = turnVersion
+        res.write(`event: turn/updated\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
+      }
+      if (['completed', 'failed', 'interrupted'].includes(publicTurn.status)) {
+        res.write(`event: turn/completed\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
+        break
+      }
+      if (Date.now() - lastHeartbeat >= 15_000) {
+        res.write(': keep-alive\n\n')
+        lastHeartbeat = Date.now()
+      }
+      if (!(await streamDelay(req, 500))) break
+    }
+  } catch (error) {
+    if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '轮次事件流读取失败' })}\n\n`)
+  } finally {
+    if (!res.writableEnded) res.end()
   }
 })
 
@@ -1050,32 +1430,49 @@ app.get('/api/ai/tasks/:taskId', async (req, res, next) => {
   }
 })
 
+app.get('/api/ai/tasks/:taskId/stream', async (req, res) => {
+  res.status(200)
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  res.flushHeaders()
+
+  let lastVersion = ''
+  let lastHeartbeat = Date.now()
+  try {
+    while (!req.destroyed) {
+      const db = await loadDb()
+      const task = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
+      if (!task) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: 'AI 任务不存在' })}\n\n`)
+        break
+      }
+      const version = `${task.updatedAt || ''}:${task.status}:${task.progress}:${task.events?.length || 0}`
+      if (version !== lastVersion) {
+        lastVersion = version
+        res.write(`event: task\ndata: ${JSON.stringify(writingTaskPublic(task))}\n\n`)
+      }
+      if (['completed', 'failed', 'cancelled'].includes(task.status)) break
+      if (Date.now() - lastHeartbeat >= 15_000) {
+        res.write(': keep-alive\n\n')
+        lastHeartbeat = Date.now()
+      }
+      if (!(await streamDelay(req, 500))) break
+    }
+  } catch (error) {
+    if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '任务流读取失败' })}\n\n`)
+  } finally {
+    if (!res.writableEnded) res.end()
+  }
+})
+
 app.post('/api/ai/tasks', async (req, res, next) => {
   try {
-    const input = validateStoryAgentInput(req.body || {})
-    const projectId = input.payload.project_id || input.payload.projectId || null
-    const chapterId = input.payload.chapter_id || input.payload.chapterId || null
-    if (projectId) {
-      const db = await loadDb()
-      const project = findOr404(db, projectId, req.user.id)
-      if (chapterId) chapterOr404(db, project, chapterId)
-    }
-    const idempotencyKey = cleanOptionalText(req.body?.idempotencyKey, '幂等键', 160)
-    const requestKey = taskRequestKey(req.user.id, input, idempotencyKey)
-    let reused = null
-    const task = await updateDb((db) => {
-      const existing = db.writingTasks.find((item) => item.userId === req.user.id && item.requestKey === requestKey && ['queued', 'running'].includes(item.status))
-      if (existing) {
-        reused = existing
-        return existing
-      }
-      recordQueuedAiUsage(db, req.user.id, 'ai-task')
-      const created = createWritingTask({ userId: req.user.id, input, requestKey })
-      db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
-      return created
-    })
-    if (!reused) await dispatchWritingTask(task)
-    res.status(reused ? 200 : 202).json({ task: { ...writingTaskPublic(task), reused: Boolean(reused) } })
+    const { task, reused } = await startWritingTask(req.user, req.body)
+    res.status(reused ? 200 : 202).json({ task: { ...writingTaskPublic(task), reused } })
   } catch (error) {
     next(error)
   }
@@ -1100,8 +1497,13 @@ app.post('/api/ai/tasks/:taskId/retry', async (req, res, next) => {
         requestKey: `${original.requestKey || taskRequestKey(req.user.id, original.input)}:retry:${(original.attempt || 1) + 1}`,
         parentTaskId: original.id,
         attempt: (original.attempt || 1) + 1,
+        threadId: original.threadId || null,
       })
       db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
+      if (original.threadId) {
+        const thread = findAgentThread(db, original.threadId, req.user.id)
+        appendAgentTurn(thread, created, original.input)
+      }
       return created
     })
     if (!reused) await dispatchWritingTask(task)
@@ -1113,20 +1515,7 @@ app.post('/api/ai/tasks/:taskId/retry', async (req, res, next) => {
 
 app.post('/api/ai/tasks/:taskId/cancel', async (req, res, next) => {
   try {
-    const task = await updateDb((db) => {
-      const current = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
-      if (!current) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
-      if (['completed', 'failed', 'cancelled'].includes(current.status)) return current
-      current.cancelRequested = true
-      current.status = 'cancelled'
-      current.statusMessage = '任务已取消，可重新提交'
-      current.errorCode = 'cancelled'
-      current.retryable = true
-      current.updatedAt = new Date().toISOString()
-      return current
-    })
-    writingTaskControllers.get(task.id)?.abort()
-    await publishTaskCancellation(task.id)
+    const task = await interruptWritingTask(req.user.id, req.params.taskId)
     res.json({ task: writingTaskPublic(task) })
   } catch (error) {
     next(error)
@@ -1158,7 +1547,7 @@ app.post('/api/ai/reviews/chapter', async (req, res, next) => {
       })
       const result = await response.json().catch(() => null)
       if (!response.ok) {
-        const error = new Error(result?.detail || 'AI 服务处理失败')
+        const error = new Error(serviceErrorMessage(result?.detail, 'AI 服务处理失败'))
         error.status = response.status >= 500 ? 502 : response.status
         throw error
       }
@@ -1435,6 +1824,7 @@ app.delete('/api/projects/:projectId', async (req, res, next) => {
       db.foreshadows = db.foreshadows.filter((item) => item.projectId !== req.params.projectId)
       db.storyMemories = db.storyMemories.filter((item) => item.projectId !== req.params.projectId)
       db.writingTasks = db.writingTasks.filter((item) => item.projectId !== req.params.projectId)
+      db.agentThreads = db.agentThreads.filter((item) => item.projectId !== req.params.projectId)
       db.writingLog = db.writingLog.filter((entry) => entry.projectId !== req.params.projectId)
     })
     res.status(204).end()
@@ -1519,6 +1909,8 @@ app.delete('/api/projects/:projectId/chapters/:chapterId', async (req, res, next
         memory.sourceChapterId = null
         memory.updatedAt = new Date().toISOString()
       }
+      db.writingTasks = db.writingTasks.filter((item) => !(item.projectId === project.id && String(item.chapterId) === deletedChapterId))
+      db.agentThreads = db.agentThreads.filter((item) => !(item.projectId === project.id && String(item.chapterId) === deletedChapterId))
       db.writingLog = db.writingLog.filter((entry) => !(entry.projectId === project.id && String(entry.chapterId) === String(deleted.id)))
       recalculateProject(db, project)
       touchProject(project)
@@ -1733,7 +2125,7 @@ app.post('/api/projects/:projectId/chapters/:chapterId/memory-candidates', async
         signal: AbortSignal.timeout(120_000),
       })
       const result = await response.json().catch(() => null)
-      if (!response.ok) throw Object.assign(new Error(result?.detail || '作品记忆整理失败'), { status: response.status >= 500 ? 502 : response.status })
+      if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, '作品记忆整理失败')), { status: response.status >= 500 ? 502 : response.status })
       return result
     })
     res.json(payload)

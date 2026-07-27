@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
+from app.agent_instructions import DATA_BOUNDARY_POLICY, STORY_FACT_POLICY, compose_system_prompt
 from app.config import get_settings
 from app.schemas import ChapterReviewRequest, ReviewFinding, ReviewResult
 from app.skills.capability import SkillInvocation
@@ -15,6 +16,29 @@ from app.skills.story_review import deduplicate_findings, load_review_resources,
 
 logger = logging.getLogger(__name__)
 SEVERITY_PENALTIES = {'S1': 25, 'S2': 12, 'S3': 5, 'S4': 1}
+REVIEW_SYSTEM_PROMPT = compose_system_prompt(
+    STORY_FACT_POLICY,
+    DATA_BOUNDARY_POLICY,
+    '''你正在执行 story-review Skill 的 solo 模式。审查只找问题，不续写、不改写正文。每条 finding 必须引用原文证据，并严格输出 severity/category/location/evidence/issue/fix。无法从单章证明的前文一致性问题不要猜测。平台规则只作为 advisory，不把机械字数或密度指标当硬门槛。完成全部检查后输出 LlmReview schema，不展示隐藏推理。
+
+SKILL CONTRACT:
+{skill_contract}
+
+QUALITY RUBRIC:
+{quality_rubric}
+
+PLATFORM RUBRIC:
+{platform_rubric}
+
+CHECKLIST:
+{quality_checklist}
+
+ANTI-AI RULES:
+{anti_ai_writing}
+
+BANNED WORDS:
+{banned_words}''',
+)
 
 
 class ReviewState(TypedDict, total=False):
@@ -73,7 +97,7 @@ def llm_review(state: ReviewState) -> dict[str, Any]:
     resources = load_review_resources(state['rubric'])
     model = create_chat_model(override, settings, default_temperature=0.1).with_structured_output(LlmReview)
     prompt = ChatPromptTemplate.from_messages([
-        ('system', '''你正在执行 story-review Skill 的 solo 模式。审查只找问题，不续写、不改写正文。每条 finding 必须引用原文证据，并严格输出 severity/category/location/evidence/issue/fix。无法从单章证明的前文一致性问题不要猜测。平台规则只作为 advisory，不把机械字数或密度指标当硬门槛。\n\nSKILL CONTRACT:\n{skill_contract}\n\nQUALITY RUBRIC:\n{quality_rubric}\n\nPLATFORM RUBRIC:\n{platform_rubric}\n\nCHECKLIST:\n{quality_checklist}\n\nANTI-AI RULES:\n{anti_ai_writing}\n\nBANNED WORDS:\n{banned_words}'''),
+        ('system', REVIEW_SYSTEM_PROMPT),
         ('human', '题材：{genre}\n平台：{platform}\n章节：{title}\n\n正文：\n{content}'),
     ])
     try:

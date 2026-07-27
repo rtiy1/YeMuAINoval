@@ -13,6 +13,7 @@ const fixture = {
   editHistory: { 'pg-project': { 1: [] } },
   writingSessions: {},
   writingTasks: [],
+  agentThreads: [{ id: 'pg-thread', userId: 'pg-user', projectId: 'pg-project', chapterId: '1', status: 'active', turns: [], createdAt: now, updatedAt: now }],
   foreshadows: [],
   storyMemories: [],
   ideas: [{ id: 'pg-idea', userId: 'pg-user', projectId: 'pg-project', label: '线索', title: '未来邮戳', body: '邮戳来自三天后。', color: 'teal', folder: '核心线索', tags: ['邮戳', '时间'], pinned: true, createdAt: now, updatedAt: now }],
@@ -56,6 +57,8 @@ try {
     assert.equal(restored.chapters['pg-project'][0].outline, '主角发现异常来信。')
     assert.equal(restored.drafts['pg-project']['1'], '雨落在旧港码头，灯塔忽明忽暗。')
     assert.deepEqual(restored.ideas[0].tags, ['邮戳', '时间'])
+    assert.equal(restored.agentThreads[0].id, 'pg-thread')
+    assert.equal(restored.agentThreads[0].chapterId, '1')
     assert.equal(restored.projects.find((project) => project.id === 'external-project').title, '不相关作品')
     assert.equal(restored.drafts['external-project']['1'], '保留这段正文。')
 
@@ -72,6 +75,7 @@ try {
     for (const key of ['users', 'sessions', 'projects', 'chapters', 'drafts', 'ideas']) {
       assert.equal(Object.hasOwn(state.rows[0].data, key), false, `${key} must not remain in story_state JSONB`)
     }
+    assert.equal(state.rows[0].data.agentThreads[0].id, 'pg-thread')
     await pool.query('DELETE FROM users WHERE id = $1', ['external-user'])
   } finally {
     await pool.end()

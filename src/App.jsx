@@ -21,12 +21,10 @@ import {
   Download,
   FileText,
   FolderOpen,
-  Gem,
   Globe,
   Grid2X2,
   Highlighter,
   History,
-  Image,
   Info,
   Italic,
   LayoutDashboard,
@@ -70,6 +68,16 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
+import {
+  agentEventDuration,
+  agentResponseText,
+  agentTurnEvents,
+  agentThreadMessages,
+  formatAgentDuration,
+  isEditorAgentEdit,
+  resolveEditorAgentCommand,
+  waitForAgentPoll,
+} from './editor-agent.mjs'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
@@ -131,6 +139,16 @@ const contentSkills = new Set(['story-deslop', 'story-review', 'story-long-analy
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('zh-CN')
 }
+
+function AgentEventIcon({ event }) {
+  if (event.status === 'running') return <LoaderCircle size={13} className="spin" />
+  if (['failed', 'cancelled', 'interrupted'].includes(event.status)) return <X size={13} />
+  if (event.type === 'context') return <SearchCode size={13} />
+  if (event.type === 'skill') return <Code2 size={13} />
+  if (event.type === 'result') return <FileText size={13} />
+  return <Check size={13} />
+}
+
 
 function formatRelativeTime(value, fallback = '刚刚') {
   if (!value) return fallback
@@ -1580,6 +1598,95 @@ function ProjectCard({ project, onOpen }) {
   return <button className="project-card" onClick={() => onOpen(project)}><div className={`card-cover ${project.cover}`}><span>{project.title.slice(0, 1)}</span></div><div className="card-content"><div className="card-topline"><span>{project.type}</span><MoreHorizontal size={15} /></div><h3>{project.title}</h3><p>{project.genre}</p><div className="card-footer"><span>{project.words} 字</span><span>{project.progress}%</span></div><div className="mini-progress"><span style={{ width: `${project.progress}%` }} /></div></div></button>
 }
 
+function EditorAgentTurn({ run, elapsedMs = 0, onApply }) {
+  const result = run.response?.result || {}
+  const proposal = result.edit_proposal || null
+  const outputText = typeof (proposal?.revised_text ?? result.output) === 'string'
+    ? String(proposal?.revised_text ?? result.output).trim()
+    : ''
+  const originalText = run.source?.selectedText || run.source?.sourceText || result.original || ''
+  const showDiff = run.editRequested && outputText && originalText
+  const [hunks, setHunks] = useState(() => showDiff ? buildEditHunks(originalText, outputText, proposal?.blocks || []) : [])
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setHunks(showDiff ? buildEditHunks(originalText, outputText, proposal?.blocks || []) : [])
+  }, [originalText, outputText, proposal, showDiff])
+
+  const changedHunks = hunks.filter((hunk) => hunk.type !== 'equal')
+  const acceptedText = changedHunks.length ? composeAcceptedText(hunks) : outputText
+  const addedCharacters = changedHunks.reduce((sum, hunk) => sum + (hunk.accepted ? hunk.replacement.length : 0), 0)
+  const removedCharacters = changedHunks.reduce((sum, hunk) => sum + (hunk.accepted ? hunk.original.length : 0), 0)
+  const references = Array.isArray(result.references_loaded) ? result.references_loaded : []
+  const checks = Array.isArray(result.checks) ? result.checks : []
+  const findings = Array.isArray(result.findings) ? result.findings : []
+  const events = Array.isArray(run.events) ? run.events : []
+  const plan = Array.isArray(run.plan) ? run.plan : []
+  const statusLabel = {
+    completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
+    needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
+  }[run.status] || '运行中'
+
+  function toggleHunk(id, accepted) {
+    setHunks((current) => current.map((hunk) => hunk.id === id ? { ...hunk, accepted } : hunk))
+  }
+
+  async function copyResult() {
+    const text = outputText || run.text
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch {
+      // Clipboard permissions vary in embedded browsers; copying is optional.
+    }
+  }
+
+  return <article className={`agent-turn ${run.status}`}>
+    <details className="agent-reasoning" open={run.status !== 'completed'}>
+      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>{run.status === 'running' ? `正在处理 · ${formatAgentDuration(elapsedMs)}` : `思考了 ${formatAgentDuration(run.durationMs)}`}</strong><span>{statusLabel}</span></summary>
+      <div className="agent-reasoning-body">
+        <p>展示的是可核验的执行摘要、工具状态和耗时，不包含模型隐藏思维链。</p>
+        {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
+          <div className="agent-plan-heading"><List size={13} /><strong>执行计划</strong><span>{plan.filter((item) => item.status === 'completed').length}/{plan.length}</span></div>
+          <ol>{plan.map((item, index) => <li className={item.status} key={`${item.step}-${index}`}>
+            {item.status === 'completed' ? <Check size={11} /> : item.status === 'inProgress' ? <LoaderCircle size={11} className="spin" /> : <span className="agent-plan-dot" />}
+            <span>{item.step}</span>
+          </li>)}</ol>
+        </div>}
+        <div className="agent-tool-stack">
+          {(events.length ? events : [{ id: `${run.id}:local`, type: 'lifecycle', label: run.statusMessage || '正在创建任务', status: 'running' }]).map((event) => <div className={`agent-tool-row ${event.status === 'completed' ? 'done' : event.status}`} key={event.id}>
+            <AgentEventIcon event={event} />
+            <span>{event.label}</span>
+            {agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
+          </div>)}
+        </div>
+        {references.length > 0 && <div className="agent-tool-row done"><SearchCode size={13} /><span>探索 {references.length} 份 Skill 引用</span></div>}
+        {checks.length > 0 && <div className="agent-tool-row done"><CheckSquare2 size={13} /><span>完成 {checks.length} 项确定性检查</span></div>}
+        {run.response?.route && <code>{run.response.route}</code>}
+      </div>
+    </details>
+
+    {run.status !== 'running' && <div className={`agent-answer ${['failed', 'cancelled', 'needs_model', 'needs_input', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`}>
+      <div className="agent-answer-heading"><Bot size={15} /><strong>{ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
+      <p>{run.text}</p>
+    </div>}
+
+    {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
+
+    {showDiff && changedHunks.length > 0 && <section className="agent-diff">
+      <header><div><FileText size={14} /><strong>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</strong></div><span className="diff-add">+{addedCharacters}</span><span className="diff-remove">-{removedCharacters}</span></header>
+      <div className="agent-diff-list">{changedHunks.map((hunk, index) => <article className={`agent-diff-hunk ${hunk.accepted ? '' : 'rejected'}`} key={hunk.id}>
+        <div className="agent-diff-hunk-heading"><span>修改 {index + 1}</span><small>{hunk.reason}</small><div><button type="button" className={hunk.accepted ? 'active' : ''} title="接受修改" onClick={() => toggleHunk(hunk.id, true)}><Check size={12} /></button><button type="button" className={!hunk.accepted ? 'active reject' : ''} title="拒绝修改" onClick={() => toggleHunk(hunk.id, false)}><X size={12} /></button></div></div>
+        {hunk.original && <pre className="diff-line removed"><span>-</span>{hunk.original}</pre>}
+        {hunk.replacement && <pre className="diff-line added"><span>+</span>{hunk.replacement}</pre>}
+      </article>)}</div>
+      <footer><span>{changedHunks.filter((hunk) => hunk.accepted).length} / {changedHunks.length} 项已接受</span><button type="button" disabled={run.applied || !changedHunks.some((hunk) => hunk.accepted)} onClick={() => onApply(run, acceptedText)}>{run.applied ? <Check size={13} /> : <PenLine size={13} />}{run.applied ? '已应用' : '应用到正文'}</button></footer>
+    </section>}
+  </article>
+}
+
 function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onBack, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenSkill, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
@@ -1611,11 +1718,19 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
   const [exportingBook, setExportingBook] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState([])
+  const [assistantThread, setAssistantThread] = useState(null)
+  const [assistantLoading, setAssistantLoading] = useState(false)
+  const [assistantRunning, setAssistantRunning] = useState(false)
+  const [assistantElapsedMs, setAssistantElapsedMs] = useState(0)
   const [, setHistoryVersion] = useState(0)
   const historyRef = useRef({ past: [], future: [] })
   const historyTimerRef = useRef(null)
   const historyPendingRef = useRef(null)
   const textareaRef = useRef(null)
+  const assistantAbortRef = useRef(null)
+  const assistantTaskIdRef = useRef(null)
+  const assistantTurnIdRef = useRef(null)
+  const assistantStreamRef = useRef(null)
   const displayChapter = activeChapter || chapters.at(-1) || { id: 1, title: '第一章', words: '0' }
   const activeIndex = Math.max(0, chapters.findIndex((chapter) => String(chapter.id) === String(displayChapter.id)))
   const visibleChapters = useMemo(() => [...chapters]
@@ -1639,7 +1754,55 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     setSearchOpen(false)
     setSearchQuery('')
     setAssistantMessages([])
+    setAssistantThread(null)
+    setAssistantLoading(true)
+    setAssistantRunning(false)
+    setAssistantElapsedMs(0)
+    assistantAbortRef.current?.abort()
+    assistantAbortRef.current = null
+    assistantTaskIdRef.current = null
+    assistantTurnIdRef.current = null
   }, [displayChapter.id])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    assistantAbortRef.current?.abort()
+    assistantAbortRef.current = controller
+    setAssistantLoading(true)
+    setAssistantMessages([])
+    setAssistantThread(null)
+    setAssistantRunning(false)
+    setAssistantElapsedMs(0)
+    assistantTaskIdRef.current = null
+    assistantTurnIdRef.current = null
+    api.getAgentThread(project.id, displayChapter.id)
+      .then(async ({ thread }) => {
+        if (controller.signal.aborted) return
+        setAssistantThread(thread || null)
+        const restored = agentThreadMessages(thread)
+        setAssistantMessages(restored)
+        const running = [...restored].reverse().find((item) => item.role === 'agent' && ['queued', 'running'].includes(item.status))
+        if (!running?.taskId) return
+        setAssistantRunning(true)
+        assistantTaskIdRef.current = running.taskId
+        assistantTurnIdRef.current = running.turnId
+        const startedAt = performance.now() - Math.max(0, Number(running.durationMs) || 0)
+        await monitorAssistantTurn(thread.id, running.turnId, running.taskId, running.id, controller, startedAt)
+        if (assistantAbortRef.current === controller) {
+          assistantTaskIdRef.current = null
+          assistantTurnIdRef.current = null
+          setAssistantElapsedMs(performance.now() - startedAt)
+          setAssistantRunning(false)
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) onNotify(error.message || 'Agent 会话恢复失败')
+      })
+      .finally(() => {
+        if (assistantAbortRef.current === controller) setAssistantLoading(false)
+      })
+    return () => controller.abort()
+  }, [displayChapter.id, project.id])
 
   useEffect(() => {
     if (historyLoading) return
@@ -1663,7 +1826,14 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
 
   useEffect(() => () => {
     if (historyTimerRef.current) window.clearTimeout(historyTimerRef.current)
+    assistantAbortRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    const stream = assistantStreamRef.current
+    if (!stream) return
+    stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' })
+  }, [assistantMessages.length, assistantRunning])
 
   useEffect(() => {
     if (!applyRequest?.id || draftLoading) return
@@ -2056,13 +2226,224 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
     })
   }
 
-  function submitAssistant(event, quickMessage = '') {
+  async function submitAssistant(event, quickMessage = '') {
     event?.preventDefault()
     const message = String(quickMessage || assistantInput).trim()
-    if (!message) return
-    setAssistantMessages((current) => [...current.slice(-3), { id: `${Date.now()}-${current.length}`, text: message }])
+    if (!message || assistantRunning || assistantLoading || draftLoading) return
+    const command = resolveEditorAgentCommand(message, project)
+    const textarea = textareaRef.current
+    const selectionStart = textarea?.selectionStart ?? draft.length
+    const selectionEnd = textarea?.selectionEnd ?? selectionStart
+    const selectedText = draft.slice(selectionStart, selectionEnd)
+    const editRequested = isEditorAgentEdit(command.message, command.skill)
+    const requestId = `agent-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const startedAt = performance.now()
+    const source = {
+      chapterId: displayChapter.id,
+      chapterTitle: displayChapter.title,
+      sourceText: draft,
+      selectionStart,
+      selectionEnd,
+      selectedText,
+    }
+    const userMessage = { id: `${requestId}-user`, role: 'user', text: message }
+    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, editRequested, requestedSkill: command.skill }
+    setAssistantMessages((current) => [...current.slice(-18), userMessage, runMessage])
     setAssistantInput('')
-    openEditorSkill('story', message)
+    setAssistantRunning(true)
+    setAssistantElapsedMs(0)
+    const controller = new AbortController()
+    let createdTaskId = null
+    let createdTurnId = null
+    assistantAbortRef.current = controller
+    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
+    try {
+      const thread = assistantThread || (await api.createAgentThread(project.id, displayChapter.id)).thread
+      if (controller.signal.aborted) return
+      setAssistantThread(thread)
+      const created = await api.createAgentTurn(thread.id, {
+        message: command.message,
+        skill: command.skill,
+        payload: {
+          project_id: project.id,
+          chapter_id: displayChapter.id,
+          project_type: project.type,
+          genre: project.genre,
+          style: project.style || '',
+          premise: project.tone || '',
+          preferred_writing_skill: project.type === '短篇' ? 'story-short-write' : 'story-long-write',
+          chapter_title: displayChapter.title,
+          content: selectedText || draft,
+          source_text: draft,
+          selected_text: selectedText,
+          selection_start: selectionStart,
+          selection_end: selectionEnd,
+          reviewable_edit: editRequested,
+        },
+        idempotencyKey: requestId,
+      }, { signal: controller.signal })
+      let task = created.task
+      const turn = created.turn
+      createdTaskId = task.id
+      createdTurnId = turn.id
+      assistantTaskIdRef.current = task.id
+      assistantTurnIdRef.current = turn.id
+      setAssistantMessages((current) => current.map((item) => item.id === requestId ? {
+        ...item,
+        turnId: turn.id,
+        taskId: task.id,
+        items: turn.items || [],
+        events: agentTurnEvents(turn),
+        plan: turn.plan || [],
+        progress: task.progress || 0,
+      } : item))
+      await monitorAssistantTurn(thread.id, turn.id, task.id, requestId, controller, startedAt)
+    } catch (error) {
+      const durationMs = performance.now() - startedAt
+      const cancelled = error?.name === 'AbortError'
+      if (!cancelled) {
+        setAssistantMessages((current) => current.map((item) => item.id === requestId ? {
+          ...item,
+          status: 'failed',
+          text: error.message || 'Agent 执行失败。',
+          durationMs,
+        } : item))
+      }
+    } finally {
+      window.clearInterval(timer)
+      if (assistantAbortRef.current === controller) {
+        assistantAbortRef.current = null
+        if (assistantTaskIdRef.current && assistantTaskIdRef.current === createdTaskId) assistantTaskIdRef.current = null
+        if (assistantTurnIdRef.current === createdTurnId) assistantTurnIdRef.current = null
+        setAssistantElapsedMs(performance.now() - startedAt)
+        setAssistantRunning(false)
+      }
+    }
+  }
+
+  function applyStreamedTask(task, requestId, startedAt, turn = null) {
+    const terminal = ['completed', 'failed', 'cancelled'].includes(task.status)
+    const response = task.result
+    setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.taskId === task.id) ? {
+      ...item,
+      taskId: task.id,
+      turnId: turn?.id || item.turnId,
+      status: terminal
+        ? task.status === 'completed' ? response?.status || 'completed' : task.status
+        : task.status,
+      response: response || item.response,
+      text: terminal
+        ? task.status === 'completed' ? agentResponseText(response) : task.error || task.statusMessage || '任务未完成。'
+        : item.text,
+      items: turn?.items || item.items || [],
+      events: turn ? agentTurnEvents(turn) : task.events || item.events || [],
+      plan: turn?.plan || item.plan || [],
+      progress: task.progress || 0,
+      statusMessage: task.statusMessage || '',
+      durationMs: performance.now() - startedAt,
+    } : item))
+    return terminal
+  }
+
+  async function monitorAssistantTurn(threadId, turnId, taskId, requestId, controller, startedAt) {
+    let latestTurn = null
+    try {
+      await api.streamAgentTurn(threadId, turnId, {
+        signal: controller.signal,
+        onEvent: (event, payload) => {
+          if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+              ...item,
+              plan: Array.isArray(payload.plan) ? payload.plan : item.plan || [],
+            } : item))
+            return
+          }
+          if (!event.startsWith('turn/') || !payload?.turn) return
+          latestTurn = payload.turn
+          if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)
+        },
+      })
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === 'AbortError') throw error
+      while (!latestTurn || latestTurn.status === 'inProgress') {
+        await waitForAgentPoll(700, controller.signal)
+        latestTurn = (await api.getAgentTurn(threadId, turnId, { signal: controller.signal })).turn
+        if (latestTurn.task && applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)) break
+      }
+    }
+    return latestTurn
+  }
+
+  function stopAssistant() {
+    const taskId = assistantTaskIdRef.current
+    const turnId = assistantTurnIdRef.current
+    const threadId = assistantThread?.id
+    if (threadId && turnId) void api.interruptAgentTurn(threadId, turnId).catch(() => undefined)
+    else if (taskId) void api.cancelAiTask(taskId).catch(() => undefined)
+    assistantAbortRef.current?.abort()
+    setAssistantMessages((current) => current.map((item) => item.role === 'agent' && item.taskId === taskId ? {
+      ...item,
+      status: 'cancelled',
+      text: '已停止本次运行。',
+    } : item))
+    setAssistantRunning(false)
+  }
+
+  async function clearAssistant() {
+    const taskId = assistantTaskIdRef.current
+    const activeTurnId = assistantTurnIdRef.current
+    if (assistantThread?.id && activeTurnId) void api.interruptAgentTurn(assistantThread.id, activeTurnId).catch(() => undefined)
+    else if (taskId) void api.cancelAiTask(taskId).catch(() => undefined)
+    assistantAbortRef.current?.abort()
+    assistantAbortRef.current = null
+    assistantTaskIdRef.current = null
+    assistantTurnIdRef.current = null
+    setAssistantMessages([])
+    const threadId = assistantThread?.id
+    setAssistantThread(null)
+    setAssistantRunning(false)
+    setAssistantElapsedMs(0)
+    setAssistantInput('')
+    if (threadId) {
+      try {
+        await api.archiveAgentThread(threadId)
+        onNotify('已新建 Agent 会话')
+      } catch (error) {
+        onNotify(error.message || 'Agent 会话归档失败')
+      }
+    }
+  }
+
+  async function applyAssistantRevision(run, reviewedText) {
+    const content = String(reviewedText || '').trim()
+    if (!content || run.applied) return
+    const source = run.source || {}
+    if (String(source.chapterId ?? '') !== String(displayChapter.id)) {
+      onNotify('这份修改属于其他章节，无法应用到当前正文')
+      return
+    }
+    const hasSelection = Number(source.selectionEnd) > Number(source.selectionStart) && Boolean(source.selectedText)
+    const sourceMatches = hasSelection
+      ? draft.slice(source.selectionStart, source.selectionEnd) === source.selectedText
+      : draft === source.sourceText
+    if (!sourceMatches) {
+      onNotify('正文已发生变化，这份 Agent 修改已过期')
+      return
+    }
+    try {
+      await onCreateHistory?.(draft, { awaitSave: true })
+    } catch {
+      onNotify('应用前快照保存失败，已取消修改')
+      return
+    }
+    const before = draft
+    const next = hasSelection
+      ? `${draft.slice(0, source.selectionStart)}${content}${draft.slice(source.selectionEnd)}`
+      : content
+    commitDraftChange(next)
+    onAiApplied?.({ chapterId: displayChapter.id, content: before, runId: run.response?.run_id || run.id })
+    setAssistantMessages((current) => current.map((item) => item.id === run.id ? { ...item, applied: true } : item))
+    onNotify(hasSelection ? '已应用选中的 Agent 修改，可一键恢复' : '已应用 Agent 修改，可一键恢复')
   }
 
   function exportChapter() {
@@ -2227,22 +2608,35 @@ function Editor({ project, chapters, activeChapter, ideas, foreshadows = [], sto
           </div>
         </section>
 
-        <aside className={`insight-rail ${assistantOpen ? '' : 'collapsed'}`}>
+        <aside className={`insight-rail agent-rail ${assistantOpen ? '' : 'collapsed'}`}>
           {assistantOpen ? <>
-            <div className="assistant-panel-heading"><div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>Chat</span></div><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
-            <div className="assistant-welcome"><strong>{ASSISTANT_NAME}已就位。</strong><p>今天想改剧情、磨人物，还是直接开写？</p></div>
-            <div className="assistant-quick-actions">
-              <button onClick={(event) => submitAssistant(event, '帮我分析这段文字的节奏和情绪。')}><span>01</span>帮我分析这段文字</button>
-              <button onClick={(event) => submitAssistant(event, '如何让当前章节的剧情更精彩？')}><span>02</span>如何让剧情更精彩？</button>
-              <button onClick={(event) => submitAssistant(event, '帮我给当前章节起 3 个章节名称。')}><span>03</span>给本章起 3 个名字</button>
-              <button onClick={(event) => submitAssistant(event, '帮我总结当前章节，并列出下一章可推进的冲突。')}><span>04</span>总结当前章节</button>
+            <div className="assistant-panel-heading agent-panel-heading">
+              <div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>AGENT</span></div>
+              <div><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
             </div>
-            {assistantMessages.length > 0 && <div className="assistant-message-list">{assistantMessages.map((message) => <div className="assistant-message" key={message.id}><MessageCircle size={13} /><span>{message.text}</span></div>)}</div>}
-            <div className="assistant-context-card"><div><span>关联</span><strong>当前章节正文</strong></div><small>{wordCount.toLocaleString()} 字 · {displayChapter.title}</small></div>
-            <form className="assistant-form" onSubmit={submitAssistant}><textarea value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submitAssistant(event) }} rows={3} placeholder="输入问题或需求，Ctrl+Enter 发送" aria-label="输入问题或需求" /><div><span>支持 @关联内容</span><button type="submit" className="assistant-send" aria-label="发送" title="发送"><Send size={15} /></button></div></form>
-            <div className="insight-card coral-note"><span>情绪曲线</span><strong>待分析</strong><p>写完本章后，可使用 Skill 审稿分析情绪节奏。</p></div>
-            <div className="insight-card chapter-anchor-card"><span>本章锚点</span>{anchorIdeas.length ? <div className="anchor-list">{anchorIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className={`entity-dot ${idea.color === 'teal' ? 'teal' : 'coral'}`} /><span><strong>{idea.title}</strong><small>{idea.label} · 点击插入</small></span></button>)}</div> : <p>还没有关联锚点，可从素材库插入剧情、冲突或线索卡。</p>}<button className="text-button" onClick={() => setIdeaPickerOpen(true)}>{anchorIdeas.length ? '插入更多素材' : '打开素材库'} <ArrowUpRight size={14} /></button></div>
-            <div className="insight-card quote-card"><Info size={15} /><p>“让线索先抵达读者，再让人物意识到它。”</p></div>
+            <div className="agent-conversation" ref={assistantStreamRef}>
+              {assistantLoading && <div className="agent-empty"><LoaderCircle size={20} className="spin" /><strong>正在恢复会话</strong><p>读取本章的 Agent Turn 与任务状态。</p></div>}
+              {!assistantLoading && assistantMessages.length === 0 && <div className="agent-empty">
+                <div className="agent-empty-mark"><Bot size={20} /></div>
+                <strong>和 {ASSISTANT_NAME} 一起写</strong>
+                <p>Agent 会读取当前作品、章节正文和选区，执行任务后再由你决定是否应用修改。</p>
+                <div className="agent-starters">
+                  <button onClick={(event) => submitAssistant(event, '/write 加强冲突，结尾留下新的悬念')}><PenLine size={13} />续写本章</button>
+                  <button onClick={(event) => submitAssistant(event, '/review 重点检查人物动机和节奏')}><BrainCircuit size={13} />审查章节</button>
+                  <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><Wand2 size={13} />自然化润色</button>
+                </div>
+              </div>}
+              {assistantMessages.map((message) => message.role === 'user'
+                ? <div className="agent-user-turn" key={message.id}><p>{message.text}</p></div>
+                : <EditorAgentTurn key={message.id} run={message} elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs} onApply={applyAssistantRevision} />)}
+            </div>
+            <div className="agent-composer-wrap">
+              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span><small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
+              <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
+                <textarea value={assistantInput} disabled={assistantRunning || assistantLoading} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submitAssistant(event) }} rows={3} placeholder="让 Agent 续写、审查或修改…" aria-label="输入问题或需求" />
+                <div><span><Code2 size={12} /> 本地 Story Skills</span>{assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}</div>
+              </form>
+            </div>
           </> : <button className="assistant-reopen" aria-label={`展开${ASSISTANT_NAME}`} title={`展开${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}
         </aside>
       </div>

@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seed } from './seed.mjs'
+import { normalizeAgentThreads } from './agent-thread.mjs'
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.join(serverDir, 'data')
@@ -376,6 +377,7 @@ function normalizeDb(db) {
   db.editHistory ||= {}
   db.writingSessions ||= {}
   db.writingTasks ||= []
+  normalizeAgentThreads(db)
   db.aiUsage ||= []
   db.foreshadows ||= []
   db.storyMemories ||= []
