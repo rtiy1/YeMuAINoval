@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import {
+  agentEventDuration,
+  agentResponseText,
+  agentThreadMessages,
+  agentTurnEvents,
+  formatAgentDuration,
+  isEditorAgentEdit,
+  resolveEditorAgentCommand,
+  waitForAgentPoll,
+} from '../src/editor-agent.mjs'
+
+test('editor agent routes slash commands by project length', () => {
+  assert.deepEqual(
+    resolveEditorAgentCommand('/write 加强章末钩子', { type: '短篇' }),
+    { skill: 'story-short-write', message: '加强章末钩子' },
+  )
+  assert.equal(resolveEditorAgentCommand('/scan', { type: '长篇' }).skill, 'story-long-scan')
+  assert.deepEqual(
+    resolveEditorAgentCommand('/skill story-review 检查人物动机', { type: '长篇' }),
+    { skill: 'story-review', message: '检查人物动机' },
+  )
+})
+
+test('editor agent distinguishes review tasks from reviewable edits', () => {
+  assert.equal(isEditorAgentEdit('审查这一章', 'story-review'), false)
+  assert.equal(isEditorAgentEdit('扫描作品问题', 'story-long-scan'), false)
+  assert.equal(isEditorAgentEdit('保持语气并续写', 'story-long-write'), true)
+  assert.equal(isEditorAgentEdit('自然化处理', 'story-deslop'), true)
+})
+
+test('editor agent renders structured result summaries', () => {
+  assert.equal(
+    agentResponseText({ result: { edit_proposal: { summary: '调整了章末冲突。' } } }),
+    '调整了章末冲突。',
+  )
+  assert.match(
+    agentResponseText({ result: { verdict: '需要修改', score: 72, findings: [{ issue: '动机不足', fix: '补一处行动依据' }] } }),
+    /动机不足：补一处行动依据/,
+  )
+  assert.equal(agentResponseText({ status: 'completed', result: {} }), '任务已完成。')
+})
+
+test('editor agent formats durations and aborts polling', async () => {
+  assert.equal(formatAgentDuration(1500), '1.5 秒')
+  assert.equal(formatAgentDuration(65_000), '1 分 5 秒')
+  assert.equal(agentEventDuration({
+    startedAt: '2026-01-01T00:00:00.000Z',
+    completedAt: '2026-01-01T00:00:02.000Z',
+  }), '2.0 秒')
+
+  const controller = new AbortController()
+  const pending = waitForAgentPoll(10_000, controller.signal)
+  controller.abort()
+  await assert.rejects(pending, (error) => error?.name === 'AbortError')
+})
+
+test('editor agent restores persisted thread turns', () => {
+  const messages = agentThreadMessages({
+    turns: [{
+      id: 'turn-1',
+      taskId: 'task-1',
+      message: '续写本章',
+      editRequested: true,
+      items: [
+        { id: 'item-user', type: 'userMessage', status: 'completed' },
+        { id: 'item-skill', type: 'dynamicToolCall', status: 'completed', summary: '执行写作 Skill' },
+        { id: 'item-agent', type: 'agentMessage', status: 'completed' },
+      ],
+      source: { chapterId: '1', sourceText: '原文' },
+      task: {
+        id: 'task-1',
+        status: 'completed',
+        skill: 'story-long-write',
+        result: { status: 'completed', result: { output: '续写结果' } },
+        events: [{ id: 'event-1', status: 'completed' }],
+        progress: 100,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      },
+    }],
+  })
+  assert.equal(messages.length, 2)
+  assert.deepEqual(messages.map((item) => item.role), ['user', 'agent'])
+  assert.equal(messages[1].text, '续写结果')
+  assert.equal(messages[1].durationMs, 2000)
+  assert.equal(messages[1].source.sourceText, '原文')
+  assert.equal(messages[1].turnId, 'turn-1')
+  assert.equal(messages[1].events[0].label, '执行写作 Skill')
+})
+
+test('editor agent maps in-progress and interrupted items to timeline events', () => {
+  assert.deepEqual(agentTurnEvents({
+    items: [
+      { id: 'user', type: 'userMessage', status: 'completed' },
+      { id: 'tool', type: 'dynamicToolCall', tool: 'story-review', status: 'inProgress' },
+      { id: 'reason', type: 'reasoning', summary: '等待授权', status: 'interrupted' },
+    ],
+  }).map(({ type, status }) => ({ type, status })), [
+    { type: 'skill', status: 'running' },
+    { type: 'lifecycle', status: 'cancelled' },
+  ])
+})

@@ -80,6 +80,14 @@ npm run dev:ai    # AI 服务  http://127.0.0.1:8890
 npm run dev       # 前端     http://127.0.0.1:5173
 ```
 
+也可以使用只面向小说创作的终端 Agent。它复用同一账号、模型设置、作品、章节和长期记忆：
+
+```bash
+npm run novel
+```
+
+终端提供作品/章节上下文切换、写作、审稿、去 AI 味、长短篇分析与扫描、联网资料搜索，以及写入前确认和历史恢复。完整命令见 [`terminal/README.md`](terminal/README.md)。
+
 > Vite 会把 `/api` 请求代理到本地 API。本地不配置 `DATABASE_URL` 时，数据写入 `server/data/db.json`，无需单独安装 PostgreSQL。
 
 ### 生产运行
@@ -206,6 +214,7 @@ npm run test:postgres
 ## 🧠 聊天记忆与联网搜索
 
 - **Redis 持久化聊天记忆**：设置 `REDIS_URL` 后，夜雨会话（消息、需求、问题、阶段、建书方案）持久化到 Redis（AOF），刷新或重启 Node 后可恢复；Redis 不可用时自动回退到 JSON / Postgres。建书确认与项目创建仍走数据库事务。
+- **Codex 风格 Agent 生命周期**：每个作品章节拥有独立的持久化 `Thread → Turn → Item`；刷新、切换章节或 Turn 仍在 worker 中运行时，重新进入章节会恢复用户消息、执行项和可审阅结果。浏览器优先通过带认证的 SSE 接收 `turn/*`、`item/*` 事件，不支持流式响应时自动回退低频轮询。
 - **联网搜索**：夜雨对话框输入区有「联网搜索」开关，打开后每轮先联网检索再用结果回答（带来源），与主流 AI 助手一致；不进入建书流程。配置 `TAVILY_API_KEY` 走 Tavily；留空则零配置回退 DuckDuckGo。只有真正发起过搜索才标记为已联网，网络失败时如实返回失败，不伪造结果。
 
 左侧「创作助手」是 Chat 式独立页面：空态只欢迎用户表达想法，不会直接抛出题材选项。用户发出第一条消息后，夜雨再逐步收集篇幅、题材、流派和故事核心，调用 `story-long-write` 或 `story-short-write` 生成可编辑建书方案；确认后复用智能创建事务创建作品并进入编辑器。扫榜、去 AI 味、章节审稿放在「高级工具」，拆文台单独保留为低频学习入口。
@@ -227,7 +236,9 @@ npm run test:postgres
 
 **AI 调用**
 - `POST /api/ai/agent/runs` — 通用 Story Agent 入口
-- `POST /api/ai/tasks` · `GET /api/ai/tasks/:taskId` · `POST /api/ai/tasks/:taskId/cancel` · `POST /api/ai/tasks/:taskId/retry` — 可恢复、可重试的 AI 任务
+- `GET / POST /api/ai/threads` · `GET / DELETE /api/ai/threads/:threadId` · `POST /api/ai/threads/:threadId/resume` — Agent Thread 列表、创建、读取、恢复与归档
+- `POST /api/ai/threads/:threadId/turns` · `GET /api/ai/threads/:threadId/turns/:turnId` · `GET .../stream` · `POST .../interrupt` — Codex 风格 Turn 生命周期与 `turn/*`、`item/*` SSE 事件
+- `POST /api/ai/tasks` · `GET /api/ai/tasks/:taskId` · `GET /api/ai/tasks/:taskId/stream` · `POST /api/ai/tasks/:taskId/cancel` · `POST /api/ai/tasks/:taskId/retry` — worker Task 兼容层与重试接口
 - `POST /api/ai/reviews/chapter` — 章节诊断
 
 **创作助手**
@@ -276,9 +287,14 @@ npm test
 冒烟测试在临时目录启动独立 API，覆盖输入校验与核心 CRUD，结束后自动删除测试数据。`test:unit` 还覆盖编辑建议 diff 与聊天记忆序列化的纯函数。
 
 ```bash
-# 提供真实 Redis 时，额外跑持久化与会话跨重启恢复测试
+# 提供已有 Redis 时，单独跑持久化与会话跨重启恢复测试
 REDIS_TEST_URL=redis://127.0.0.1:6399/0 npm run test:unit
+
+# 使用隔离的 Compose 项目完整验证 PostgreSQL、Redis、worker 与备份恢复
+npm run test:postgres
 ```
+
+GitHub Actions 会在推送与 Pull Request 中自动执行完整测试、生产构建和 Compose 集成验证。
 
 ## 📄 许可证
 

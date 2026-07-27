@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.model_content import model_content_text
 from app.schemas import (
     AssistantPlanQuestion,
     StoryAgentRequest,
@@ -40,7 +41,7 @@ def _web_search_turn(request: WritingAssistantTurnRequest) -> WritingAssistantTu
     if result.get('status') == 'failed' or (not results and not result.get('summary')):
         reply = result.get('message') or '联网搜索失败，请稍后重试或配置 TAVILY_API_KEY。'
     elif result.get('summary'):
-        reply = result['summary']
+        reply = model_content_text(result['summary'])
     else:
         lines = [f'已检索到 {len(results)} 条结果：']
         for index, item in enumerate(results[:8], 1):
@@ -283,7 +284,7 @@ def run_writing_assistant_turn(request: WritingAssistantTurnRequest) -> WritingA
         model_config=request.model_config_override,
     ))
     result = agent_response.result
-    reply = str(result.get('message') or result.get('summary') or decision.reply) if isinstance(result, dict) else decision.reply
+    reply = model_content_text(result.get('message') or result.get('summary') or decision.reply) if isinstance(result, dict) else decision.reply
     response_phase = 'completed' if agent_response.status == 'completed' else 'collecting_requirements'
     return WritingAssistantTurnResponse(
         status=agent_response.status,

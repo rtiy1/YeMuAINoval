@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from app.config import get_settings
+from app.model_content import model_content_text
 from app.skills.capability import SkillInvocation
 from app.skills.model_helper import create_chat_model, has_api_key, resolve_context_window, truncate_for_context
 from app.skills.reference_loader import format_references_block, load_referenced
@@ -109,6 +110,6 @@ def execute_deslop_skill(invocation: SkillInvocation) -> dict[str, Any]:
         'references_loaded': references_loaded,
         'references_truncated': ref_result.truncated,
         'checks': checks,
-        'output': response.content,
+        'output': model_content_text(response.content),
         'original': content,
     }

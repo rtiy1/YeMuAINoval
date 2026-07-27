@@ -12,6 +12,21 @@ function isNetworkError(error) {
     || ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(error?.cause?.code)
 }
 
+function serviceErrorMessage(value, fallback) {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const message = value.map((item) => serviceErrorMessage(item, '')).filter(Boolean).join('；')
+    if (message) return message
+  }
+  if (value && typeof value === 'object') {
+    for (const key of ['message', 'msg', 'text', 'detail', 'error']) {
+      const message = serviceErrorMessage(value[key], '')
+      if (message) return message
+    }
+  }
+  return fallback
+}
+
 function userModelConfig(user) {
   if (!user?.settings) return sharedModelAccessAllowed ? null : { provider: 'openai', allow_server_fallback: false }
   const settings = user.settings
@@ -40,7 +55,7 @@ export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout
     signal,
   })
   const result = await response.json().catch(() => null)
-  if (!response.ok) throw Object.assign(new Error(result?.detail || 'Story Agent 处理失败'), { status: response.status >= 500 ? 502 : response.status })
+  if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, 'Story Agent 处理失败')), { status: response.status >= 500 ? 502 : response.status })
   return result
 }
 

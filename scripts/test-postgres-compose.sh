@@ -19,6 +19,11 @@ trap cleanup EXIT
 
 docker compose up -d --wait postgres redis
 docker compose build app
+docker compose run --rm --no-deps \
+  -e DATABASE_URL= \
+  -e REDIS_URL=redis://redis:6379/15 \
+  -e REDIS_TEST_URL=redis://redis:6379/15 \
+  app node --test server/chat-memory-test.mjs
 docker compose run --rm --no-deps app node server/postgres-integration-test.mjs
 docker compose run --rm --no-deps app node server/task-queue-integration-test.mjs
 

@@ -99,6 +99,27 @@ async function call(method, route, body, options = {}) {
   return { response, payload }
 }
 
+async function streamTask(taskId, { auth = true } = {}) {
+  const headers = { accept: 'text/event-stream' }
+  if (auth && accessToken) headers.authorization = `Bearer ${accessToken}`
+  const response = await fetch(`${baseUrl}/api/ai/tasks/${taskId}/stream`, { headers })
+  const body = await response.text()
+  const tasks = [...body.matchAll(/event: task\ndata: (.+)\n/g)].map((match) => JSON.parse(match[1]))
+  return { response, body, tasks }
+}
+
+async function streamTurn(threadId, turnId, { auth = true } = {}) {
+  const headers = { accept: 'text/event-stream' }
+  if (auth && accessToken) headers.authorization = `Bearer ${accessToken}`
+  const response = await fetch(`${baseUrl}/api/ai/threads/${threadId}/turns/${turnId}/stream`, { headers })
+  const body = await response.text()
+  const events = [...body.matchAll(/event: ([^\n]+)\ndata: (.+)\n/g)].map((match) => ({
+    event: match[1],
+    payload: JSON.parse(match[2]),
+  }))
+  return { response, body, events }
+}
+
 try {
   baseUrl = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('API 启动超时')), 5000)
@@ -309,20 +330,81 @@ try {
   assert.equal(cleanedForeshadow.payload.foreshadows[0].targetChapterId, null)
   assert.equal(cleanedForeshadow.payload.foreshadows[0].resolvedChapterId, null)
 
-  const task = await call('POST', '/api/ai/tasks', { skill: 'story', message: '继续写作', payload: { project_id: projectId, chapter_id: String(firstChapterId), content: '雨落下来。' } })
+  const agentThread = await call('POST', '/api/ai/threads', { projectId, chapterId: String(firstChapterId) })
+  assert.equal(agentThread.response.status, 201)
+  assert.equal(agentThread.payload.thread.status, 'active')
+  assert.equal((await call('GET', '/api/ai/threads')).payload.threads[0].id, agentThread.payload.thread.id)
+  const reusedThread = await call('POST', '/api/ai/threads', { projectId, chapterId: String(firstChapterId) })
+  assert.equal(reusedThread.response.status, 200)
+  assert.equal(reusedThread.payload.thread.id, agentThread.payload.thread.id)
+
+  const task = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '继续写作',
+    payload: {
+      chapter_title: '第一章 雨夜',
+      content: '雨落下来。',
+      source_text: '雨落下来。',
+      reviewable_edit: true,
+    },
+  })
   assert.equal(task.response.status, 202)
-  assert.equal(task.payload.task.status, 'queued')
-  let completedTask
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 25))
-    completedTask = await call('GET', `/api/ai/tasks/${task.payload.task.id}`)
-    if (['completed', 'failed', 'cancelled'].includes(completedTask.payload.task.status)) break
-  }
+  assert.ok(['queued', 'running', 'completed'].includes(task.payload.task.status))
+  assert.equal(task.payload.task.threadId, agentThread.payload.thread.id)
+  assert.equal(task.payload.task.turnId, task.payload.turn.id)
+  assert.equal(task.payload.turn.threadId, agentThread.payload.thread.id)
+  assert.equal(task.payload.turn.items[0].type, 'userMessage')
+  assert.equal(task.payload.task.events[0].type, 'lifecycle')
+  assert.equal(task.payload.task.events[0].status, 'completed')
+  const anonymousStream = await streamTurn(agentThread.payload.thread.id, task.payload.turn.id, { auth: false })
+  assert.equal(anonymousStream.response.status, 401)
+  const streamed = await streamTurn(agentThread.payload.thread.id, task.payload.turn.id)
+  assert.equal(streamed.response.status, 200)
+  assert.match(streamed.response.headers.get('content-type'), /text\/event-stream/)
+  assert.ok(streamed.events.some((event) => event.event === 'turn/started'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/started' || event.event === 'item/completed'))
+  assert.equal(streamed.events.at(-1).event, 'turn/completed')
+  assert.equal(streamed.events.at(-1).payload.turn.status, 'completed')
+  const completedTask = await call('GET', `/api/ai/tasks/${task.payload.task.id}`)
   assert.equal(completedTask.payload.task.status, 'completed')
   assert.equal(completedTask.payload.task.result.result.output, '测试 AI 输出')
+  assert.deepEqual(completedTask.payload.task.events.map((event) => event.type), ['lifecycle', 'context', 'skill', 'result'])
+  assert.equal(completedTask.payload.task.events.some((event) => event.status === 'running'), false)
   const completedRequest = agentRequests.find((request) => request.message === '继续写作')
   assert.equal(completedRequest.model_config.allow_server_fallback, false)
   assert.equal(completedRequest.model_config.api_key, undefined)
+  assert.deepEqual(completedRequest.payload.conversation, [])
+
+  const persistedThread = await call('GET', `/api/ai/threads/${agentThread.payload.thread.id}`)
+  assert.equal(persistedThread.payload.thread.turns.length, 1)
+  assert.equal(persistedThread.payload.thread.turns[0].source.sourceText, '雨落下来。')
+  assert.equal(persistedThread.payload.thread.turns[0].task.status, 'completed')
+  assert.deepEqual(persistedThread.payload.thread.turns[0].items.map((item) => item.type), ['userMessage', 'reasoning', 'reasoning', 'dynamicToolCall', 'agentMessage'])
+  assert.equal((await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/resume`)).payload.thread.id, agentThread.payload.thread.id)
+  assert.equal((await call('GET', `/api/ai/threads?projectId=${projectId}&chapterId=${firstChapterId}`)).payload.thread.id, agentThread.payload.thread.id)
+
+  const contextualTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story-review',
+    message: '检查前后衔接',
+    payload: { content: '雨落下来。' },
+  })
+  assert.equal(contextualTask.response.status, 202)
+  assert.equal((await streamTurn(agentThread.payload.thread.id, contextualTask.payload.turn.id)).events.at(-1).payload.turn.status, 'completed')
+  const contextualRequest = agentRequests.find((request) => request.message === '检查前后衔接')
+  assert.deepEqual(contextualRequest.payload.conversation, [
+    { role: 'user', text: '继续写作' },
+    { role: 'assistant', text: '测试 AI 输出' },
+  ])
+  const interruptedTurn = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '取消任务',
+    payload: { content: '雨落下来。' },
+  })
+  const interrupted = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns/${interruptedTurn.payload.turn.id}/interrupt`)
+  assert.equal(interrupted.response.status, 200)
+  assert.equal(interrupted.payload.turn.status, 'interrupted')
+  assert.equal(interrupted.payload.turn.items.at(-1).type, 'agentMessage')
+  assert.equal((await streamTurn(agentThread.payload.thread.id, interruptedTurn.payload.turn.id)).events.at(-1).event, 'turn/completed')
   const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   const reusedTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   assert.equal(reusedTask.payload.task.id, duplicateTask.payload.task.id)
@@ -333,14 +415,23 @@ try {
   assert.equal(cancelled.response.status, 200)
   assert.equal(cancelled.payload.task.status, 'cancelled')
   assert.equal(cancelled.payload.task.errorCode, 'cancelled')
+  assert.equal(cancelled.payload.task.events.at(-1).status, 'cancelled')
   const retried = await call('POST', `/api/ai/tasks/${cancelTask.payload.task.id}/retry`)
   assert.equal(retried.response.status, 202)
   assert.equal(retried.payload.task.attempt, 2)
   assert.equal(retried.payload.task.parentTaskId, cancelTask.payload.task.id)
+  assert.match(retried.payload.task.events[0].label, /重试任务已排队/)
   const reusedRetry = await call('POST', `/api/ai/tasks/${cancelTask.payload.task.id}/retry`)
   assert.equal(reusedRetry.response.status, 200)
   assert.equal(reusedRetry.payload.task.id, retried.payload.task.id)
   assert.equal(reusedRetry.payload.task.reused, true)
+
+  assert.equal((await call('DELETE', `/api/ai/threads/${agentThread.payload.thread.id}`)).response.status, 204)
+  assert.equal((await call('GET', `/api/ai/threads?projectId=${projectId}&chapterId=${firstChapterId}`)).payload.thread, null)
+  assert.equal((await call('GET', '/api/ai/threads?includeArchived=true')).payload.threads.some((thread) => thread.id === agentThread.payload.thread.id), true)
+  const replacementThread = await call('POST', '/api/ai/threads', { projectId, chapterId: String(firstChapterId) })
+  assert.equal(replacementThread.response.status, 201)
+  assert.notEqual(replacementThread.payload.thread.id, agentThread.payload.thread.id)
 
   assert.equal((await call('DELETE', `/api/projects/${projectId}`)).response.status, 204)
 

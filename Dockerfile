@@ -15,11 +15,11 @@ ENV HOST=0.0.0.0
 ENV PORT=8787
 WORKDIR /app
 COPY --from=build /app/package*.json ./
+COPY --from=build /app/LICENSE ./LICENSE
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/skills ./skills
-COPY --from=build /app/public ./public
 
 EXPOSE 8787
 CMD ["node", "server/index.mjs"]
