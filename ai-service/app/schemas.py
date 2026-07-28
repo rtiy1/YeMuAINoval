@@ -88,6 +88,23 @@ class StoryAgentResponse(BaseModel):
     result: dict[str, Any]
 
 
+class StoryAgentDelegateRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    skill: str | None = Field(default=None, pattern=r'^[a-z0-9-]+$')
+    role: Literal['continuity_guard', 'scene_planner', 'prose_critic']
+    payload: dict[str, Any] = Field(default_factory=dict)
+    model_config_override: ModelConfig | None = Field(default=None, alias='model_config')
+
+
+class StoryAgentDelegateResponse(BaseModel):
+    id: str
+    role: Literal['continuity_guard', 'scene_planner', 'prose_critic']
+    status: Literal['completed', 'failed', 'needs_model']
+    summary: str = ''
+    usage: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class StoryMemoryCandidate(BaseModel):
     type: Literal['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit']
     title: str = Field(min_length=1, max_length=160)

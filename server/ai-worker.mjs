@@ -8,6 +8,10 @@ if (!isTaskQueueEnabled()) {
   console.error('REDIS_URL is required and AI_TASK_QUEUE_ENABLED must not be false')
   process.exit(1)
 }
+if (!String(process.env.DATABASE_URL || '').trim()) {
+  console.error('DATABASE_URL is required for the Redis AI task worker')
+  process.exit(1)
+}
 
 const consumer = `${process.env.HOSTNAME || 'worker'}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`
 const redis = createTaskRedis()
@@ -15,6 +19,7 @@ const subscriber = createTaskRedis()
 let stopping = false
 let activeTaskId = null
 let activeController = null
+let activeExecutionId = null
 let nextClaimAt = 0
 const claimIdleMs = Math.max(180_000, Number(process.env.AI_TASK_CLAIM_IDLE_MS) || 180_000)
 const claimIntervalMs = Math.max(10_000, Number(process.env.AI_TASK_CLAIM_INTERVAL_MS) || 30_000)
@@ -24,8 +29,18 @@ await redis.xgroup('CREATE', TASK_STREAM, TASK_GROUP, '0', 'MKSTREAM').catch((er
   if (!String(error.message).includes('BUSYGROUP')) throw error
 })
 await subscriber.subscribe(TASK_CANCEL_CHANNEL)
-subscriber.on('message', (_channel, taskId) => {
-  if (taskId === activeTaskId) activeController?.abort()
+subscriber.on('message', (_channel, message) => {
+  let cancellation = { taskId: message, executionId: null }
+  try {
+    const parsed = JSON.parse(message)
+    if (parsed && typeof parsed === 'object') cancellation = parsed
+  } catch {
+    // Backward-compatible with task-id-only cancellation messages.
+  }
+  if (cancellation.taskId === activeTaskId
+    && (!cancellation.executionId || cancellation.executionId === activeExecutionId)) {
+    activeController?.abort()
+  }
 })
 
 function taskIdFromEntry(entry) {
@@ -40,9 +55,16 @@ async function processEntry(entry, { resumeRunning = false } = {}) {
   if (taskId) {
     activeTaskId = taskId
     activeController = new AbortController()
-    const outcome = await executeWritingTask(taskId, { controller: activeController, requeueOnAbort: true, resumeRunning })
+    activeExecutionId = crypto.randomUUID()
+    const outcome = await executeWritingTask(taskId, {
+      controller: activeController,
+      executionId: activeExecutionId,
+      requeueOnAbort: true,
+      resumeRunning,
+    })
     activeTaskId = null
     activeController = null
+    activeExecutionId = null
     if (outcome?.status === 'requeued') await redis.xadd(TASK_STREAM, '*', 'taskId', taskId)
   }
   await redis.xack(TASK_STREAM, TASK_GROUP, messageId)

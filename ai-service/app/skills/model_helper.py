@@ -24,6 +24,33 @@ def _is_reasoning_model(model: str) -> bool:
     return normalized.startswith(('o1', 'o3', 'o4', 'gpt-5')) or 'codex' in normalized
 
 
+def _supports_responses_model(model: str) -> bool:
+    """Conservative allowlist for text models that support the Responses API."""
+    normalized = str(model or '').strip().lower()
+    return normalized.startswith((
+        'gpt-4o',
+        'gpt-4.1',
+        'gpt-4.5',
+        'gpt-5',
+        'o1',
+        'o3',
+        'o4',
+    )) or 'codex' in normalized
+
+
+def _supports_openai_responses(base_url: str | None) -> bool:
+    """Only opt in automatically for OpenAI's first-party endpoint.
+
+    The project supports arbitrary OpenAI-compatible gateways. Many of those
+    implement Chat Completions but not Responses, so a custom endpoint keeps the
+    compatibility path unless it is explicitly the standard OpenAI API URL.
+    """
+    if not base_url:
+        return True
+    normalized = str(base_url).strip().rstrip('/').lower()
+    return normalized in {'https://api.openai.com', 'https://api.openai.com/v1'}
+
+
 def resolve_model_kwargs(
     override: Any | None,
     settings: Settings,
@@ -71,9 +98,24 @@ def resolve_model_kwargs(
         'model': model,
         'api_key': api_key,
     }
-    if reasoning_effort:
+    is_reasoning_model = _is_reasoning_model(model)
+    uses_responses_api = (
+        _supports_openai_responses(base_url)
+        and _supports_responses_model(model)
+    )
+    if uses_responses_api:
+        kwargs.update({
+            'use_responses_api': True,
+            'output_version': 'responses/v1',
+        })
+        if is_reasoning_model:
+            reasoning: dict[str, Any] = {'summary': 'auto'}
+            if reasoning_effort:
+                reasoning['effort'] = reasoning_effort
+            kwargs['reasoning'] = reasoning
+    elif reasoning_effort:
         kwargs['reasoning_effort'] = reasoning_effort
-    if not reasoning_effort and not _is_reasoning_model(model):
+    if not reasoning_effort and not is_reasoning_model:
         kwargs['temperature'] = temperature
     if base_url:
         kwargs['base_url'] = base_url

@@ -159,7 +159,7 @@ export function normalizeStructuredAgentQuestion(value) {
       const key = cleanAgentChoiceText(option?.key) || String.fromCharCode(65 + index)
       const label = cleanAgentChoiceText(option?.label || option?.value)
       const replyValue = cleanAgentChoiceText(option?.value || label)
-      return { key, label, description: cleanAgentChoiceText(option?.description), reply: `${key}：${replyValue}` }
+      return { key, label, description: cleanAgentChoiceText(option?.description), reply: replyValue }
     }).filter((option) => option.label)
     if (options.length < 2) return null
     return {
@@ -172,6 +172,44 @@ export function normalizeStructuredAgentQuestion(value) {
   }).filter(Boolean)
   if (!questions.length) return null
   return { intro: '', question: questions[0].question, hint: '', options: questions[0].options, questions }
+}
+
+function compactEventKey(event) {
+  const label = String(event?.label || '')
+  if (/任务.*排队|正在创建任务/.test(label)) return 'queue'
+  if (/读取.*(?:作品|章节|上下文)|构建写作上下文/.test(label)) return 'context'
+  if (event?.type === 'skill' || /\bSkill\b/i.test(label)) return `skill:${event?.meta?.selectedSkill || label.replace(/^(?:执行|完成)\s+|\s+Skill.*$/gi, '')}`
+  if (/收到用户回答|确认补充信息/.test(label)) return 'input'
+  return `${event?.type || 'lifecycle'}:${label}`
+}
+
+export function compactAgentEvents(value) {
+  const events = Array.isArray(value) ? value.filter(Boolean) : []
+  if (events.length < 2) return events
+  const compacted = []
+  const indexByKey = new Map()
+  for (const event of events) {
+    const key = compactEventKey(event)
+    if (key === 'queue') continue
+    const existingIndex = indexByKey.get(key)
+    if (existingIndex == null) {
+      indexByKey.set(key, compacted.length)
+      compacted.push({ ...event, count: 1 })
+      continue
+    }
+    const previous = compacted[existingIndex]
+    compacted[existingIndex] = {
+      ...previous,
+      ...event,
+      id: previous.id,
+      label: key === 'input' ? '已确认补充信息' : event.label,
+      count: previous.count + 1,
+      startedAt: event.startedAt || previous.startedAt,
+      completedAt: event.completedAt || previous.completedAt,
+      meta: { ...(previous.meta || {}), ...(event.meta || {}) },
+    }
+  }
+  return compacted.length ? compacted : events.slice(-1)
 }
 
 export function resolveEditorAgentCommand(rawMessage, project) {
@@ -203,10 +241,17 @@ export function isEditorAgentEdit(message, skill) {
 
 export function agentTurnEvents(turn) {
   return (turn?.items || [])
-    .filter((item) => item.type !== 'userMessage' && item.type !== 'agentMessage' && item.type !== 'plan')
+    .filter((item) => item.type !== 'userMessage'
+      && item.type !== 'agentMessage'
+      && item.type !== 'plan'
+      && item.meta?.modelReasoning !== true)
     .map((item) => ({
       id: item.id,
-      type: item.type === 'dynamicToolCall' ? 'skill' : 'lifecycle',
+      type: item.type === 'dynamicToolCall'
+        ? 'skill'
+        : item.type === 'collabAgentToolCall'
+          ? 'subagent'
+          : 'lifecycle',
       label: item.type === 'requestUserInput' ? '等待你的回答' : item.summary || item.tool || 'Agent 正在处理',
       status: item.status === 'inProgress' ? 'running' : item.status === 'interrupted' ? 'cancelled' : item.status,
       meta: item.meta || {},
@@ -225,6 +270,17 @@ export function agentThreadMessages(thread) {
       text: turn.message,
       turnId: turn.id,
     })
+    for (const steer of task?.steeringHistory || []) {
+      if (!steer?.text || steer.status === 'cancelled') continue
+      messages.push({
+        id: steer.id,
+        role: 'user',
+        text: steer.text,
+        turnId: turn.id,
+        steer: true,
+        steerStatus: steer.status,
+      })
+    }
     if (!task) {
       messages.push({
         id: turn.id,
@@ -240,6 +296,17 @@ export function agentThreadMessages(thread) {
       })
       continue
     }
+    for (const [historyIndex, exchange] of (task.inputHistory || []).entries()) {
+      const answerText = String(exchange?.response?.answerText || '').trim()
+      if (!answerText) continue
+      messages.push({
+        id: `${turn.id}-answer-${exchange.requestId || historyIndex + 1}`,
+        role: 'user',
+        text: answerText,
+        turnId: turn.id,
+        requestId: exchange.requestId || null,
+      })
+    }
     const completed = task.status === 'completed'
     messages.push({
       id: turn.id,
@@ -247,7 +314,11 @@ export function agentThreadMessages(thread) {
       turnId: turn.id,
       taskId: task.id,
       status: completed ? task.result?.status || 'completed' : task.status,
-      text: completed ? agentResponseText(task.result) : task.error || task.statusMessage || '',
+      text: completed
+        ? agentResponseText(task.result)
+        : ['queued', 'running'].includes(task.status)
+          ? task.partialOutput || ''
+          : task.error || task.statusMessage || '',
       response: task.result || null,
       source: turn.source || {},
       editRequested: turn.editRequested === true,
@@ -257,6 +328,9 @@ export function agentThreadMessages(thread) {
       events: agentTurnEvents(turn),
       progress: task.progress || 0,
       reasoningSummary: task.reasoningSummary || '',
+      reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : [],
+      inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : [],
+      usage: task.usage || null,
       durationMs: task.createdAt && task.updatedAt
         ? Math.max(0, new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime())
         : 0,

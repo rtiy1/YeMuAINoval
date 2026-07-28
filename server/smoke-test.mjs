@@ -8,6 +8,9 @@ import path from 'node:path'
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-api-'))
 const dataFile = path.join(tempDir, 'db.json')
 const agentRequests = []
+const delegateRequests = []
+let activeDelegates = 0
+let maxActiveDelegates = 0
 const aiServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/v1/skills') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
@@ -18,7 +21,7 @@ const aiServer = http.createServer(async (req, res) => {
     }))
     return
   }
-  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/agents/story/stream', '/v1/memories/extract', '/v1/responses'].includes(req.url)) {
+  if (req.method !== 'POST' || !['/v1/assistants/writing/turn', '/v1/assistants/writing/proposal', '/v1/agents/story', '/v1/agents/story/delegate', '/v1/agents/story/delegate/stream', '/v1/agents/story/stream', '/v1/memories/extract', '/v1/responses'].includes(req.url)) {
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'not found' }))
     return
   }
@@ -35,15 +38,128 @@ const aiServer = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', message: '已整理候选记忆', candidates: [{ type: 'chapter_summary', title: '本章摘要', content: '测试摘要', importance: 3, reason: '正文明确' }] }))
     return
   }
+  if (req.url === '/v1/agents/story/delegate' || req.url === '/v1/agents/story/delegate/stream') {
+    delegateRequests.push(body)
+    activeDelegates += 1
+    maxActiveDelegates = Math.max(maxActiveDelegates, activeDelegates)
+    await new Promise((resolve) => setTimeout(resolve, 90))
+    activeDelegates -= 1
+    if (String(body.message || '').includes('子代理部分失败') && body.role === 'scene_planner') {
+      res.writeHead(503, { 'content-type': 'application/json' }).end(JSON.stringify({ detail: 'planner unavailable' }))
+      return
+    }
+    const labels = {
+      continuity_guard: '连续性约束：保留雨夜时间线。',
+      scene_planner: '场景建议：提高冲突并保留章末钩子。',
+      prose_critic: '文本建议：统一视角并减少重复表达。',
+    }
+    const delegateResponse = {
+      id: `delegate-${body.role}`,
+      role: body.role,
+      status: 'completed',
+      summary: labels[body.role] || '审阅完成。',
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    }
+    if (req.url.endsWith('/stream')) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.end(`event: response/completed\ndata: ${JSON.stringify({ response: delegateResponse })}\n\n`)
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(delegateResponse))
+    return
+  }
   if (req.url === '/v1/agents/story' || req.url === '/v1/agents/story/stream') {
     agentRequests.push(body)
     if (String(body.message || '').includes('取消任务')) await new Promise((resolve) => setTimeout(resolve, 300))
+    const steerTurn = String(body.message || '').includes('追加指令测试')
+    const steeringMessages = Array.isArray(body.payload?.steering_messages) ? body.payload.steering_messages : []
+    if (steerTurn && !steeringMessages.length) await new Promise((resolve) => setTimeout(resolve, 220))
     if (req.url.endsWith('/stream')) {
-      const response = { status: 'completed', route: 'story', selected_skill: body.skill || 'story', result: { output: '测试 AI 输出' } }
+      const inputHistory = Array.isArray(body.payload?.request_user_input_history) ? body.payload.request_user_input_history : []
+      const choiceTurn = String(body.message || '').includes('确认副本方向')
+      const response = choiceTurn && !inputHistory.length
+        ? {
+          run_id: 'smoke-choice-run-1',
+          status: 'needs_input',
+          route: 'story',
+          selected_skill: body.skill || 'story',
+          result: {
+            output: '请先确认副本方向。',
+            question: {
+              protocol: 'request_user_input',
+              requestId: 'call-smoke-choice',
+              questions: [{
+                id: 'genre',
+                header: '题材',
+                question: '副本偏哪种体验？',
+                isOther: true,
+                options: [
+                  { label: '规则怪谈', value: '规则怪谈', description: '强调规则推理。' },
+                  { label: '生存闯关', value: '生存闯关', description: '强调资源压力。' },
+                ],
+              }],
+            },
+            response_continuation: {
+              protocol: 'message_tools',
+              call_id: 'call-smoke-choice',
+              tool_name: 'request_user_input',
+              arguments: {
+                questions: [{
+                  id: 'genre',
+                  header: '题材',
+                  question: '副本偏哪种体验？',
+                  options: [
+                    { label: '规则怪谈', description: '强调规则推理。' },
+                    { label: '生存闯关', description: '强调资源压力。' },
+                  ],
+                }],
+              },
+              assistant_content: '',
+              history: [],
+              base_choice_followup: false,
+            },
+            continuation_mode: 'transcript',
+            usage: { input_tokens: 50, output_tokens: 20, reasoning_output_tokens: 5, total_tokens: 70 },
+          },
+        }
+        : {
+          run_id: choiceTurn
+            ? 'smoke-choice-run-2'
+            : steerTurn
+              ? `smoke-steer-run-${steeringMessages.length ? 2 : 1}`
+              : `smoke-stream-run-${agentRequests.length}`,
+          status: 'completed',
+          route: 'story',
+          selected_skill: body.skill || 'story',
+          result: {
+            output: choiceTurn
+              ? '已按规则怪谈完成副本设计。'
+              : steerTurn
+                ? steeringMessages.length ? '已改为第三人称。' : '这是应被追加指令取代的旧输出。'
+                : '测试 AI 输出',
+            continuation_mode: choiceTurn && inputHistory.length ? 'message_tools' : 'transcript',
+            usage: choiceTurn
+              ? { input_tokens: 70, output_tokens: 30, reasoning_output_tokens: 6, total_tokens: 100 }
+              : { input_tokens: 120, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 8, total_tokens: 150 },
+          },
+        }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write(`event: item/reasoning/summaryDelta\ndata: ${JSON.stringify({ delta: '正在核对章节上下文。' })}\n\n`)
-      res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: '测试 AI ' })}\n\n`)
-      res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: '输出' })}\n\n`)
+      const reasoning = choiceTurn
+        ? inputHistory.length ? '根据补充信息完成设计。' : '先确认会影响设计的副本方向。'
+        : steerTurn
+          ? steeringMessages.length ? '根据追加指令重新规划。' : '正在生成第一版。'
+          : '正在核对章节上下文。'
+      res.write(`event: item/reasoning/summaryTextDelta\ndata: ${JSON.stringify({ delta: reasoning })}\n\n`)
+      if (!choiceTurn || inputHistory.length) {
+        const output = choiceTurn
+          ? '已按规则怪谈完成副本设计。'
+          : steerTurn
+            ? steeringMessages.length ? '已改为第三人称。' : '这是应被追加指令取代的旧输出。'
+            : '测试 AI 输出'
+        res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: output.slice(0, Math.ceil(output.length / 2)) })}\n\n`)
+        if (steerTurn && !steeringMessages.length) await new Promise((resolve) => setTimeout(resolve, 620))
+        res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: output.slice(Math.ceil(output.length / 2)) })}\n\n`)
+      }
       res.end(`event: response/completed\ndata: ${JSON.stringify({ response })}\n\n`)
       return
     }
@@ -96,6 +212,10 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
     STORY_DATA_FILE: dataFile, AI_SERVICE_URL: aiServiceUrl, AI_TASK_QUEUE_ENABLED: 'false',
     ALLOW_SHARED_MODEL_KEY: 'false', REGISTRATION_MODE: 'open', AI_DAILY_REQUEST_LIMIT: '0',
     AI_CONCURRENT_REQUEST_LIMIT: '3', AI_REQUESTS_PER_MINUTE: '30',
+    ACCESS_TOKEN_TTL_MINUTES: '120', REFRESH_SESSION_DAYS: '120',
+    PASSWORD_RESET_TOKEN_TTL_MINUTES: '30', PASSWORD_RESET_EXPOSE_TOKEN: 'true',
+    EMAIL_VERIFICATION_CODE_TTL_MINUTES: '10', EMAIL_VERIFICATION_EXPOSE_CODE: 'true',
+    EMAIL_PROVIDER: 'test', APP_PUBLIC_URL: 'https://stories.example',
     SKILL_REVIEW_MODE: 'required', SKILL_REVIEW_API_URL: `${aiServiceUrl}/v1/responses`,
     SKILL_REVIEW_API_KEY: 'smoke-review-key', SKILL_REVIEW_MODEL: 'smoke-review-model',
   },
@@ -146,6 +266,17 @@ async function streamTurn(threadId, turnId, { auth = true } = {}) {
   return { response, body, events }
 }
 
+async function waitForTaskStatus(taskId, statuses, attempts = 100) {
+  const expected = new Set(Array.isArray(statuses) ? statuses : [statuses])
+  let latest = null
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    latest = await call('GET', `/api/ai/tasks/${taskId}`)
+    if (expected.has(latest.payload?.task?.status)) return latest.payload.task
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`任务 ${taskId} 未进入预期状态：${[...expected].join(', ')}；当前为 ${latest?.payload?.task?.status || 'unknown'}`)
+}
+
 try {
   baseUrl = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('API 启动超时')), 5000)
@@ -165,6 +296,8 @@ try {
   assert.equal(health.payload.users, 0)
   assert.equal(health.payload.storage.backend, 'json')
   assert.deepEqual(health.payload.skillReview, { mode: 'required', configured: true, provider: 'model' })
+  assert.deepEqual(health.payload.email, { provider: 'test', configured: true })
+  assert.deepEqual(health.payload.authSession, { accessMinutes: 120, refreshDays: 120 })
 
   const sameOrigin = await call('POST', '/api/auth/refresh', null, { auth: false, origin: baseUrl })
   assert.equal(sameOrigin.response.status, 401)
@@ -182,13 +315,22 @@ try {
   const invalid = await call('POST', '/api/auth/register', { name: '测试', email: 'bad-email', password: 'password123' }, { auth: false })
   assert.equal(invalid.response.status, 400)
 
-  const registered = await call('POST', '/api/auth/register', { name: '第一作者', email: 'author@example.com', password: 'password123' }, { auth: false })
+  const registrationCode = await call('POST', '/api/auth/register/code', { email: 'author@example.com' }, { auth: false })
+  assert.equal(registrationCode.response.status, 202)
+  assert.match(registrationCode.payload.verificationCode, /^\d{6}$/)
+  const wrongCode = `${registrationCode.payload.verificationCode.slice(0, 5)}${registrationCode.payload.verificationCode.endsWith('0') ? '1' : '0'}`
+  const unverified = await call('POST', '/api/auth/register', { name: '第一作者', email: 'author@example.com', password: 'password123', verificationCode: wrongCode }, { auth: false })
+  assert.equal(unverified.response.status, 400)
+  const registered = await call('POST', '/api/auth/register', { name: '第一作者', email: 'author@example.com', password: 'password123', verificationCode: registrationCode.payload.verificationCode }, { auth: false })
   assert.equal(registered.response.status, 201)
   assert.equal(registered.payload.user.email, 'author@example.com')
   assert.equal(registered.payload.user.passwordHash, undefined)
   accessToken = registered.payload.accessToken
   refreshHeader = cookieFrom(registered.response)
   assert.ok(refreshHeader?.startsWith('story_refresh='))
+  const accessClaims = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf8'))
+  assert.equal(accessClaims.exp - accessClaims.iat, 120 * 60)
+  assert.match(registered.response.headers.get('set-cookie') || '', /Max-Age=10368000/)
 
   const skillSource = '---\nname: smoke-test-skill\ndescription: API smoke test\n---\n# Smoke test Skill\n'
   const uploadedSkill = await call('POST', '/api/skill-market', {
@@ -479,8 +621,17 @@ try {
   assert.equal(streamed.response.status, 200)
   assert.match(streamed.response.headers.get('content-type'), /text\/event-stream/)
   assert.ok(streamed.events.some((event) => event.event === 'turn/started'))
+  const startedTurn = streamed.events.find((event) => event.event === 'turn/started').payload.turn
+  assert.equal(startedTurn.task.partialOutput, '')
+  assert.equal(startedTurn.task.reasoningSummary, '')
   assert.ok(streamed.events.some((event) => event.event === 'item/agentMessage/delta'))
-  assert.ok(streamed.events.some((event) => event.event === 'item/reasoning/summaryDelta'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/reasoning/summaryPartAdded'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/reasoning/summaryTextDelta'))
+  assert.ok(streamed.events.some((event) => event.event === 'item/completed' && event.payload?.item?.meta?.modelReasoning === true))
+  const reasoningStartedIndex = streamed.events.findIndex((event) => event.event === 'item/started' && event.payload?.item?.meta?.modelReasoning === true)
+  const reasoningDeltaIndex = streamed.events.findIndex((event) => event.event === 'item/reasoning/summaryTextDelta')
+  const reasoningCompletedIndex = streamed.events.findIndex((event) => event.event === 'item/completed' && event.payload?.item?.meta?.modelReasoning === true)
+  assert.ok(reasoningStartedIndex >= 0 && reasoningStartedIndex < reasoningDeltaIndex && reasoningDeltaIndex < reasoningCompletedIndex)
   assert.ok(streamed.events.some((event) => event.event === 'item/started' || event.event === 'item/completed'))
   assert.equal(streamed.events.at(-1).event, 'turn/completed')
   assert.equal(streamed.events.at(-1).payload.turn.status, 'completed')
@@ -488,6 +639,8 @@ try {
   assert.equal(completedTask.payload.task.status, 'completed')
   assert.equal(completedTask.payload.task.result.result.output, '测试 AI 输出')
   assert.equal(completedTask.payload.task.reasoningSummary, '正在核对章节上下文。')
+  assert.equal(completedTask.payload.task.usage.total_tokens, 150)
+  assert.equal(completedTask.payload.task.usageHistory.length, 1)
   assert.deepEqual(completedTask.payload.task.events.map((event) => event.type), ['lifecycle', 'context', 'skill', 'result'])
   assert.equal(completedTask.payload.task.events.some((event) => event.status === 'running'), false)
   const completedRequest = agentRequests.find((request) => request.message === '继续写作')
@@ -500,7 +653,7 @@ try {
   assert.equal(persistedThread.payload.thread.turns[0].source.sourceText, '雨落下来。')
   assert.equal(persistedThread.payload.thread.turns[0].task.status, 'completed')
   assert.deepEqual(persistedThread.payload.thread.turns[0].plan, [])
-  assert.deepEqual(persistedThread.payload.thread.turns[0].items.map((item) => item.type), ['userMessage', 'reasoning', 'reasoning', 'dynamicToolCall', 'agentMessage'])
+  assert.deepEqual(persistedThread.payload.thread.turns[0].items.map((item) => item.type), ['userMessage', 'lifecycle', 'lifecycle', 'dynamicToolCall', 'reasoning', 'agentMessage'])
   assert.equal((await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/resume`)).payload.thread.id, agentThread.payload.thread.id)
   assert.equal((await call('GET', `/api/ai/threads?projectId=${projectId}&chapterId=${firstChapterId}`)).payload.thread.id, agentThread.payload.thread.id)
 
@@ -516,16 +669,224 @@ try {
     { role: 'user', text: '继续写作' },
     { role: 'assistant', text: '测试 AI 输出' },
   ])
+
+  const steerTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '追加指令测试',
+    payload: { content: '雨落下来。' },
+  })
+  assert.equal(steerTask.response.status, 202)
+  const steerStreamPromise = streamTurn(agentThread.payload.thread.id, steerTask.payload.turn.id)
+  await waitForTaskStatus(steerTask.payload.task.id, 'running')
+  const blockedParallelTurn = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '不应并发创建的轮次',
+    payload: { content: '雨落下来。' },
+  })
+  assert.equal(blockedParallelTurn.response.status, 409)
+  const steerKey = 'smoke-steer-idempotency'
+  const steerAccepted = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${steerTask.payload.turn.id}/steer`,
+    { message: '保留剧情，改成第三人称。', expectedTurnId: steerTask.payload.turn.id, idempotencyKey: steerKey },
+  )
+  assert.equal(steerAccepted.response.status, 202)
+  assert.equal(steerAccepted.payload.input.status, 'pending')
+  assert.equal(steerAccepted.payload.turn.id, steerTask.payload.turn.id)
+  assert.equal(steerAccepted.payload.task.id, steerTask.payload.task.id)
+  const reusedSteer = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${steerTask.payload.turn.id}/steer`,
+    { message: '保留剧情，改成第三人称。', expectedTurnId: steerTask.payload.turn.id, idempotencyKey: steerKey },
+  )
+  assert.equal(reusedSteer.response.status, 200)
+  assert.equal(reusedSteer.payload.reused, true)
+  const conflictingSteer = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${steerTask.payload.turn.id}/steer`,
+    { message: '换成第一人称。', expectedTurnId: steerTask.payload.turn.id, idempotencyKey: steerKey },
+  )
+  assert.equal(conflictingSteer.response.status, 409)
+  const steeredStream = await steerStreamPromise
+  assert.equal(steeredStream.events.at(-1).event, 'turn/completed')
+  assert.ok(steeredStream.events.some((event) => event.event === 'turn/steer/accepted'))
+  assert.ok(steeredStream.events.some((event) => event.event === 'turn/steered'))
+  const streamedAgentIds = steeredStream.events
+    .filter((event) => event.event === 'item/started' && ['agentMessage', 'plan'].includes(event.payload?.item?.type))
+    .map((event) => event.payload.item.id)
+  assert.ok(streamedAgentIds.some((id) => id.endsWith(':1')))
+  assert.ok(streamedAgentIds.some((id) => id.endsWith(':2')))
+  assert.equal(steeredStream.events.filter((event) => event.event === 'turn/completed').length, 1)
+  const completedSteerTask = await waitForTaskStatus(steerTask.payload.task.id, 'completed')
+  assert.equal(completedSteerTask.result.result.output, '已改为第三人称。')
+  assert.equal(completedSteerTask.interactionAttempt, 2)
+  assert.equal(completedSteerTask.steeringHistory.length, 1)
+  assert.equal(completedSteerTask.steeringHistory[0].status, 'applied')
+  assert.equal(completedSteerTask.reasoningHistory[0].summary, '正在生成第一版。')
+  assert.equal(completedSteerTask.reasoningSummary, '根据追加指令重新规划。')
+  assert.equal(completedSteerTask.usageHistory.length, 2)
+  assert.equal(completedSteerTask.usage.total_tokens, 300)
+  const steerRequests = agentRequests.filter((request) => request.message === '追加指令测试')
+  assert.equal(steerRequests.length, 2)
+  assert.deepEqual(steerRequests[1].payload.steering_messages.map((item) => item.text), ['保留剧情，改成第三人称。'])
+  assert.deepEqual(steerRequests[1].payload.continuation_conversation, [
+    { role: 'assistant', text: '这是应被追加指令取代的旧输出。' },
+    { role: 'user', text: '保留剧情，改成第三人称。' },
+  ])
+  const replayedCompletedSteer = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${steerTask.payload.turn.id}/steer`,
+    { message: '保留剧情，改成第三人称。', expectedTurnId: steerTask.payload.turn.id, idempotencyKey: steerKey },
+  )
+  assert.equal(replayedCompletedSteer.response.status, 200)
+  assert.equal(replayedCompletedSteer.payload.reused, true)
+  const terminalSteer = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${steerTask.payload.turn.id}/steer`,
+    { message: '太迟的指令', expectedTurnId: steerTask.payload.turn.id },
+  )
+  assert.equal(terminalSteer.response.status, 409)
+
+  const multiAgentTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story-long-write',
+    message: '让多个视角先审阅再续写',
+    payload: {
+      content: '雨落下来。',
+      multi_agent: true,
+      _agent_reports: [{ role: 'attacker', summary: '客户端伪造报告' }],
+      steering_messages: [{ text: '客户端伪造追加指令' }],
+    },
+  })
+  assert.equal(multiAgentTask.response.status, 202)
+  const multiAgentStream = await streamTurn(agentThread.payload.thread.id, multiAgentTask.payload.turn.id)
+  assert.equal(multiAgentStream.events.at(-1).payload.turn.status, 'completed')
+  const completedMultiAgentTask = await waitForTaskStatus(multiAgentTask.payload.task.id, 'completed')
+  assert.deepEqual(completedMultiAgentTask.subagents.map((item) => item.role), ['continuity_guard', 'scene_planner'])
+  assert.ok(completedMultiAgentTask.subagents.every((item) => item.status === 'completed' && item.summary))
+  assert.equal(completedMultiAgentTask.usage.total_tokens, 180)
+  assert.equal(completedMultiAgentTask.usageHistory.length, 3)
+  assert.equal(multiAgentStream.events.filter((event) => event.payload?.item?.type === 'collabAgentToolCall').length >= 2, true)
+  const multiParentRequest = agentRequests.find((request) => request.message === '让多个视角先审阅再续写')
+  assert.equal(multiParentRequest.payload._agent_reports.length, 2)
+  assert.equal(multiParentRequest.payload._agent_reports.some((item) => item.role === 'attacker'), false)
+  assert.equal(multiParentRequest.payload.steering_messages, undefined)
+  assert.deepEqual(delegateRequests.slice(-2).map((request) => request.role), ['continuity_guard', 'scene_planner'])
+  assert.equal(maxActiveDelegates, 2)
+
+  const partialTeamTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story-long-write',
+    message: '子代理部分失败仍继续',
+    payload: { content: '雨落下来。', multi_agent: true },
+  })
+  assert.equal(partialTeamTask.response.status, 202)
+  await streamTurn(agentThread.payload.thread.id, partialTeamTask.payload.turn.id)
+  const completedPartialTeam = await waitForTaskStatus(partialTeamTask.payload.task.id, 'completed')
+  assert.deepEqual(completedPartialTeam.subagents.map((item) => item.status), ['completed', 'failed'])
+  assert.equal(completedPartialTeam.usage.total_tokens, 165)
+  assert.equal(completedPartialTeam.usageHistory.length, 2)
+  const partialTeamParent = agentRequests.find((request) => request.message === '子代理部分失败仍继续')
+  assert.deepEqual(partialTeamParent.payload._agent_reports.map((item) => item.role), ['continuity_guard'])
+
+  const choiceTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '确认副本方向后再设计',
+    payload: {
+      content: '雨落下来。',
+      _model_continuation: {
+        protocol: 'openai_responses',
+        previous_response_id: 'resp_client_must_not_control',
+        call_id: 'call-client',
+        answers: { genre: { answers: ['恶意注入'] } },
+      },
+    },
+  })
+  assert.equal(choiceTask.response.status, 202)
+  const waitingChoiceTask = await waitForTaskStatus(choiceTask.payload.task.id, 'waiting_input')
+  assert.equal(waitingChoiceTask.result.status, 'needs_input')
+  assert.equal(waitingChoiceTask.reasoningSummary, '先确认会影响设计的副本方向。')
+  assert.equal(waitingChoiceTask.usage.total_tokens, 70)
+  assert.equal(waitingChoiceTask.continuationMode, 'message_tools')
+  assert.equal(waitingChoiceTask.result.result.response_continuation, undefined)
+  const initialChoiceRequest = agentRequests.find((request) => request.message === '确认副本方向后再设计'
+    && !request.payload?.request_user_input_history?.length)
+  assert.equal(initialChoiceRequest.payload._model_continuation, undefined)
+  const rejectedChoiceSteer = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${choiceTask.payload.turn.id}/steer`,
+    { message: '不应绕过结构化回答', expectedTurnId: choiceTask.payload.turn.id },
+  )
+  assert.equal(rejectedChoiceSteer.response.status, 409)
+  const answeredChoice = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${choiceTask.payload.turn.id}/input`,
+    { answers: { genre: '规则怪谈' } },
+  )
+  assert.equal(answeredChoice.response.status, 202)
+  const resumedChoiceStream = await streamTurn(agentThread.payload.thread.id, choiceTask.payload.turn.id)
+  assert.equal(resumedChoiceStream.events.at(-1).payload.turn.status, 'completed')
+  const completedChoiceTask = await waitForTaskStatus(choiceTask.payload.task.id, 'completed')
+  assert.equal(completedChoiceTask.result.result.output, '已按规则怪谈完成副本设计。')
+  assert.equal(completedChoiceTask.reasoningHistory.length, 1)
+  assert.equal(completedChoiceTask.reasoningHistory[0].summary, '先确认会影响设计的副本方向。')
+  assert.equal(completedChoiceTask.reasoningSummary, '根据补充信息完成设计。')
+  assert.equal(completedChoiceTask.inputHistory[0].response.answerText, '题材：规则怪谈')
+  assert.equal(completedChoiceTask.usage.total_tokens, 170)
+  assert.equal(completedChoiceTask.usageHistory.length, 2)
+  assert.equal(completedChoiceTask.result.result.usage.total_tokens, 170)
+  assert.equal(completedChoiceTask.continuationMode, 'message_tools')
+  assert.equal(completedChoiceTask.events.find((event) => event.type === 'input')?.meta?.continuationMode, 'message_tools')
+  assert.equal([...completedChoiceTask.events].reverse().find((event) => event.type === 'result')?.meta?.continuationMode, 'message_tools')
+  const resumedChoiceRequest = agentRequests.find((request) => request.message === '确认副本方向后再设计'
+    && request.payload?.request_user_input_history?.length === 1)
+  assert.deepEqual(resumedChoiceRequest.payload.conversation, initialChoiceRequest.payload.conversation)
+  assert.deepEqual(resumedChoiceRequest.payload.continuation_conversation, [
+    { role: 'assistant', text: '题材：副本偏哪种体验？' },
+    { role: 'user', text: '题材：规则怪谈' },
+  ])
+  assert.deepEqual(resumedChoiceRequest.payload._model_continuation, {
+    protocol: 'message_tools',
+    call_id: 'call-smoke-choice',
+    tool_name: 'request_user_input',
+    arguments: {
+      questions: [{
+        id: 'genre',
+        header: '题材',
+        question: '副本偏哪种体验？',
+        options: [
+          { label: '规则怪谈', description: '强调规则推理。' },
+          { label: '生存闯关', description: '强调资源压力。' },
+        ],
+      }],
+    },
+    assistant_content: '',
+    history: [],
+    base_choice_followup: false,
+    answers: { genre: { answers: ['规则怪谈'] } },
+  })
+  const choiceThread = await call('GET', `/api/ai/threads/${agentThread.payload.thread.id}`)
+  const choiceTurn = choiceThread.payload.thread.turns.find((turn) => turn.id === choiceTask.payload.turn.id)
+  assert.equal(choiceTurn.items.filter((item) => item.type === 'reasoning').length, 2)
+  assert.equal(choiceTurn.items.find((item) => item.type === 'requestUserInput').status, 'completed')
+
   const interruptedTurn = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
     skill: 'story',
     message: '取消任务',
     payload: { content: '雨落下来。' },
   })
+  await waitForTaskStatus(interruptedTurn.payload.task.id, 'running')
+  const steerBeforeInterrupt = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${interruptedTurn.payload.turn.id}/steer`,
+    { message: '这条追加指令应随取消失效', expectedTurnId: interruptedTurn.payload.turn.id, idempotencyKey: 'steer-before-interrupt' },
+  )
+  assert.equal(steerBeforeInterrupt.response.status, 202)
   const interrupted = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns/${interruptedTurn.payload.turn.id}/interrupt`)
   assert.equal(interrupted.response.status, 200)
   assert.equal(interrupted.payload.turn.status, 'interrupted', JSON.stringify(interrupted.payload.turn))
   assert.equal(interrupted.payload.turn.items.at(-1).type, 'agentMessage')
   assert.equal((await streamTurn(agentThread.payload.thread.id, interruptedTurn.payload.turn.id)).events.at(-1).event, 'turn/completed')
+  const cancelledSteerTask = await waitForTaskStatus(interruptedTurn.payload.task.id, 'cancelled')
+  assert.equal(cancelledSteerTask.steeringHistory[0].status, 'cancelled')
   const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   const duplicateTaskResult = await streamTask(duplicateTask.payload.task.id)
   assert.equal(duplicateTaskResult.tasks.at(-1).status, 'completed', JSON.stringify(duplicateTaskResult.tasks.at(-1)))
@@ -559,7 +920,9 @@ try {
 
   assert.equal((await call('DELETE', `/api/projects/${projectId}`)).response.status, 204)
 
-  const second = await call('POST', '/api/auth/register', { name: '第二作者', email: 'second@example.com', password: 'password456' }, { auth: false })
+  const secondCode = await call('POST', '/api/auth/register/code', { email: 'second@example.com' }, { auth: false })
+  assert.equal(secondCode.response.status, 202)
+  const second = await call('POST', '/api/auth/register', { name: '第二作者', email: 'second@example.com', password: 'password456', verificationCode: secondCode.payload.verificationCode }, { auth: false })
   assert.equal(second.response.status, 201)
   accessToken = second.payload.accessToken
   const secondProjects = await call('GET', '/api/projects')
@@ -572,11 +935,35 @@ try {
   refreshHeader = cookieFrom(loggedIn.response)
   assert.equal((await call('GET', '/api/projects')).payload.projects.length, 1)
 
+  const oldAccessToken = accessToken
+  const oldRefreshHeader = refreshHeader
+  const unknownRecovery = await call('POST', '/api/auth/password/forgot', { email: 'missing@example.com' }, { auth: false })
+  assert.equal(unknownRecovery.response.status, 202)
+  assert.equal(unknownRecovery.payload.resetToken, undefined)
+  const recovery = await call('POST', '/api/auth/password/forgot', { email: 'author@example.com' }, { auth: false })
+  assert.equal(recovery.response.status, 202)
+  assert.equal(recovery.payload.message, unknownRecovery.payload.message)
+  assert.ok(recovery.payload.resetToken)
+  const invalidReset = await call('POST', '/api/auth/password/reset', { token: 'x'.repeat(43), password: 'password789' }, { auth: false })
+  assert.equal(invalidReset.response.status, 400)
+  const reset = await call('POST', '/api/auth/password/reset', { token: recovery.payload.resetToken, password: 'password789' }, { auth: false })
+  assert.equal(reset.response.status, 200)
+  assert.equal(reset.payload.message, '密码已更新，请使用新密码登录。')
+  accessToken = oldAccessToken
+  assert.equal((await call('GET', '/api/projects')).response.status, 401)
+  assert.equal((await call('POST', '/api/auth/refresh', null, { auth: false, cookie: oldRefreshHeader })).response.status, 401)
+  assert.equal((await call('POST', '/api/auth/password/reset', { token: recovery.payload.resetToken, password: 'password999' }, { auth: false })).response.status, 400)
+  assert.equal((await call('POST', '/api/auth/login', { email: 'author@example.com', password: 'password123' }, { auth: false })).response.status, 401)
+  const relogged = await call('POST', '/api/auth/login', { email: 'author@example.com', password: 'password789' }, { auth: false })
+  assert.equal(relogged.response.status, 200)
+  accessToken = relogged.payload.accessToken
+  refreshHeader = cookieFrom(relogged.response)
+
   const loggedOut = await call('POST', '/api/auth/logout', null, { auth: false, cookie: refreshHeader })
   assert.equal(loggedOut.response.status, 204)
   assert.equal((await call('POST', '/api/auth/refresh', null, { auth: false, cookie: refreshHeader })).response.status, 401)
 
-  console.log('API smoke test passed: auth, refresh rotation, isolation, validation, CRUD, logout')
+  console.log('API smoke test passed: verified registration, configurable sessions, password reset, isolation, validation, CRUD, logout')
 } finally {
   if (child.exitCode === null) {
     child.kill('SIGTERM')

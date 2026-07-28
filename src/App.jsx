@@ -23,6 +23,8 @@ import {
   Code2,
   Command,
   Download,
+  Eye,
+  EyeOff,
   FileText,
   FolderOpen,
   Flame,
@@ -85,6 +87,7 @@ import {
   agentResponseText,
   agentTurnEvents,
   agentThreadMessages,
+  compactAgentEvents,
   formatAgentDuration,
   isEditorAgentEdit,
   normalizeStructuredAgentQuestion,
@@ -189,7 +192,7 @@ function compactTokenCount(value) {
 
 function agentRunTokenUsage(run) {
   const result = run?.response?.result || {}
-  const usage = result.usage || run?.response?.usage || {}
+  const usage = run?.usage || result.usage || run?.response?.usage || {}
   const output = String(result.edit_proposal?.revised_text || result.output || result.summary || result.message || run?.text || '')
   const source = String(run?.source?.selectedText || run?.source?.sourceText || '')
   const hasUsage = Number(usage.input_tokens) || Number(usage.output_tokens) || Number(usage.cached_input_tokens)
@@ -207,6 +210,7 @@ function agentRunTokenUsage(run) {
 function AgentEventIcon({ event }) {
   if (event.status === 'running') return <LoaderCircle size={13} className="spin" />
   if (['failed', 'cancelled', 'interrupted'].includes(event.status)) return <X size={13} />
+  if (event.type === 'subagent') return <UsersRound size={13} />
   if (event.type === 'context') return <SearchCode size={13} />
   if (event.type === 'skill') return <Code2 size={13} />
   if (event.type === 'result') return <FileText size={13} />
@@ -313,7 +317,14 @@ function parseSmartProposal(response) {
 function App() {
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
-  const [authMode, setAuthMode] = useState('login')
+  const [passwordResetToken, setPasswordResetToken] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('reset_token') || ''
+    } catch {
+      return ''
+    }
+  })
+  const [authMode, setAuthMode] = useState(() => passwordResetToken ? 'reset' : 'login')
   const [authError, setAuthError] = useState('')
   const [activeSection, setActiveSection] = useState('editor')
   const [projects, setProjects] = useState([])
@@ -370,13 +381,18 @@ function App() {
   const profileMenuRef = useRef(null)
 
   useEffect(() => {
+    if (passwordResetToken) {
+      setUser(null)
+      setAuthLoading(false)
+      return undefined
+    }
     let mounted = true
     api.restoreSession()
       .then((session) => { if (mounted) setUser(session?.user || null) })
       .catch(() => { if (mounted) setUser(null) })
       .finally(() => { if (mounted) setAuthLoading(false) })
     return () => { mounted = false }
-  }, [])
+  }, [passwordResetToken])
 
   useEffect(() => {
     const handleExpired = () => {
@@ -1116,11 +1132,34 @@ function App() {
   async function submitAuth(credentials) {
     setAuthError('')
     try {
+      if (authMode === 'forgot') return await api.requestPasswordReset(credentials.email)
+      if (authMode === 'reset') {
+        const response = await api.resetPassword(passwordResetToken, credentials.password)
+        setPasswordResetToken('')
+        const url = new URL(window.location.href)
+        url.searchParams.delete('reset_token')
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+        setAuthMode('login')
+        return response
+      }
       const response = authMode === 'register' ? await api.register(credentials) : await api.login(credentials)
       setUser(response.user)
       setActiveSection('editor')
+      return response
     } catch (error) {
       setAuthError(error.message)
+      return null
+    }
+  }
+
+  function changeAuthMode(mode) {
+    setAuthMode(mode)
+    setAuthError('')
+    if (mode !== 'reset' && passwordResetToken) {
+      setPasswordResetToken('')
+      const url = new URL(window.location.href)
+      url.searchParams.delete('reset_token')
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
     }
   }
 
@@ -1154,7 +1193,7 @@ function App() {
   }
 
   if (!user) {
-    return <AuthScreen mode={authMode} error={authError} onModeChange={(mode) => { setAuthMode(mode); setAuthError('') }} onSubmit={submitAuth} />
+    return <AuthScreen mode={authMode} error={authError} onModeChange={changeAuthMode} onSubmit={submitAuth} />
   }
 
   return (
@@ -1419,9 +1458,25 @@ function ProfileCenter({ user, stats, projects, onNavigate, onOpenSettings, onOp
 function AuthScreen({ mode, error, onModeChange, onSubmit }) {
   const [submitting, setSubmitting] = useState(false)
   const [localError, setLocalError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [sendingVerificationCode, setSendingVerificationCode] = useState(false)
+  const [verificationCooldown, setVerificationCooldown] = useState(0)
   const [quoteIndex, setQuoteIndex] = useState(0)
+  const emailInputRef = useRef(null)
   const isRegister = mode === 'register'
+  const isLogin = mode === 'login'
+  const isForgot = mode === 'forgot'
+  const isReset = mode === 'reset'
   const quote = authQuotes[quoteIndex]
+  const heading = isRegister
+    ? { overline: '创建创作空间', title: '写下第一行。', description: '建立账号后，作品会隔离保存在你的空间中。' }
+    : isForgot
+      ? { overline: '找回创作空间', title: '重拾你的故事。', description: '输入注册邮箱，我们会发送一封密码重置邮件。' }
+      : isReset
+        ? { overline: '设置新密码', title: '重新打开故事。', description: '新密码设置成功后，其他设备上的旧登录会话会全部失效。' }
+        : { overline: '欢迎回来', title: '继续你的故事。', description: '登录后回到上次停笔的位置。' }
 
   useEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
@@ -1430,23 +1485,73 @@ function AuthScreen({ mode, error, onModeChange, onSubmit }) {
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    if (verificationCooldown <= 0) return undefined
+    const timer = window.setTimeout(() => setVerificationCooldown((seconds) => Math.max(0, seconds - 1)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [verificationCooldown])
+
+  function changeMode(nextMode) {
+    setLocalError('')
+    setNotice('')
+    setShowPassword(false)
+    setShowConfirmPassword(false)
+    setVerificationCooldown(0)
+    onModeChange(nextMode)
+  }
+
+  async function requestVerificationCode() {
+    const emailInput = emailInputRef.current
+    const email = emailInput?.value.trim() || ''
+    setLocalError('')
+    setNotice('')
+    if (!email || !emailInput?.checkValidity()) {
+      setLocalError('请先输入正确的邮箱地址')
+      emailInput?.focus()
+      return
+    }
+    setSendingVerificationCode(true)
+    try {
+      const response = await api.requestRegistrationCode(email)
+      setNotice(response.message)
+      setVerificationCooldown(Number(response.retryAfterSeconds) || 60)
+    } catch (requestError) {
+      setLocalError(requestError.message)
+    } finally {
+      setSendingVerificationCode(false)
+    }
+  }
+
   async function submit(event) {
     event.preventDefault()
     setLocalError('')
+    setNotice('')
     const form = new FormData(event.currentTarget)
     const password = String(form.get('password') || '')
-    if (isRegister && password !== String(form.get('confirmPassword') || '')) {
+    if ((isRegister || isReset) && password !== String(form.get('confirmPassword') || '')) {
       setLocalError('两次输入的密码不一致')
       return
     }
     setSubmitting(true)
-    await onSubmit({
+    const response = await onSubmit({
       name: String(form.get('name') || ''),
       email: String(form.get('email') || ''),
       password,
+      verificationCode: String(form.get('verificationCode') || ''),
     })
+    if (response?.message) setNotice(response.message)
     setSubmitting(false)
   }
+
+  const submitLabel = submitting
+    ? '请稍候'
+    : isRegister
+      ? '创建账号'
+      : isForgot
+        ? '发送重置邮件'
+        : isReset
+          ? '保存新密码'
+          : '进入工作台'
 
   return (
     <main className="auth-page">
@@ -1471,23 +1576,59 @@ function AuthScreen({ mode, error, onModeChange, onSubmit }) {
       <section className="auth-form-panel">
         <div className="auth-form-wrap">
           <div className="auth-mode" aria-label="认证方式">
-            <button className={mode === 'login' ? 'active' : ''} onClick={() => onModeChange('login')}>登录</button>
-            <button className={mode === 'register' ? 'active' : ''} onClick={() => onModeChange('register')}>注册</button>
+            <button type="button" className={isLogin ? 'active' : ''} onClick={() => changeMode('login')}>登录</button>
+            <button type="button" className={isRegister ? 'active' : ''} onClick={() => changeMode('register')}>注册</button>
           </div>
           <div className="auth-heading">
-            <span className="section-overline">{isRegister ? '创建创作空间' : '欢迎回来'}</span>
-            <h1>{isRegister ? '写下第一行。' : '继续你的故事。'}</h1>
-            <p>{isRegister ? '建立账号后，作品会隔离保存在你的空间中。' : '登录后回到上次停笔的位置。'}</p>
+            <span className="section-overline">{heading.overline}</span>
+            <h1>{heading.title}</h1>
+            <p>{heading.description}</p>
           </div>
           <form className="auth-form" onSubmit={submit}>
             {isRegister && <label><span>昵称</span><div className="auth-input"><UserRound size={16} /><input name="name" autoComplete="name" placeholder="你的创作者昵称" required maxLength="40" /></div></label>}
-            <label><span>邮箱</span><div className="auth-input"><Mail size={16} /><input name="email" type="email" autoComplete="email" placeholder="name@example.com" required maxLength="160" /></div></label>
-            <label><span>密码</span><div className="auth-input"><LockKeyhole size={16} /><input name="password" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} placeholder="至少 8 个字符" required minLength="8" maxLength="128" /></div></label>
-            {isRegister && <label><span>确认密码</span><div className="auth-input"><LockKeyhole size={16} /><input name="confirmPassword" type="password" autoComplete="new-password" placeholder="再次输入密码" required minLength="8" maxLength="128" /></div></label>}
+            {!isReset && <label><span>邮箱</span><div className="auth-input"><Mail size={16} /><input ref={isRegister ? emailInputRef : null} name="email" type="email" autoComplete="email" placeholder="name@example.com" required maxLength="160" /></div></label>}
+            {isRegister && (
+              <label>
+                <span>邮箱验证码</span>
+                <div className="auth-input auth-verification-input">
+                  <ShieldCheck size={16} />
+                  <input name="verificationCode" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" placeholder="6 位验证码" required maxLength="6" />
+                  <button className="auth-code-button" type="button" disabled={sendingVerificationCode || verificationCooldown > 0} onClick={requestVerificationCode}>
+                    {sendingVerificationCode ? '发送中' : verificationCooldown > 0 ? `${verificationCooldown}s` : '获取验证码'}
+                  </button>
+                </div>
+              </label>
+            )}
+            {!isForgot && (
+              <label>
+                <span className="auth-label-row"><span>{isReset ? '新密码' : '密码'}</span>{isLogin && <button type="button" onClick={() => changeMode('forgot')}>忘记密码？</button>}</span>
+                <div className="auth-input">
+                  <LockKeyhole size={16} />
+                  <input name="password" type={showPassword ? 'text' : 'password'} autoComplete={isLogin ? 'current-password' : 'new-password'} placeholder="至少 8 个字符" required minLength="8" maxLength="128" />
+                  <button className="auth-password-toggle" type="button" aria-label={showPassword ? '隐藏密码' : '显示密码'} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </label>
+            )}
+            {(isRegister || isReset) && (
+              <label>
+                <span>确认密码</span>
+                <div className="auth-input">
+                  <LockKeyhole size={16} />
+                  <input name="confirmPassword" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" placeholder="再次输入密码" required minLength="8" maxLength="128" />
+                  <button className="auth-password-toggle" type="button" aria-label={showConfirmPassword ? '隐藏确认密码' : '显示确认密码'} aria-pressed={showConfirmPassword} onClick={() => setShowConfirmPassword((visible) => !visible)}>
+                    {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </label>
+            )}
             {(localError || error) && <div className="auth-error" role="alert">{localError || error}</div>}
-            <button className="auth-submit" disabled={submitting} type="submit">{submitting ? <LoaderCircle size={17} className="spin" /> : <ArrowUpRight size={17} />}{submitting ? '请稍候' : isRegister ? '创建账号' : '进入工作台'}</button>
+            {notice && <div className="auth-notice" role="status">{notice}</div>}
+            <button className="auth-submit" disabled={submitting} type="submit">{submitting ? <LoaderCircle size={17} className="spin" /> : <ArrowUpRight size={17} />}{submitLabel}</button>
+            {(isForgot || isReset) && <button className="auth-back-button" type="button" onClick={() => changeMode('login')}><ArrowLeft size={14} />返回登录</button>}
           </form>
-          <p className="auth-security"><LockKeyhole size={13} />密码经过加盐哈希处理，登录会话可随时退出。</p>
+          <p className="auth-security"><LockKeyhole size={13} />{isForgot || isReset ? '重置链接仅可使用一次，并会在短时间后过期。' : '密码经过加盐哈希处理，登录会话可随时退出。'}</p>
           <p className="auth-source"><a href={SOURCE_REPOSITORY_URL} target="_blank" rel="noreferrer"><Code2 size={12} />源代码 · AGPL-3.0</a></p>
         </div>
       </section>
@@ -1868,18 +2009,42 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
   const references = Array.isArray(result.references_loaded) ? result.references_loaded : []
   const checks = Array.isArray(result.checks) ? result.checks : []
   const findings = Array.isArray(result.findings) ? result.findings : []
-  const events = Array.isArray(run.events) ? run.events : []
+  const events = compactAgentEvents(run.events)
   const plan = Array.isArray(run.plan) ? run.plan : []
+  const reasoningHistory = Array.isArray(run.reasoningHistory) ? run.reasoningHistory.filter((item) => String(item?.summary || '').trim()) : []
+  const inputHistory = Array.isArray(run.inputHistory) ? run.inputHistory : []
+  const interactionTrace = [
+    ...reasoningHistory.map((entry, index) => ({
+      kind: 'reasoning',
+      entry,
+      ordinal: index + 1,
+      interactionAttempt: Math.max(1, Number(entry?.interactionAttempt) || index + 1),
+    })),
+    ...inputHistory.map((entry, index) => ({
+      kind: 'input',
+      entry,
+      ordinal: index + 1,
+      interactionAttempt: Math.max(1, Number(entry?.interactionAttempt) || index + 1),
+    })),
+  ].sort((left, right) => left.interactionAttempt - right.interactionAttempt
+    || (left.kind === right.kind ? left.ordinal - right.ordinal : left.kind === 'reasoning' ? -1 : 1))
   const attachedFiles = Array.isArray(run.source?.attachedFiles) ? run.source.attachedFiles : []
-  const exploredCount = Math.max(1, references.length + attachedFiles.length)
-  const contextCount = Math.max(1, attachedFiles.length + (run.source?.selectedText ? 1 : 0))
+  const chapterCount = run.source?.chapterId == null ? 0 : 1
+  const contextCount = 1 + attachedFiles.length + (run.source?.selectedText ? 1 : 0)
+  const explorationParts = [
+    chapterCount ? `${chapterCount} 个章节` : '',
+    attachedFiles.length ? `${attachedFiles.length} 个附件` : '',
+    references.length ? `${references.length} 份 Skill 参考` : '',
+    `${contextCount} 条上下文`,
+  ].filter(Boolean)
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
-  const choicePrompt = normalizeStructuredAgentQuestion(result.question) || parseAgentChoicePrompt(run.text)
   const isPlanMode = run.mode === 'plan' || run.source?.mode === 'plan'
   const effectiveStatus = result.status === 'needs_input' ? 'needs_input' : run.status
+  const hasInputRequest = effectiveStatus === 'needs_input' && result.question
+  const choicePrompt = normalizeStructuredAgentQuestion(result.question) || (hasInputRequest ? parseAgentChoicePrompt(run.text) : null)
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
-    needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
+    waiting_input: '等待你的回答', needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
   }[effectiveStatus] || '运行中'
 
   function toggleHunk(id, accepted) {
@@ -1898,13 +2063,12 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
     }
   }
 
-  const hasInputRequest = result.status === 'needs_input' && result.question
   return <article className={`agent-turn ${run.status}`}>
-    <details className="agent-exploration" open>
+    <details className="agent-exploration">
       <summary className="agent-trace-row">
         <Search size={14} />
-        <strong>已探索</strong>
-        <span>{exploredCount} 个{attachedFiles.length ? '文件' : '章节'} · {contextCount} 条上下文</span>
+        <strong>已读取</strong>
+        <span>{explorationParts.join(' · ')}</span>
         <ChevronRight size={13} className="agent-trace-chevron" />
       </summary>
       <div className="agent-exploration-body">
@@ -1918,6 +2082,11 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
           <span>{file.name}</span>
           <small>{file.kind || '外部文件'}</small>
         </div>)}
+        {references.length > 0 && <div className="agent-trace-detail">
+          <SearchCode size={13} />
+          <span>Skill 参考</span>
+          <small>{references.length} 份</small>
+        </div>}
       </div>
     </details>
 
@@ -1928,7 +2097,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
       <Info size={12} />
     </div>}
 
-    <details className="agent-reasoning" open={run.status !== 'completed'}>
+    <details className="agent-reasoning" open={run.status === 'running' || ['needs_input', 'waiting_input'].includes(effectiveStatus)}>
       <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>执行过程</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
       <div className="agent-reasoning-body">
         {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
@@ -1942,11 +2111,32 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
           {(events.length ? events : [{ id: `${run.id}:local`, type: 'lifecycle', label: run.statusMessage || '正在创建任务', status: 'running' }]).map((event) => <div className={`agent-tool-row ${event.status === 'completed' ? 'done' : event.status}`} key={event.id}>
             <AgentEventIcon event={event} />
             <span>{event.label}</span>
-            {agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
+            {event.count > 1 ? <small>{event.count} 轮</small> : agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
           </div>)}
         </div>
-        {run.reasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要</strong><AgentMarkdown value={run.reasoningSummary} streaming={run.status === 'running'} /></div></div>}
-        {references.length > 0 && <div className="agent-tool-row done"><SearchCode size={13} /><span>探索 {references.length} 份 Skill 引用</span></div>}
+        {events.filter((event) => event.type === 'subagent' && event.meta?.reportSummary).map((event) => <div className="agent-reasoning-summary" key={`${event.id}:report`}>
+          <UsersRound size={12} />
+          <div>
+            <strong>{event.label}</strong>
+            <AgentMarkdown value={event.meta.reportSummary} />
+          </div>
+        </div>)}
+        {interactionTrace.map(({ kind, entry, ordinal }) => kind === 'input'
+          ? <div className="agent-reasoning-summary" key={entry.requestId || `${run.id}:input:${ordinal}`}>
+            <CheckSquare2 size={12} />
+            <div>
+              <strong>已确认的补充信息 {inputHistory.length > 1 ? `${ordinal}/${inputHistory.length}` : ''}</strong>
+              <AgentMarkdown value={`问题：${entry.response?.questionText || '补充信息'}\n\n回答：${entry.response?.answerText || '已回答'}`} />
+            </div>
+          </div>
+          : <div className="agent-reasoning-summary" key={entry.id || `${run.id}:reasoning-history:${ordinal}`}>
+            <BrainCircuit size={12} />
+            <div>
+              <strong>模型推理摘要 {reasoningHistory.length > 1 || run.reasoningSummary ? `${ordinal}/${reasoningHistory.length + (run.reasoningSummary ? 1 : 0)}` : ''}</strong>
+              <AgentMarkdown value={entry.summary} />
+            </div>
+          </div>)}
+        {run.reasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要 {reasoningHistory.length ? `${reasoningHistory.length + 1}/${reasoningHistory.length + 1}` : ''}</strong><AgentMarkdown value={run.reasoningSummary} streaming={run.status === 'running'} /></div></div>}
         {checks.length > 0 && <div className="agent-tool-row done"><CheckSquare2 size={13} /><span>完成 {checks.length} 项确定性检查</span></div>}
         {run.response?.route && <code>{run.response.route}</code>}
       </div>
@@ -2082,6 +2272,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
   const [agentWebSearch, setAgentWebSearch] = useState(false)
+  const [agentMultiAgent, setAgentMultiAgent] = useState(false)
   const [agentMode, setAgentMode] = useState('build')
   const [agentPickerOpen, setAgentPickerOpen] = useState(null)
   const [, setHistoryVersion] = useState(0)
@@ -3041,7 +3232,24 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantRunning(true)
     setAssistantElapsedMs(0)
     setAssistantMessages((current) => current.flatMap((item) => item.id === requestId
-      ? [{ id: `${requestId}-answer-${Date.now()}`, role: 'user', text: answer }, { ...item, status: 'running', text: '', durationMs: 0 }]
+      ? [{
+        id: `${requestId}-answer-${Date.now()}`,
+        role: 'user',
+        text: answer,
+      }, {
+        ...item,
+        status: 'running',
+        response: null,
+        text: '',
+        reasoningHistory: item.reasoningSummary
+          ? [...(item.reasoningHistory || []), {
+            id: `${turnId}:reasoning:${Math.max(1, Number(item.reasoningHistory?.length || 0) + 1)}`,
+            summary: item.reasoningSummary,
+          }]
+          : item.reasoningHistory || [],
+        reasoningSummary: '',
+        durationMs: 0,
+      }]
       : [item]))
     const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
     try {
@@ -3064,10 +3272,63 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }
   }
 
+  async function submitAssistantSteer(message) {
+    const threadId = assistantThread?.id
+    const turnId = assistantTurnIdRef.current
+    if (!threadId || !turnId) {
+      onNotify('当前运行还没有可追加指令的轮次')
+      return
+    }
+    const clientId = `steer-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const optimistic = {
+      id: clientId,
+      role: 'user',
+      text: message,
+      turnId,
+      steer: true,
+      steerStatus: 'pending',
+    }
+    setAssistantMessages((current) => [...current, optimistic])
+    setAssistantInput('')
+    setAssistantSuggestion(null)
+    try {
+      const response = await api.steerAgentTurn(threadId, turnId, {
+        message,
+        expectedTurnId: turnId,
+        idempotencyKey: clientId,
+      })
+      if (response?.input?.id) {
+        setAssistantMessages((current) => {
+          const hasServerMessage = current.some((item) => item.id === response.input.id)
+          if (hasServerMessage) {
+            return current
+              .filter((item) => item.id !== clientId)
+              .map((item) => item.id === response.input.id
+                ? { ...item, steerStatus: response.input.status }
+                : item)
+          }
+          return current.map((item) => item.id === clientId ? {
+              ...item,
+              id: response.input.id,
+              steerStatus: response.input.status,
+            } : item)
+        })
+      }
+    } catch (error) {
+      setAssistantMessages((current) => current.filter((item) => item.id !== clientId))
+      setAssistantInput((current) => current || message)
+      onNotify(error.message || '追加指令提交失败')
+    }
+  }
+
   async function submitAssistant(event, quickMessage = '') {
     event?.preventDefault()
     const message = String(quickMessage || assistantInput).trim()
-    if (!message || assistantRunning || assistantLoading || draftLoading) return
+    if (!message || assistantLoading || draftLoading) return
+    if (assistantRunning) {
+      await submitAssistantSteer(message)
+      return
+    }
     try {
       if (await runLocalAssistantCommand(message)) return
     } catch (error) {
@@ -3134,6 +3395,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           selected_text: selectedText,
           attached_files: attachedFiles,
           collaboration_mode: agentMode,
+          multi_agent: agentMultiAgent,
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
@@ -3189,7 +3451,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       status: terminal
         ? task.status === 'completed' ? response?.status || 'completed' : task.status
         : task.status,
-      response: response || item.response,
+      response: response === null && ['queued', 'running'].includes(task.status) ? null : response || item.response,
       text: terminal
         ? task.status === 'completed' ? agentResponseText(response) : task.error || task.statusMessage || '任务未完成。'
         : typeof task.partialOutput === 'string' && task.partialOutput.length >= String(item.text || '').length
@@ -3200,7 +3462,10 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       plan: turn?.plan || item.plan || [],
       progress: task.progress || 0,
       statusMessage: task.statusMessage || '',
-      reasoningSummary: task.reasoningSummary || item.reasoningSummary || '',
+      reasoningSummary: typeof task.reasoningSummary === 'string' ? task.reasoningSummary : item.reasoningSummary || '',
+      reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : item.reasoningHistory || [],
+      inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : item.inputHistory || [],
+      usage: task.usage || item.usage || null,
       durationMs: performance.now() - startedAt,
     } : item))
     return terminal
@@ -3220,7 +3485,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
             } : item))
             return
           }
-          if (event === 'item/reasoning/summaryDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
+          if (event === 'item/reasoning/summaryTextDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
             setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
               ...item,
               reasoningSummary: `${item.reasoningSummary || ''}${payload.delta}`,
@@ -3234,8 +3499,49 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
             } : item))
             return
           }
+          if (event === 'turn/steer/accepted' && payload?.turnId === turnId && payload?.input?.text) {
+            setAssistantMessages((current) => {
+              const existing = current.some((item) => item.id === payload.input.id
+                || (item.steer === true && item.turnId === turnId && item.text === payload.input.text))
+              if (existing) {
+                return current.map((item) => item.id === payload.input.id
+                  || (item.steer === true && item.turnId === turnId && item.text === payload.input.text)
+                  ? { ...item, steerStatus: payload.input.status }
+                  : item)
+              }
+              return [...current, {
+                id: payload.input.id,
+                role: 'user',
+                text: payload.input.text,
+                turnId,
+                steer: true,
+                steerStatus: payload.input.status,
+              }]
+            })
+            return
+          }
+          if (event === 'turn/steered' && payload?.turnId === turnId) {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+              && (item.id === requestId || item.turnId === turnId) ? {
+                ...item,
+                status: 'running',
+                text: '',
+                response: null,
+                reasoningSummary: '',
+                statusMessage: '已应用追加指令，正在重新规划',
+              } : item))
+            return
+          }
           if (!event.startsWith('turn/') || !payload?.turn) return
           latestTurn = payload.turn
+          if (event === 'turn/started' && ['queued', 'running'].includes(latestTurn.task?.status)) {
+            setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+              && (item.id === requestId || item.turnId === turnId) ? {
+                ...item,
+                text: '',
+                reasoningSummary: '',
+              } : item))
+          }
           if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)
           if (latestTurn.task?.status === 'waiting_input') controller.abort()
         },
@@ -3614,12 +3920,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 <textarea
                   ref={assistantInputRef}
                   value={assistantInput}
-                  disabled={assistantRunning || assistantLoading}
+                  disabled={assistantLoading}
                   onChange={handleAssistantInputChange}
                   onClick={(event) => refreshAssistantSuggestion(event.currentTarget.value, event.currentTarget.selectionStart)}
                   onKeyDown={handleAssistantComposerKeyDown}
                   rows={3}
-                  placeholder="让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令"
+                  placeholder={assistantRunning ? '追加指令到当前轮次…' : '让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令'}
                   aria-label="输入问题或需求"
                   aria-autocomplete="list"
                   aria-expanded={Boolean(assistantSuggestion)}
@@ -3655,6 +3961,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <div className="agent-composer-controls" ref={agentControlsRef}>
                     <button type="button" className={`agent-mode-trigger ${agentPickerOpen === 'mode' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'mode'} onClick={() => toggleAgentPicker('mode')} title="选择执行模式"><UserRound size={13} /><span>{agentModeOptions.find((option) => option.value === agentMode)?.label || 'Build'}</span></button>
                     <button type="button" className={`agent-tool-button ${agentWebSearch ? 'active' : ''}`} aria-pressed={agentWebSearch} onClick={() => setAgentWebSearch((active) => !active)} title={agentWebSearch ? '关闭联网搜索' : '开启联网搜索'}><Globe size={13} /><span>联网</span></button>
+                    <button type="button" className={`agent-tool-button ${agentMultiAgent ? 'active' : ''}`} aria-pressed={agentMultiAgent} onClick={() => setAgentMultiAgent((active) => !active)} title={agentMultiAgent ? '关闭双子代理协作' : '开启双子代理协作（会额外使用 token）'}><UsersRound size={13} /><span>协作</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
                       <Bot size={13} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
@@ -3691,7 +3998,10 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                     />}
                     <button type="button" className="agent-tool-button icon-only" onClick={onOpenSettings} title="打开模型设置" aria-label="打开模型设置"><Settings2 size={14} /></button>
                   </div>
-                  {assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}
+                  <div className="agent-composer-actions">
+                    {assistantRunning && <button type="submit" className="assistant-send steer" disabled={!assistantInput.trim()} aria-label="追加指令" title="追加到当前轮次"><Send size={15} /></button>}
+                    {assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}
+                  </div>
                 </div>
               </form>
             </div>

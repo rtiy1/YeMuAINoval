@@ -1,6 +1,8 @@
 export const seed = {
   users: [],
   sessions: [],
+  passwordResetTokens: [],
+  emailVerificationCodes: [],
   projects: [],
   chapters: {},
   drafts: {},

@@ -109,12 +109,23 @@ redisIt('writing-assistant session survives Node restart via Redis', async () =>
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'story-redis-'))
   const dataFile = path.join(tempDir, 'db.json')
   const { server: aiServer, port: aiPort } = await startMockAi()
-  const baseEnv = { ...process.env, REDIS_URL: REDIS_TEST_URL, PORT: '0', HOST: '127.0.0.1', AUTH_SECRET: 'redis-test-secret-with-enough-entropy-xxxx', STORY_DATA_FILE: dataFile, AI_SERVICE_URL: `http://127.0.0.1:${aiPort}` }
+  const baseEnv = {
+    ...process.env,
+    REDIS_URL: REDIS_TEST_URL,
+    PORT: '0',
+    HOST: '127.0.0.1',
+    AUTH_SECRET: 'redis-test-secret-with-enough-entropy-xxxx',
+    STORY_DATA_FILE: dataFile,
+    AI_SERVICE_URL: `http://127.0.0.1:${aiPort}`,
+    EMAIL_PROVIDER: 'test',
+    EMAIL_VERIFICATION_EXPOSE_CODE: 'true',
+  }
   try {
     const apiEnv = { ...baseEnv, NODE_ENV: 'test' }
     let { child, baseUrl } = await spawnApi(apiEnv)
     try {
-      const reg = await call(baseUrl, null, 'POST', '/api/auth/register', { name: 'r', email: 'r@e.com', password: 'password123' })
+      const code = await call(baseUrl, null, 'POST', '/api/auth/register/code', { email: 'r@e.com' })
+      const reg = await call(baseUrl, null, 'POST', '/api/auth/register', { name: 'r', email: 'r@e.com', password: 'password123', verificationCode: code.payload.verificationCode })
       const token = reg.payload.accessToken
       await call(baseUrl, token, 'POST', '/api/writing-assistant/messages', { message: '我想写一本短篇' })
       await call(baseUrl, token, 'POST', '/api/writing-assistant/messages', { message: '悬疑' })

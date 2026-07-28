@@ -12,6 +12,7 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
     NODE_ENV: 'test', PORT: '0', HOST: '127.0.0.1', AUTH_SECRET: 'registration-test-secret-with-enough-entropy',
     STORY_DATA_FILE: path.join(tempDir, 'db.json'), AI_TASK_QUEUE_ENABLED: 'false',
     REGISTRATION_MODE: 'owner-only', ALLOW_SHARED_MODEL_KEY: 'false',
+    EMAIL_PROVIDER: 'test', EMAIL_VERIFICATION_EXPOSE_CODE: 'true',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -29,13 +30,25 @@ try {
     child.stderr.on('data', (chunk) => reject(new Error(chunk.toString())))
     child.on('exit', (code) => reject(new Error(`API exited early: ${code}`)))
   })
-  const register = (name, email) => fetch(`${baseUrl}/api/auth/register`, {
+  const requestCode = async (email) => {
+    const response = await fetch(`${baseUrl}/api/auth/register/code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    return { response, payload: await response.json() }
+  }
+  const register = (name, email, verificationCode) => fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, email, password: 'password123' }),
+    body: JSON.stringify({ name, email, password: 'password123', verificationCode }),
   })
-  assert.equal((await register('站长', 'owner@example.com')).status, 201)
-  const second = await register('其他作者', 'writer@example.com')
+  const ownerCode = await requestCode('owner@example.com')
+  assert.equal(ownerCode.response.status, 202)
+  assert.equal((await register('站长', 'owner@example.com', ownerCode.payload.verificationCode)).status, 201)
+  const closedCode = await requestCode('writer@example.com')
+  assert.equal(closedCode.response.status, 403)
+  const second = await register('其他作者', 'writer@example.com', '000000')
   assert.equal(second.status, 403)
   assert.equal((await second.json()).error, '当前站点未开放注册')
   console.log('Registration mode test passed: owner-only closes after the first account')
