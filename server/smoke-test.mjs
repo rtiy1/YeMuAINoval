@@ -232,7 +232,7 @@ const child = spawn(process.execPath, ['server/index.mjs'], {
     NODE_ENV: 'test', PORT: '0', HOST: '127.0.0.1', AUTH_SECRET: 'smoke-test-secret-with-enough-entropy',
     STORY_DATA_FILE: dataFile, AI_SERVICE_URL: aiServiceUrl, AI_TASK_QUEUE_ENABLED: 'false',
     ALLOW_SHARED_MODEL_KEY: 'false', REGISTRATION_MODE: 'open', AI_DAILY_REQUEST_LIMIT: '0',
-    AI_CONCURRENT_REQUEST_LIMIT: '3', AI_REQUESTS_PER_MINUTE: '30',
+    AI_CONCURRENT_REQUEST_LIMIT: '3', AI_REQUESTS_PER_MINUTE: '60',
     ACCESS_TOKEN_TTL_MINUTES: '120', REFRESH_SESSION_DAYS: '120',
     PASSWORD_RESET_TOKEN_TTL_MINUTES: '30', PASSWORD_RESET_EXPOSE_TOKEN: 'true',
     EMAIL_VERIFICATION_CODE_TTL_MINUTES: '10', EMAIL_VERIFICATION_EXPOSE_CODE: 'true',
@@ -779,6 +779,7 @@ try {
     },
   })
   assert.equal(multiAgentTask.response.status, 202)
+  assert.equal(multiAgentTask.payload.turn.source.multiAgent, true)
   const multiAgentStream = await streamTurn(agentThread.payload.thread.id, multiAgentTask.payload.turn.id)
   assert.equal(multiAgentStream.events.at(-1).payload.turn.status, 'completed')
   const completedMultiAgentTask = await waitForTaskStatus(multiAgentTask.payload.task.id, 'completed')
@@ -933,6 +934,26 @@ try {
   assert.equal((await streamTurn(agentThread.payload.thread.id, interruptedTurn.payload.turn.id)).events.at(-1).event, 'turn/completed')
   const cancelledSteerTask = await waitForTaskStatus(interruptedTurn.payload.task.id, 'cancelled')
   assert.equal(cancelledSteerTask.steeringHistory[0].status, 'cancelled')
+  const regeneratedTurn = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${interruptedTurn.payload.turn.id}/regenerate`,
+  )
+  assert.equal(regeneratedTurn.response.status, 202)
+  assert.equal(regeneratedTurn.payload.turn.id, interruptedTurn.payload.turn.id)
+  assert.notEqual(regeneratedTurn.payload.task.id, interruptedTurn.payload.task.id)
+  assert.equal(regeneratedTurn.payload.task.parentTaskId, interruptedTurn.payload.task.id)
+  assert.equal(regeneratedTurn.payload.task.attempt, 2)
+  assert.match(regeneratedTurn.payload.task.statusMessage, /重新生成/)
+  const regeneratedStream = await streamTurn(agentThread.payload.thread.id, interruptedTurn.payload.turn.id)
+  assert.equal(regeneratedStream.events.at(-1).payload.turn.status, 'completed')
+  const regeneratedThread = await call('GET', `/api/ai/threads/${agentThread.payload.thread.id}`)
+  assert.equal(regeneratedThread.payload.thread.turns.at(-1).id, interruptedTurn.payload.turn.id)
+  assert.equal(regeneratedThread.payload.thread.turns.at(-1).task.id, regeneratedTurn.payload.task.id)
+  const staleRegeneration = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${choiceTask.payload.turn.id}/regenerate`,
+  )
+  assert.equal(staleRegeneration.response.status, 409)
   const duplicateTask = await call('POST', '/api/ai/tasks', { skill: 'story', message: '重复任务', idempotencyKey: 'same-operation', payload: { project_id: projectId, chapter_id: String(firstChapterId) } })
   const duplicateTaskResult = await streamTask(duplicateTask.payload.task.id)
   assert.equal(duplicateTaskResult.tasks.at(-1).status, 'completed', JSON.stringify(duplicateTaskResult.tasks.at(-1)))

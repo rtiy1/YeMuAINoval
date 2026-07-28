@@ -166,6 +166,7 @@ export const api = {
   archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
   createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   answerAgentTurn: (threadId, turnId, answers, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/input`, { method: 'POST', body: JSON.stringify({ answers }), signal: options.signal }),
+  regenerateAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/regenerate`, { method: 'POST', signal: options.signal }),
   steerAgentTurn: (threadId, turnId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/steer`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { signal: options.signal }),
   streamAgentTurn: (threadId, turnId, options = {}) => streamRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`, options),
