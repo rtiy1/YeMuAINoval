@@ -86,6 +86,7 @@ import { NOVEL_COMMANDS, parseSlashCommand, resolveSelection } from '../terminal
 import {
   agentEventDuration,
   agentResponseText,
+  agentTaskDurationMs,
   agentTurnEvents,
   agentThreadMessages,
   compactAgentEvents,
@@ -603,6 +604,28 @@ function App() {
       setDashboard(response.stats || null)
     } catch {
       // 写作主流程不应被统计刷新阻断。
+    }
+  }
+
+  async function refreshGeneratedArtifacts(application) {
+    if (!currentProject?.id || application?.applied !== true) return
+    try {
+      const [chapterResponse, ideaResponse, projectResponse, dashboardResponse] = await Promise.all([
+        api.getChapters(currentProject.id),
+        api.getIdeas(),
+        api.getProject(currentProject.id),
+        api.getDashboard(),
+      ])
+      setChapters(chapterResponse.chapters || [])
+      setIdeas(ideaResponse.ideas || [])
+      if (projectResponse.project) {
+        setProjects((current) => current.map((project) => project.id === projectResponse.project.id ? projectResponse.project : project))
+        setActiveProject(projectResponse.project)
+      }
+      setDashboard(dashboardResponse.stats || null)
+      setToast(application.summary || '设定与大纲已写入项目')
+    } catch (error) {
+      setToast(error.message || '设定已写入，但界面刷新失败')
     }
   }
 
@@ -1271,7 +1294,7 @@ function App() {
         </header>}
 
         <div className="content-wrap">
-          {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
+          {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onArtifactsApplied={refreshGeneratedArtifacts} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page workspace-empty"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>还没有作品</h2><p>新建或导入作品后，工作台会直接显示正文和助手。</p><div className="empty-state-actions"><button className="primary-button" onClick={() => setShowNew(true)}><BookPlus size={17} />新建作品</button><button className="secondary-button" onClick={() => setImportProjectOpen(true)}><Download size={16} />导入文稿</button></div></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
@@ -2259,7 +2282,7 @@ function AgentComposerMenu({ title, description, options, value, loading, onSele
   </div>
 }
 
-function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
+function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
   const [renameValue, setRenameValue] = useState('')
@@ -2328,6 +2351,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const assistantStreamRef = useRef(null)
   const assistantInputRef = useRef(null)
   const assistantFileInputRef = useRef(null)
+  const artifactSyncRef = useRef(new Set())
   const agentControlsRef = useRef(null)
   const displayChapter = activeChapter || chapters.at(-1) || { id: 1, title: '第一章', words: '0' }
   const visibleChapters = useMemo(() => [...chapters]
@@ -3548,6 +3572,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   function applyStreamedTask(task, requestId, startedAt, turn = null) {
     const terminal = ['completed', 'failed', 'cancelled'].includes(task.status)
     const response = task.result
+    const artifactApplication = task.artifactApplication || response?.result?.artifacts_applied
+    if (terminal && artifactApplication?.applied === true && !artifactSyncRef.current.has(task.id)) {
+      artifactSyncRef.current.add(task.id)
+      void onArtifactsApplied?.(artifactApplication)
+    }
     setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.taskId === task.id) ? {
       ...item,
       taskId: task.id,
@@ -3570,7 +3599,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : item.reasoningHistory || [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : item.inputHistory || [],
       usage: task.usage || item.usage || null,
-      durationMs: performance.now() - startedAt,
+      durationMs: terminal ? agentTaskDurationMs(task) : performance.now() - startedAt,
     } : item))
     return terminal
   }

@@ -341,6 +341,20 @@ export function agentTurnEvents(turn) {
     }))
 }
 
+export function agentTaskDurationMs(task) {
+  const executionEvents = (Array.isArray(task?.events) ? task.events : [])
+    .filter((event) => ['context', 'skill'].includes(event?.type) && event.startedAt)
+  const activeDuration = executionEvents.reduce((total, event) => {
+    const startedAt = new Date(event.startedAt).getTime()
+    const completedAt = new Date(event.completedAt || task.updatedAt || event.startedAt).getTime()
+    if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) return total
+    return total + Math.max(0, completedAt - startedAt)
+  }, 0)
+  if (activeDuration > 0 || executionEvents.length) return activeDuration
+  if (!task?.createdAt || !task?.updatedAt) return 0
+  return Math.max(0, new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime())
+}
+
 export function agentThreadMessages(thread) {
   const messages = []
   for (const turn of thread?.turns || []) {
@@ -412,9 +426,7 @@ export function agentThreadMessages(thread) {
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : [],
       usage: task.usage || null,
-      durationMs: task.createdAt && task.updatedAt
-        ? Math.max(0, new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime())
-        : 0,
+      durationMs: agentTaskDurationMs(task),
     })
   }
   return messages

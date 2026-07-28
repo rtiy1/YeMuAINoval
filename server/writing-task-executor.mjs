@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { invokeStoryAgent, invokeStoryAgentDelegates, classifyTaskError } from './story-agent.mjs'
 import { accumulateTaskUsage, archiveTaskReasoning } from './agent-thread.mjs'
 import { maybeCompactAgentThread } from './context-compaction.mjs'
+import { applyStoryArtifacts } from './story-artifacts.mjs'
 import { updateDb } from './store.mjs'
 
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
@@ -361,6 +362,19 @@ export async function executeWritingTask(taskId, {
         label: `完成 ${result.selected_skill || task.skill || 'story'} Skill`,
         meta: { selectedSkill: result.selected_skill || task.skill || null, route: result.route || '', references: references.length, checks: checks.length },
       })
+      const artifactApplication = result.status === 'completed'
+        ? applyStoryArtifacts(db, {
+          userId: task.userId,
+          projectId: task.projectId,
+          artifacts: result?.result?.artifacts,
+          timestamp,
+        })
+        : null
+      if (artifactApplication?.applied) {
+        task.artifactApplication = artifactApplication
+        result.result.artifacts_applied = artifactApplication
+        appendEvent(task, 'artifact', artifactApplication.summary, 'completed', artifactApplication)
+      }
       appendEvent(task, 'result', '生成可审阅结果', 'completed', {
         status: result.status,
         ...(resultContinuationMode ? { continuationMode: resultContinuationMode } : {}),

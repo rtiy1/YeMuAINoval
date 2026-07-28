@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   agentEventDuration,
   agentResponseText,
+  agentTaskDurationMs,
   agentThreadMessages,
   agentTurnEvents,
   compactAgentEvents,
@@ -172,6 +173,17 @@ test('editor agent formats durations and aborts polling', async () => {
     startedAt: '2026-01-01T00:00:00.000Z',
     completedAt: '2026-01-01T00:00:02.000Z',
   }), '2.0 秒')
+  assert.equal(agentTaskDurationMs({
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:12:42.000Z',
+    events: [
+      { type: 'context', startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
+      { type: 'skill', startedAt: '2026-01-01T00:00:02.000Z', completedAt: '2026-01-01T00:00:20.000Z' },
+      { type: 'input', startedAt: '2026-01-01T00:12:00.000Z', completedAt: '2026-01-01T00:12:00.000Z' },
+      { type: 'context', startedAt: '2026-01-01T00:12:00.000Z', completedAt: '2026-01-01T00:12:02.000Z' },
+      { type: 'skill', startedAt: '2026-01-01T00:12:02.000Z', completedAt: '2026-01-01T00:12:42.000Z' },
+    ],
+  }), 62_000)
 
   const controller = new AbortController()
   const pending = waitForAgentPoll(10_000, controller.signal)

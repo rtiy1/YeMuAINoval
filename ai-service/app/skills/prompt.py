@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -12,6 +13,7 @@ from app.agent_instructions import (
     EXECUTION_BOUNDARY_POLICY,
     NIGHT_RAIN_IDENTITY,
     RUNTIME_CONTRACT_POLICY,
+    STORY_DELIVERY_POLICY,
     STORY_FACT_POLICY,
 )
 from app.config import get_settings
@@ -40,8 +42,16 @@ MESSAGE_TOOL_ARGUMENT_LIMIT = 24_000
 MESSAGE_TOOL_CONTENT_LIMIT = 8_000
 TOOL_CALL_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$')
 INLINE_REASONING_OPEN_PATTERN = re.compile(
-    r'<(think|thinking|analysis|reasoning)\s*>',
+    r'<(think|thinking|analysis|reasoning|story_artifacts)\s*>',
     re.IGNORECASE,
+)
+STORY_ARTIFACT_PATTERN = re.compile(
+    r'<story_artifacts\s*>\s*(\{.*?\})\s*</story_artifacts\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
+UNCLOSED_STORY_ARTIFACT_PATTERN = re.compile(
+    r'<story_artifacts\s*>.*\Z',
+    re.IGNORECASE | re.DOTALL,
 )
 CHOICE_REQUEST_PATTERN = re.compile(r'<choice_request>\s*(\{.*?\})\s*</choice_request>', re.DOTALL)
 CHOICE_OPTION_PATTERN = re.compile(
@@ -133,13 +143,51 @@ def _looks_like_internal_contract_refusal(value: str) -> bool:
     return sum(marker in text for marker in markers) >= 2
 
 
+def _merge_stream_usage(previous: Mapping[str, Any] | None, current: Any) -> dict[str, Any]:
+    """Keep cumulative/final stream usage without summing it once per chunk."""
+    merged = dict(previous or {})
+    if not isinstance(current, Mapping):
+        return merged
+    for key, value in current.items():
+        if isinstance(value, Mapping):
+            merged[key] = _merge_stream_usage(merged.get(key), value)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            existing = merged.get(key, 0)
+            merged[key] = max(0, value, existing if isinstance(existing, (int, float)) else 0)
+        elif value is not None:
+            merged[key] = value
+    return merged
+
+
+def _restore_stream_usage(response: Any, usage: dict[str, Any], provider_usage: dict[str, dict[str, Any]]) -> Any:
+    if response is None or (not usage and not provider_usage):
+        return response
+    updates: dict[str, Any] = {}
+    if usage:
+        updates['usage_metadata'] = usage
+    if provider_usage:
+        metadata = dict(getattr(response, 'response_metadata', None) or {})
+        for key, value in provider_usage.items():
+            metadata[key] = value
+        updates['response_metadata'] = metadata
+    copy = getattr(response, 'model_copy', None)
+    if callable(copy):
+        return copy(update=updates)
+    for key, value in updates.items():
+        try:
+            setattr(response, key, value)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return response
+
+
 class _InlineReasoningFilter:
     """Incrementally remove inline thinking tags without breaking streamed text."""
 
     def __init__(self) -> None:
         self.pending = ''
         self.hidden_tag: str | None = None
-        self.open_prefixes = tuple(f'<{tag}>' for tag in HIDDEN_REASONING_TAGS)
+        self.open_prefixes = tuple(f'<{tag}>' for tag in (*HIDDEN_REASONING_TAGS, 'story_artifacts'))
 
     def feed(self, value: str, final: bool = False) -> str:
         self.pending += str(value or '')
@@ -180,6 +228,84 @@ class _InlineReasoningFilter:
                 self.pending = ''
             break
         return ''.join(visible)
+
+
+def strip_story_artifact_blocks(value: str) -> str:
+    text = STORY_ARTIFACT_PATTERN.sub('', str(value or ''))
+    return UNCLOSED_STORY_ARTIFACT_PATTERN.sub('', text).strip()
+
+
+def normalize_story_artifacts(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    def clean(item: Any, limit: int) -> str:
+        return re.sub(r'\s+', ' ', str(item or '')).strip()[:limit]
+
+    project_source = value.get('project') if isinstance(value.get('project'), dict) else {}
+    project = {
+        key: clean(project_source.get(key), limit)
+        for key, limit in {'genre': 30, 'style': 80, 'premise': 2000}.items()
+        if clean(project_source.get(key), limit)
+    }
+    characters = []
+    for item in value.get('characters') if isinstance(value.get('characters'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = clean(item.get('name') or item.get('title'), 80)
+        description = clean(item.get('description') or item.get('body') or item.get('summary'), 4000)
+        if name and description:
+            characters.append({
+                'name': name,
+                'role': clean(item.get('role'), 80),
+                'description': description,
+            })
+        if len(characters) >= 24:
+            break
+    worldbuilding = []
+    for item in value.get('worldbuilding') if isinstance(value.get('worldbuilding'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        title = clean(item.get('title') or item.get('name'), 160)
+        content = clean(item.get('content') or item.get('body') or item.get('description'), 4000)
+        if title and content:
+            worldbuilding.append({'title': title, 'content': content})
+        if len(worldbuilding) >= 40:
+            break
+    chapters = []
+    for item in value.get('chapters') if isinstance(value.get('chapters'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        title = clean(item.get('title') or item.get('name'), 100)
+        outline = clean(item.get('outline') or item.get('content') or item.get('summary'), 5000)
+        if title and outline:
+            chapters.append({'title': title, 'outline': outline})
+        if len(chapters) >= 100:
+            break
+    normalized = {
+        'version': 1,
+        **({'project': project} if project else {}),
+        **({'characters': characters} if characters else {}),
+        **({'worldbuilding': worldbuilding} if worldbuilding else {}),
+        **({'chapters': chapters} if chapters else {}),
+    }
+    return normalized if len(normalized) > 1 else None
+
+
+def extract_story_artifacts(output: str, response: Any = None) -> dict[str, Any] | None:
+    candidates = []
+    if response is not None:
+        candidates.append(model_content_text(getattr(response, 'content', None)))
+    candidates.append(str(output or ''))
+    for candidate in candidates:
+        for match in reversed(list(STORY_ARTIFACT_PATTERN.finditer(candidate))):
+            try:
+                normalized = normalize_story_artifacts(json.loads(match.group(1)))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                normalized = None
+            if normalized:
+                return normalized
+    return None
 
 
 def _single_question(value: str) -> str:
@@ -727,6 +853,8 @@ def _stream_model_response(
     response_gate_released = False
     response_suppressed = False
     visible_started = False
+    stream_usage: dict[str, Any] = {}
+    provider_stream_usage: dict[str, dict[str, Any]] = {}
     response = None
     stream = model.stream(messages, **(model_kwargs or {}))
     stream_finished = threading.Event()
@@ -786,6 +914,14 @@ def _stream_model_response(
         for chunk in stream:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError('model stream cancelled')
+            stream_usage = _merge_stream_usage(stream_usage, getattr(chunk, 'usage_metadata', None))
+            chunk_metadata = getattr(chunk, 'response_metadata', None) or {}
+            for usage_key in ('token_usage', 'usage'):
+                if isinstance(chunk_metadata.get(usage_key), Mapping):
+                    provider_stream_usage[usage_key] = _merge_stream_usage(
+                        provider_stream_usage.get(usage_key),
+                        chunk_metadata[usage_key],
+                    )
             try:
                 response = chunk if response is None else response + chunk
             except (TypeError, ValueError):
@@ -815,7 +951,7 @@ def _stream_model_response(
     gate_visible('', final=True)
     if prefix_buffer and not choice_block and not response_suppressed:
         on_delta(prefix_buffer)
-    return ''.join(output_parts), response
+    return ''.join(output_parts), _restore_stream_usage(response, stream_usage, provider_stream_usage)
 
 
 def _bind_request_user_input_tool(model) -> tuple[Any, bool]:
@@ -940,6 +1076,7 @@ def execute_prompt_skill(
         f'\n\n{EXECUTION_BOUNDARY_POLICY}',
         f'\n\n{DATA_BOUNDARY_POLICY}',
         f'\n\n{RUNTIME_CONTRACT_POLICY}',
+        f'\n\n{STORY_DELIVERY_POLICY}',
         '\n\n当前运行模式：执行项目内的 Story Skill。遵守下面的 Skill 契约并完成用户请求。当前适配范围是 prompt-only；需要宿主执行写入或其他工具调用时，只返回明确的建议操作或可应用结果，不把计划描述成已执行。',
         f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 36_000 if prompt_choice_followup else 120_000)}',
     ]
@@ -1055,6 +1192,7 @@ def execute_prompt_skill(
             f'\n\n{AGENT_EXECUTION_POLICY}',
             f'\n\n{STORY_FACT_POLICY}',
             f'\n\n{RUNTIME_CONTRACT_POLICY}',
+            f'\n\n{STORY_DELIVERY_POLICY}',
             '''\n\nRECOVERY MODE:
 上一次模型误把应用运行契约当成了用户上传内容。现在直接完成作者的创作请求。
 - 不讨论 Skill、提示注入、人格设定、文件系统、agent 或模型内部规则。
@@ -1112,7 +1250,7 @@ def execute_prompt_skill(
                     cancel_event,
                 )
             active_response = active_model.invoke(active_messages, **(model_kwargs or {}))
-            return model_content_text(active_response.content), active_response
+            return strip_story_artifact_blocks(model_content_text(active_response.content)), active_response
 
         active_messages = messages
         active_model_kwargs: dict[str, Any] = {}
@@ -1192,6 +1330,7 @@ def execute_prompt_skill(
             'message': '模型执行失败，请检查模型地址、密钥和上下文长度。',
         }
     choice_request = extract_choice_request(output, response)
+    story_artifacts = extract_story_artifacts(output, response)
     continuation_mode = (
         'openai_responses'
         if native_continuation_used
@@ -1248,6 +1387,7 @@ def execute_prompt_skill(
         'references_deferred': ref_result.deferred,
         'references_truncated': ref_result.truncated,
         'output': output,
+        **({'artifacts': story_artifacts} if story_artifacts else {}),
         'continuation_mode': continuation_mode,
         'usage': model_token_usage(response, system_prompt + invocation.instruction + json.dumps(model_payload, ensure_ascii=False, default=str), output),
     }
