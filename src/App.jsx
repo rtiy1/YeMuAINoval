@@ -101,11 +101,26 @@ import {
   waitForAgentPoll,
 } from './editor-agent.mjs'
 import AgentMarkdown from './agent-markdown.jsx'
+import { resolveModelIcon } from './model-icons.mjs'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
 const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
+
+function AgentModelGlyph({ model = '' }) {
+  const iconFile = resolveModelIcon(model)
+  const [iconFailed, setIconFailed] = useState(false)
+
+  useEffect(() => setIconFailed(false), [iconFile])
+
+  return <span className="agent-model-glyph" aria-hidden="true">
+    {iconFile && !iconFailed
+      ? <img src={`${import.meta.env.BASE_URL}model-icons/${iconFile}`} alt="" draggable="false" onError={() => setIconFailed(true)} />
+      : <Bot size={12} />}
+  </span>
+}
+
 const PROJECT_GENRE_GROUPS = [
   {
     label: '幻想与冒险',
@@ -150,13 +165,7 @@ const agentReasoningOptions = [
   { value: 'medium', label: '中', description: '平衡响应速度与创作质量' },
   { value: 'high', label: '高', description: '适合结构、人物与复杂修改' },
   { value: 'xhigh', label: '极高', description: '更深入地推演长篇上下文' },
-  { value: 'max', label: 'MAX', description: '使用模型支持的最高推理强度', badge: '最深' },
-]
-
-const agentModeOptions = [
-  { value: 'build', label: 'Build', description: '创作、续写并生成可审阅修改', badge: '默认' },
-  { value: 'review', label: 'Review', description: '只审查问题，不直接改写正文' },
-  { value: 'plan', label: 'Plan', description: '只读分析、收敛决策并输出可执行计划' },
+  { value: 'max', label: 'Max', description: '使用模型支持的最高推理强度', badge: '最深' },
 ]
 
 const agentTeamOptions = [
@@ -2449,7 +2458,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
   const [agentWebSearch, setAgentWebSearch] = useState(false)
   const [agentMultiAgent, setAgentMultiAgent] = useState(false)
-  const [agentMode, setAgentMode] = useState('build')
+  const agentMode = 'build'
   const [agentPickerOpen, setAgentPickerOpen] = useState(null)
   const [, setHistoryVersion] = useState(0)
   const historyRef = useRef({ past: [], future: [] })
@@ -4373,11 +4382,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
                 {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
-                {agentMultiAgent && <div className="agent-team-banner">
-                  <UsersRound size={14} />
-                  <span><strong>多智能体协作已开启</strong><small>{agentMode === 'review' ? '连续性守卫与文本审阅并行，夜雨汇总' : '连续性守卫与场景规划并行，夜雨汇总'}</small></span>
-                  <button type="button" onClick={() => setAgentMultiAgent(false)} title="关闭多智能体协作" aria-label="关闭多智能体协作"><X size={12} /></button>
-                </div>}
                 <textarea
                   ref={assistantInputRef}
                   value={assistantInput}
@@ -4420,18 +4424,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 </div>}
                 <div className="agent-composer-footer">
                   <div className="agent-composer-controls" ref={agentControlsRef}>
-                    <button type="button" className={`agent-mode-trigger ${agentPickerOpen === 'mode' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'mode'} onClick={() => toggleAgentPicker('mode')} title="选择执行模式"><UserRound size={13} /><span>{agentModeOptions.find((option) => option.value === agentMode)?.label || 'Build'}</span></button>
-                    <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '单智能体'}</span><ChevronDown size={11} /></button>
+                    <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '智能体'}</span><ChevronDown size={11} /></button>
+                    <span className="agent-control-divider" aria-hidden="true" />
                     <button type="button" className={`agent-tool-button ${agentWebSearch ? 'active' : ''}`} aria-pressed={agentWebSearch} onClick={() => setAgentWebSearch((active) => !active)} title={agentWebSearch ? '关闭联网搜索' : '开启联网搜索'}><Globe size={13} /><span>联网</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
-                      <Bot size={13} />
+                      <AgentModelGlyph model={agentModel} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
-                      <ChevronDown size={11} />
                     </button>
                     <button type="button" className={`agent-control-trigger reasoning ${agentPickerOpen === 'reasoning' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'reasoning'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('reasoning')} title="选择思考强度">
-                      <BrainCircuit size={13} />
                       <span>{agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || '自动'}</span>
-                      <ChevronDown size={11} />
                     </button>
                     {agentPickerOpen === 'model' && <AgentComposerMenu
                       title="选择模型"
@@ -4448,14 +4449,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                       value={agentReasoningEffort}
                       loading={false}
                       onSelect={(value) => { setAgentPickerOpen(null); updateAgentSetting('reasoningEffort', value) }}
-                    />}
-                    {agentPickerOpen === 'mode' && <AgentComposerMenu
-                      title="执行模式"
-                      description="决定普通消息的默认处理方式"
-                      options={agentModeOptions}
-                      value={agentMode}
-                      loading={false}
-                      onSelect={(value) => { setAgentMode(value); setAgentPickerOpen(null) }}
                     />}
                     {agentPickerOpen === 'team' && <AgentComposerMenu
                       title="智能体协作"

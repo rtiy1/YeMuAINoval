@@ -5536,3 +5536,228 @@ details[open] > summary .agent-trace-chevron {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
+
+/* Unified assistant composer: a quiet writing surface with one stable control row. */
+.agent-composer-wrap {
+  padding: 9px 11px 11px;
+  background: #f7f8f8;
+  border-top-color: #e3e5e5;
+}
+
+.editor-page .agent-rail {
+  container-type: inline-size;
+}
+
+.agent-context-line {
+  min-height: 24px;
+  padding: 0 4px 7px;
+  color: #777d81;
+}
+
+.agent-context-line span,
+.agent-context-line small {
+  font-size: 9px;
+}
+
+.assistant-form.agent-composer {
+  min-height: 124px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background: #fff;
+  border-color: #d8dbdc;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(27, 32, 35, .025);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+
+.assistant-form.agent-composer:focus-within {
+  border-color: #a9afb1;
+  box-shadow: 0 0 0 2px rgba(54, 63, 67, .045);
+}
+
+.assistant-form.agent-composer textarea {
+  min-height: 78px;
+  max-height: 180px;
+  flex: 1;
+  padding: 13px 13px 8px;
+  color: #353b3e;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.assistant-form.agent-composer textarea::placeholder {
+  color: #888e91;
+  opacity: 1;
+}
+
+.assistant-form.agent-composer > .agent-attachment-list {
+  padding: 10px 11px 0;
+}
+
+.assistant-form.agent-composer > .agent-composer-footer {
+  min-height: 39px;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding: 4px 7px 7px 9px;
+}
+
+.agent-composer-controls {
+  min-width: 0;
+  flex-wrap: nowrap;
+  gap: 2px;
+  overflow: visible;
+}
+
+.agent-control-divider {
+  width: 1px;
+  height: 14px;
+  flex: 0 0 1px;
+  margin: 0 2px;
+  background: #e3e5e5;
+}
+
+.agent-composer-controls .agent-mode-trigger,
+.agent-composer-controls .agent-tool-button,
+.agent-composer-controls .agent-control-trigger {
+  height: 27px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+}
+
+.agent-composer-controls .agent-mode-trigger {
+  padding: 0 5px;
+  font-size: 9px;
+}
+
+.agent-composer-controls .agent-mode-trigger:not(.open):not(:hover),
+.agent-composer-controls .agent-mode-trigger.team:not(.active):not(.open):not(:hover) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.agent-composer-controls .agent-tool-button:not(.icon-only) {
+  width: 27px;
+  padding: 0;
+}
+
+.agent-composer-controls .agent-control-trigger.model {
+  min-width: 58px;
+  max-width: 118px;
+  flex: 0 1 118px;
+  gap: 5px;
+  padding: 0 4px;
+  color: #404548;
+  background: transparent;
+  border-color: transparent;
+}
+
+.agent-composer-controls .agent-control-trigger.reasoning {
+  max-width: 48px;
+  padding: 0 3px;
+  color: #989da0;
+  background: transparent;
+  border-color: transparent;
+}
+
+.agent-composer-controls .agent-control-trigger.model:hover:not(:disabled),
+.agent-composer-controls .agent-control-trigger.model.open,
+.agent-composer-controls .agent-control-trigger.reasoning:hover:not(:disabled),
+.agent-composer-controls .agent-control-trigger.reasoning.open {
+  color: #24292c;
+  background: #f3f4f4;
+  border-color: transparent;
+}
+
+.agent-model-glyph {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  color: #303638;
+}
+
+.agent-model-glyph img {
+  width: 13px;
+  height: 13px;
+  display: block;
+  object-fit: contain;
+}
+
+.agent-composer-controls .agent-tool-button.icon-only {
+  width: 27px;
+  flex-basis: 27px;
+}
+
+.agent-composer-actions {
+  align-self: flex-end;
+}
+
+.assistant-form.agent-composer .assistant-send {
+  width: 29px;
+  height: 29px;
+  color: #fff;
+  background: #858b8e;
+  box-shadow: none;
+  transition: background .15s ease, opacity .15s ease, transform .15s ease;
+}
+
+.assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
+  background: #565d60;
+  transform: translateY(-1px);
+}
+
+.assistant-form.agent-composer .assistant-send:disabled {
+  color: #fff;
+  background: #a7abad;
+  opacity: .56;
+}
+
+@container (max-width: 400px) {
+  .agent-control-divider {
+    display: none;
+  }
+
+  .agent-composer-controls .agent-mode-trigger.team > svg:last-child {
+    display: none;
+  }
+
+  .agent-composer-controls .agent-mode-trigger {
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .agent-composer-controls .agent-control-trigger.model {
+    min-width: 58px;
+    max-width: 118px;
+    flex-basis: 118px;
+  }
+
+  .agent-composer-controls .agent-control-trigger.reasoning {
+    max-width: 42px;
+    padding-right: 2px;
+    padding-left: 2px;
+  }
+}
+
+@media (max-width: 760px) {
+  .editor-page .agent-composer-wrap {
+    padding: 8px 10px max(10px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .editor-page .assistant-form.agent-composer {
+    min-height: 116px;
+  }
+
+  .editor-page .assistant-form.agent-composer textarea {
+    min-height: 69px;
+    max-height: 144px;
+    padding: 12px 12px 7px;
+  }
+
+  .editor-page .agent-composer-controls {
+    gap: 1px;
+  }
+}
