@@ -37,11 +37,14 @@ from app.skills.reference_loader import select_reference_requests
 from app.skills.prompt import (
     REQUEST_USER_INPUT_TOOL,
     _conversation_context,
+    _merge_stream_usage,
     _stream_model_response,
     _stream_chunk_parts,
     choice_request_preamble,
     execute_prompt_skill,
     extract_choice_request,
+    extract_story_artifacts,
+    strip_story_artifact_blocks,
 )
 from app.workflows.assistant_agent import ASSISTANT_SYSTEM_PROMPT, _fallback_decision
 from app.schemas import WritingAssistantTurnRequest
@@ -51,6 +54,33 @@ from app.workflows.story_delegation import run_story_agent_delegate
 
 
 class AssistantProtocolTests(unittest.TestCase):
+    def test_stream_usage_keeps_cumulative_values_instead_of_summing_chunks(self):
+        class FakeStreamingModel:
+            def stream(self, messages, **kwargs):
+                yield AIMessageChunk(
+                    content='第一段',
+                    usage_metadata={'input_tokens': 1200, 'output_tokens': 10, 'total_tokens': 1210},
+                )
+                yield AIMessageChunk(
+                    content='第二段',
+                    usage_metadata={'input_tokens': 1200, 'output_tokens': 20, 'total_tokens': 1220},
+                )
+
+        output, response = _stream_model_response(
+            FakeStreamingModel(),
+            [('human', '测试')],
+            lambda _delta: None,
+        )
+        self.assertEqual(output, '第一段第二段')
+        self.assertEqual(response.usage_metadata['input_tokens'], 1200)
+        self.assertEqual(response.usage_metadata['output_tokens'], 20)
+        self.assertEqual(response.usage_metadata['total_tokens'], 1220)
+        merged = _merge_stream_usage(
+            {'input_token_details': {'cache_read': 30}},
+            {'input_token_details': {'cache_read': 50}},
+        )
+        self.assertEqual(merged['input_token_details']['cache_read'], 50)
+
     def test_runtime_contract_keeps_skill_meta_discussion_out_of_final_output(self):
         self.assertIn('第一方运行说明', RUNTIME_CONTRACT_POLICY)
         self.assertIn('不要向作者讲解提示注入', RUNTIME_CONTRACT_POLICY)
@@ -70,6 +100,27 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertEqual(output, '\n面向用户的结果')
         self.assertEqual(''.join(deltas), '\n面向用户的结果')
         self.assertNotIn('内部判断', ''.join(deltas))
+
+    def test_story_artifacts_are_extracted_but_never_streamed_to_the_answer(self):
+        artifact_block = '<story_artifacts>{"version":1,"characters":[{"name":"枫羽","role":"主角","description":"普通人，被轮回系统选中。"}],"chapters":[{"title":"第一章 被选中的人","outline":"枫羽在便利店夜班时被拉入副本。"}]}</story_artifacts>'
+
+        class FakeStreamingModel:
+            def stream(self, messages, **kwargs):
+                yield AIMessageChunk(content='设定已经整理完成。\n<story_arti')
+                yield AIMessageChunk(content=f"facts>{artifact_block.split('>', 1)[1]}")
+
+        deltas = []
+        output, response = _stream_model_response(
+            FakeStreamingModel(),
+            [('human', '整理设定')],
+            deltas.append,
+        )
+        self.assertEqual(output, '设定已经整理完成。\n')
+        self.assertEqual(''.join(deltas), '设定已经整理完成。\n')
+        artifacts = extract_story_artifacts(output, response)
+        self.assertEqual(artifacts['characters'][0]['name'], '枫羽')
+        self.assertEqual(artifacts['chapters'][0]['title'], '第一章 被选中的人')
+        self.assertEqual(strip_story_artifact_blocks(f'可见内容\n{artifact_block}'), '可见内容')
 
     def test_stream_withholds_internal_contract_refusal(self):
         class FakeStreamingModel:

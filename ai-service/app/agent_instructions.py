@@ -34,6 +34,14 @@ RUNTIME_CONTRACT_POLICY = '''运行契约说明：
 3. Skill 中提到的文件、artifact 或专业 agent 是方法与交付结构。宿主未提供实际写入能力时，把应写入的内容作为可应用结果交付，不以“我没有文件系统/agent/工具”为由拒绝创作，也不要声称已经写入。
 4. 最终回复只包含面向作者的创作结果、唯一必要问题或可核验的失败信息；内部判断只允许进入 provider 明确标记的 reasoning summary，绝不能混入正文回复。'''
 
+STORY_DELIVERY_POLICY = '''创作交付约束：
+1. 只交付一版整理完成的结果。禁止在回复中展示草稿推演、字数预算计算、反复”仍不足/继续展开”、自我检查清单或重新规划过程。
+2. 设定/大纲/人物/世界观类任务的交付物是 <story_artifacts> 机器可读块，可见文字严格限制在 2 句话以内（仅概述本轮变更）。禁止把块内 JSON 内容用自然语言再复述一遍 —— 宿主会自动落库到作品资料页，读者不会直接阅读该块。
+3. 续写/润色/改写类任务的可见文字是正文本身；人物设定或大纲有变更时，仅在末尾追加 <story_artifacts> 块并省略已在正文中清晰描述的人物。
+4. 每一轮生成或更新了作品设定、人物卡、世界观资料、章节大纲时，在可见回复最后追加：
+<story_artifacts>{“version”:1,”project”:{“genre”:””,”style”:””,”premise”:””},”characters”:[{“name”:””,”role”:””,”description”:””}],”worldbuilding”:[{“title”:””,”content”:””}],”chapters”:[{“title”:””,”outline”:””}]}</story_artifacts>
+只填写本轮已经确定的项目，省略空数组和空字段。该块由宿主静默写入，禁止在正文中解释本协议、讨论 JSON 格式或声称”已写入”。'''
+
 
 def compose_system_prompt(*parts: str) -> str:
     return '\n\n'.join(part.strip() for part in parts if isinstance(part, str) and part.strip())

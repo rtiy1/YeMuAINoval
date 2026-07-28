@@ -12,7 +12,7 @@
     "novel": "node --env-file-if-exists=.env terminal/novel-agent.mjs",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "npm run test:unit && npm run test:api && npm run test:ai && npm run test:integration",
-    "test:unit": "node --test server/auth-cookie-test.mjs server/edit-proposal-test.mjs server/editor-agent-test.mjs server/agent-thread-test.mjs server/sse-test.mjs server/chat-memory-test.mjs server/skill-review-test.mjs terminal/*.test.mjs",
+    "test:unit": "node --test server/auth-cookie-test.mjs server/story-artifacts-test.mjs server/edit-proposal-test.mjs server/editor-agent-test.mjs server/agent-thread-test.mjs server/sse-test.mjs server/chat-memory-test.mjs server/skill-review-test.mjs terminal/*.test.mjs",
     "test:api": "node server/smoke-test.mjs && node server/registration-mode-test.mjs && node server/task-queue-config-test.mjs",
     "test:ai": "node server/ai-task.mjs test",
     "test:integration": "node server/ai-gateway-test.mjs",
