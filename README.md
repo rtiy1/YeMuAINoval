@@ -122,7 +122,7 @@ sudo sysctl -w vm.overcommit_memory=1
 
 Web API 默认只绑定宿主机 `127.0.0.1:8787`。Android 客户端只调用这个 HTTP API，不直接连接 PostgreSQL。Redis 同时持久化夜雨聊天记忆（AOF）和 AI Stream 任务，独立 worker 负责执行任务。
 
-生产环境应在 app 前配置 HTTPS 反向代理，并把 `WEB_ORIGIN` 与 `APP_PUBLIC_URL` 设置为实际站点地址。刷新令牌 Cookie 在生产模式带 `Secure`，不应直接把明文 HTTP 端口暴露到公网。Compose 默认按一层代理设置 `TRUST_PROXY=1`；若确实需要改变监听地址，可设置 `APP_BIND`。
+生产环境应在 app 前配置 HTTPS 反向代理，并把 `WEB_ORIGIN` 与 `APP_PUBLIC_URL` 设置为实际站点地址。刷新令牌 Cookie 默认按请求协议自动设置 `Secure`：HTTPS 会启用，直接 HTTP 部署也能恢复会话，但不应把明文 HTTP 端口暴露到公网。Compose 默认按一层代理设置 `TRUST_PROXY=1`；若确实需要改变监听地址，可设置 `APP_BIND`。
 
 > **📌 注意事项**
 >
@@ -198,6 +198,8 @@ npm run test:postgres
 | `APP_PUBLIC_URL` | 生产 ✅ | 邮件中密码重置链接使用的 HTTPS 站点地址 |
 | `ACCESS_TOKEN_TTL_MINUTES` | — | 访问令牌有效期，默认 60 分钟 |
 | `REFRESH_SESSION_DAYS` | — | 可滚动续期的登录会话有效期，默认 90 天 |
+| `REFRESH_COOKIE_SECURE` | — | `auto` / `true` / `false`，默认按实际请求协议决定 |
+| `REFRESH_COOKIE_SAME_SITE` | — | `lax` / `strict` / `none`，跨站前后端需 HTTPS 并设为 `none` |
 | `EMAIL_PROVIDER` | 开放注册时 ✅ | `resend`；本地可用 `console` 查看验证码和重置链接 |
 | `RESEND_API_KEY` | Resend ✅ | Resend 服务端 API Key |
 | `EMAIL_FROM` | Resend ✅ | 已验证域名的发件人地址 |

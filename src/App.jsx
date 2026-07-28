@@ -2347,6 +2347,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       setAgentModel(settings?.model || '')
       setAgentReasoningEffort(settings?.reasoningEffort || '')
       setAgentContextWindow(Math.max(100, Number(settings?.contextWindow) || 100000))
+      setAgentModels(Array.isArray(settings?.availableModels) ? settings.availableModels : [])
     }
     api.getSettings()
       .then(({ settings }) => applyAgentSettings(settings))
@@ -5008,8 +5009,31 @@ function SettingsModal({ onClose, onNotify }) {
       const response = await api.updateSettings(form)
       setSettings(response.settings)
       setForm((current) => ({ ...current, apiKey: '' }))
-      window.dispatchEvent(new CustomEvent('story:model-settings-updated', { detail: response.settings }))
-      onNotify('设置已保存')
+      let availableModels = []
+      let modelRefreshError = null
+      if (response.settings?.apiKeyMask) {
+        try {
+          const modelResponse = await api.getModels()
+          availableModels = modelResponse.models || []
+          setModelList(availableModels)
+          setConnectionStatus('connected')
+        } catch (error) {
+          modelRefreshError = error
+          setModelList([])
+          setConnectionStatus('error')
+        }
+      } else {
+        setModelList([])
+        setConnectionStatus('idle')
+      }
+      window.dispatchEvent(new CustomEvent('story:model-settings-updated', {
+        detail: { ...response.settings, availableModels },
+      }))
+      onNotify(modelRefreshError
+        ? `设置已保存，但模型列表刷新失败：${modelRefreshError.message}`
+        : availableModels.length
+          ? `设置已保存 · 已刷新 ${availableModels.length} 个模型`
+          : '设置已保存')
     } catch (error) {
       onNotify(error.message)
     } finally {
@@ -5039,7 +5063,10 @@ function SettingsModal({ onClose, onNotify }) {
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }))
-    if (['provider', 'apiBaseUrl', 'apiKey'].includes(field)) setConnectionStatus('idle')
+    if (['provider', 'apiBaseUrl', 'apiKey'].includes(field)) {
+      setConnectionStatus('idle')
+      setModelList([])
+    }
   }
 
   const apiKeyPlaceholder = settings?.apiKeyMask ? `已配置 ${settings.apiKeyMask}，留空不修改` : '输入 API Key'

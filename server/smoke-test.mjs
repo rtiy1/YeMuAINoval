@@ -12,6 +12,17 @@ const delegateRequests = []
 let activeDelegates = 0
 let maxActiveDelegates = 0
 const aiServer = http.createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url === '/models') {
+    assert.equal(req.headers.authorization, 'Bearer smoke-model-key')
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+      object: 'list',
+      data: [
+        { id: 'deepseek-v4-flash', object: 'model' },
+        { id: 'deepseek-v4-pro', object: 'model' },
+      ],
+    }))
+    return
+  }
   if (req.method === 'GET' && req.url === '/v1/skills') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
       skills: [
@@ -440,7 +451,6 @@ try {
   for (let attempt = 0; attempt < 35; attempt += 1) {
     assert.equal((await call('GET', '/api/ai/usage')).response.status, 200, 'read-only polling must not consume the AI request rate limit')
   }
-
   const seededProjects = await call('GET', '/api/projects')
   assert.equal(seededProjects.payload.projects.length, 1)
   assert.equal(seededProjects.payload.projects[0].title, '我的第一本书')
@@ -668,6 +678,17 @@ try {
   assert.equal(completedRequest.model_config.allow_server_fallback, false)
   assert.equal(completedRequest.model_config.api_key, undefined)
   assert.deepEqual(completedRequest.payload.conversation, [])
+  const savedModelSettings = await call('PUT', '/api/settings', {
+    provider: 'openai',
+    apiBaseUrl: aiServiceUrl,
+    apiKey: 'smoke-model-key',
+    model: 'deepseek-v4-flash',
+  })
+  assert.equal(savedModelSettings.response.status, 200)
+  assert.match(savedModelSettings.payload.settings.apiKeyMask, /^smo/)
+  const refreshedModels = await call('POST', '/api/ai/models', {})
+  assert.equal(refreshedModels.response.status, 200)
+  assert.deepEqual(refreshedModels.payload.models, ['deepseek-v4-flash', 'deepseek-v4-pro'])
 
   const persistedThread = await call('GET', `/api/ai/threads/${agentThread.payload.thread.id}`)
   assert.equal(persistedThread.payload.thread.turns.length, 1)
