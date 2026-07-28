@@ -25,6 +25,7 @@ import {
   verifyEmailVerificationCode,
   verifyPassword,
 } from './auth.mjs'
+import { refreshCookieOptions } from './auth-cookie.mjs'
 import { emailConfig, sendPasswordResetEmail, sendRegistrationVerificationEmail } from './email.mjs'
 import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 import * as chatMemory from './chat-memory.mjs'
@@ -761,18 +762,12 @@ function publicSkillMarketItem(item, userId, author = null, installs = []) {
   }
 }
 
-function setRefreshCookie(res, token) {
-  res.cookie(refreshCookie.name, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/api/auth',
-    maxAge: refreshCookie.maxAge,
-  })
+function setRefreshCookie(res, token, req) {
+  res.cookie(refreshCookie.name, token, refreshCookieOptions(req, { maxAge: refreshCookie.maxAge }))
 }
 
-function clearRefreshCookie(res) {
-  res.clearCookie(refreshCookie.name, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/api/auth' })
+function clearRefreshCookie(res, req) {
+  res.clearCookie(refreshCookie.name, refreshCookieOptions(req))
 }
 
 async function issueSession(user, req, res) {
@@ -782,7 +777,7 @@ async function issueSession(user, req, res) {
     db.sessions = db.sessions.filter((session) => new Date(session.expiresAt) > new Date())
     db.sessions.push(refresh.session)
   })
-  setRefreshCookie(res, refresh.token)
+  setRefreshCookie(res, refresh.token, req)
   return { accessToken, user: publicUser(user) }
 }
 
@@ -1009,7 +1004,7 @@ app.post('/api/auth/password/reset', async (req, res, next) => {
       db.sessions = db.sessions.filter((session) => session.userId !== user.id)
       db.passwordResetTokens = db.passwordResetTokens.filter((item) => item.userId !== user.id)
     })
-    clearRefreshCookie(res)
+    clearRefreshCookie(res, req)
     res.json({ message: '密码已更新，请使用新密码登录。' })
   } catch (error) {
     next(error)
@@ -1032,10 +1027,10 @@ app.post('/api/auth/refresh', async (req, res, next) => {
       db.sessions.push(nextSession.session)
       return { user, token: nextSession.token }
     })
-    setRefreshCookie(res, result.token)
+    setRefreshCookie(res, result.token, req)
     res.json({ accessToken: await createAccessToken(result.user), user: publicUser(result.user) })
   } catch (error) {
-    clearRefreshCookie(res)
+    clearRefreshCookie(res, req)
     next(error)
   }
 })
@@ -1047,7 +1042,7 @@ app.post('/api/auth/logout', async (req, res, next) => {
       const tokenHash = hashRefreshToken(rawToken)
       await updateDb((db) => { db.sessions = db.sessions.filter((session) => session.tokenHash !== tokenHash) })
     }
-    clearRefreshCookie(res)
+    clearRefreshCookie(res, req)
     res.status(204).end()
   } catch (error) {
     next(error)
