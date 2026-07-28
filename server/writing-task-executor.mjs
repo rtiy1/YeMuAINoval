@@ -103,9 +103,9 @@ export async function executeWritingTask(taskId, { userId = null, controller = n
         meta: { selectedSkill: result.selected_skill || task.skill || null, route: result.route || '', references: references.length, checks: checks.length },
       })
       appendEvent(task, 'result', '生成可审阅结果', 'completed', { status: result.status })
-      task.status = 'completed'
+      task.status = result.status === 'needs_input' ? 'waiting_input' : 'completed'
       task.progress = 100
-      task.statusMessage = 'AI Skill 执行完成'
+      task.statusMessage = result.status === 'needs_input' ? '等待用户回答' : 'AI Skill 执行完成'
       task.partialOutput = partialOutput || task.partialOutput || ''
       task.reasoningSummary = reasoningSummary || task.reasoningSummary || ''
       task.result = result

@@ -108,6 +108,29 @@ test('editor agent renders structured blocking questions returned by skills', ()
   assert.equal(parsed.options[0].description, '强调规则推理')
 })
 
+test('editor agent keeps one question when a model packs multiple questions', () => {
+  const parsed = normalizeStructuredAgentQuestion({
+    question: '副本核心体验选哪一种？主角是否带记忆？',
+    options: [
+      { label: '规则怪谈', value: '规则怪谈' },
+      { label: '生存闯关', value: '生存闯关' },
+    ],
+  })
+  assert.equal(parsed.question, '副本核心体验选哪一种？')
+})
+
+test('editor agent preserves a structured multi-question queue', () => {
+  const parsed = normalizeStructuredAgentQuestion({
+    questions: [
+      { id: 'genre', header: '题材', question: '选择题材？', isOther: true, options: [{ label: '无限流' }, { label: '玄幻' }] },
+      { id: 'tone', header: '体验', question: '选择体验？', isOther: true, options: [{ label: '智斗' }, { label: '成长' }] },
+    ],
+  })
+  assert.equal(parsed.questions.length, 2)
+  assert.equal(parsed.questions[1].id, 'tone')
+  assert.equal(parsed.questions[1].header, '体验')
+})
+
 test('editor agent formats durations and aborts polling', async () => {
   assert.equal(formatAgentDuration(1500), '1.5 秒')
   assert.equal(formatAgentDuration(65_000), '1 分 5 秒')

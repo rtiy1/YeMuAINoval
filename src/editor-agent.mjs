@@ -41,6 +41,12 @@ function cleanAgentChoiceText(value) {
     .trim()
 }
 
+function firstChoiceQuestion(value) {
+  const question = cleanAgentChoiceText(value)
+  const marks = [question.indexOf('？'), question.indexOf('?')].filter((index) => index >= 0)
+  return marks.length ? question.slice(0, Math.min(...marks) + 1).trim() : question
+}
+
 function markdownTableCells(line, preserveDelimiter = false) {
   const value = String(line || '').trim()
   if (!value.includes('|')) return null
@@ -98,7 +104,7 @@ function parseMarkdownTableChoices(lines) {
     const questionStart = questionIndex >= 0 ? questionIndex : delimiterIndex - 2
     return {
       intro: cleanAgentChoiceText(lines.slice(0, questionStart).join('\n')),
-      question: cleanAgentChoiceText(lines[questionStart]) || '请选择一个方向继续',
+      question: firstChoiceQuestion(lines[questionStart]) || '请选择一个方向继续',
       hint: cleanAgentChoiceText(lines.slice(tableEndIndex + 1).join('\n')),
       options,
     }
@@ -133,7 +139,7 @@ export function parseAgentChoicePrompt(value) {
   const questionStart = headingIndex >= 0 ? headingIndex + 1 : Math.max(0, firstOptionIndex - 1)
   const introEnd = headingIndex >= 0 ? headingIndex : questionStart
   const intro = cleanAgentChoiceText(lines.slice(0, introEnd).join('\n'))
-  const question = cleanAgentChoiceText(lines.slice(questionStart, firstOptionIndex).join('\n')) || '请选择一个方向继续'
+  const question = firstChoiceQuestion(lines.slice(questionStart, firstOptionIndex).join('\n')) || '请选择一个方向继续'
   const hint = cleanAgentChoiceText(lines.slice(lastOptionIndex + 1).join('\n'))
 
   return {
@@ -145,21 +151,27 @@ export function parseAgentChoicePrompt(value) {
 }
 
 export function normalizeStructuredAgentQuestion(value) {
-  const question = cleanAgentChoiceText(value?.question)
-  if (!question || !Array.isArray(value?.options) || value.options.length < 2) return null
-  const options = value.options.slice(0, 6).map((option, index) => {
-    const key = cleanAgentChoiceText(option?.key) || String.fromCharCode(65 + index)
-    const label = cleanAgentChoiceText(option?.label || option?.value)
-    const replyValue = cleanAgentChoiceText(option?.value || label)
+  const rawQuestions = Array.isArray(value?.questions) ? value.questions : [value]
+  const questions = rawQuestions.slice(0, 3).map((item, questionIndex) => {
+    const question = firstChoiceQuestion(item?.question)
+    if (!question || !Array.isArray(item?.options)) return null
+    const options = item.options.slice(0, 6).map((option, index) => {
+      const key = cleanAgentChoiceText(option?.key) || String.fromCharCode(65 + index)
+      const label = cleanAgentChoiceText(option?.label || option?.value)
+      const replyValue = cleanAgentChoiceText(option?.value || label)
+      return { key, label, description: cleanAgentChoiceText(option?.description), reply: `${key}：${replyValue}` }
+    }).filter((option) => option.label)
+    if (options.length < 2) return null
     return {
-      key,
-      label,
-      description: cleanAgentChoiceText(option?.description),
-      reply: `${key}：${replyValue}`,
+      id: cleanAgentChoiceText(item?.id) || `question_${questionIndex + 1}`,
+      header: cleanAgentChoiceText(item?.header),
+      question,
+      isOther: item?.isOther !== false,
+      options,
     }
-  }).filter((option) => option.label)
-  if (options.length < 2) return null
-  return { intro: '', question, hint: '', options }
+  }).filter(Boolean)
+  if (!questions.length) return null
+  return { intro: '', question: questions[0].question, hint: '', options: questions[0].options, questions }
 }
 
 export function resolveEditorAgentCommand(rawMessage, project) {
@@ -195,7 +207,7 @@ export function agentTurnEvents(turn) {
     .map((item) => ({
       id: item.id,
       type: item.type === 'dynamicToolCall' ? 'skill' : 'lifecycle',
-      label: item.summary || item.tool || 'Agent 正在处理',
+      label: item.type === 'requestUserInput' ? '等待你的回答' : item.summary || item.tool || 'Agent 正在处理',
       status: item.status === 'inProgress' ? 'running' : item.status === 'interrupted' ? 'cancelled' : item.status,
       meta: item.meta || {},
       startedAt: item.createdAt || null,

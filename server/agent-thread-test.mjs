@@ -148,6 +148,25 @@ test('plan collaboration turns expose a plan item without a fake progress checkl
   assert.equal(output.source.mode, 'plan')
 })
 
+test('choice turns expose a structured request-user-input item', () => {
+  const items = agentTurnItems(
+    { id: 'turn-choice', taskId: 'task-choice', message: '开一本小说' },
+    {
+      id: 'task-choice',
+      status: 'completed',
+      result: {
+        status: 'needs_input',
+        result: {
+          question: {
+            questions: [{ id: 'genre', header: '题材', question: '选题材？', isOther: true, options: [{ label: '无限流' }, { label: '玄幻' }] }],
+          },
+        },
+      },
+    },
+  )
+  assert.equal(items.find((item) => item.type === 'requestUserInput')?.status, 'inProgress')
+})
+
 test('thread public response restores task source without exposing raw input', () => {
   const thread = {
     id: 'thread-1',

@@ -162,6 +162,7 @@ export const api = {
   createAgentThread: (projectId, chapterId) => request('/ai/threads', { method: 'POST', body: JSON.stringify({ projectId, chapterId }) }),
   archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
   createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
+  answerAgentTurn: (threadId, turnId, answers, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/input`, { method: 'POST', body: JSON.stringify({ answers }), signal: options.signal }),
   getAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { signal: options.signal }),
   streamAgentTurn: (threadId, turnId, options = {}) => streamRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`, options),
   interruptAgentTurn: (threadId, turnId) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/interrupt`, { method: 'POST' }),

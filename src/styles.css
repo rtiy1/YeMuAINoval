@@ -635,6 +635,11 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .agent-choice-options button:hover:not(:disabled) .agent-choice-copy small, .agent-choice-options button.selected .agent-choice-copy small { color: #648077; }
 .agent-choice-options button > svg { color: #a0a5a1; }
 .agent-choice-options button.selected > svg { color: #4d7b6e; }
+.agent-choice-custom { display: flex; gap: 6px; padding: 0 5px 6px; }
+.agent-choice-custom input { min-width: 0; flex: 1; height: 31px; padding: 0 9px; color: #3f4742; background: #fff; border: 1px solid #cbd8d2; border-radius: 6px; font-size: 10px; }
+.agent-choice-custom input:focus { outline: 2px solid rgba(68, 116, 101, .18); border-color: #7fa997; }
+.agent-choice-custom button { min-width: 48px; padding: 0 10px; color: #fff; background: #4d7b6e; border-radius: 6px; font-size: 10px; }
+.agent-choice-custom button:disabled { cursor: default; opacity: .45; }
 .agent-choice-hint { display: block; padding: 3px 10px 9px; color: #909590; font-size: 8px; line-height: 1.5; }
 .agent-finding-list { display: flex; flex-direction: column; border-top: 1px solid #e1ded8; }
 .agent-finding-list > div { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid #e1ded8; }
@@ -812,6 +817,10 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .assistant-plan-question button:hover { color: #2f6b5f; border-color: #a9c5bb; background: #edf5f1; }
 .assistant-plan-question button strong { font-size: 12px; font-weight: 650; }
 .assistant-plan-question button small { color: #8b9189; font-size: 10px; }
+.assistant-plan-custom { display: flex; gap: 7px; margin-top: 9px; }
+.assistant-plan-custom input { min-width: 0; flex: 1; height: 34px; padding: 0 10px; color: #4e5951; background: #fffdfa; border: 1px solid #c9d3ca; border-radius: 8px; font-size: 11px; }
+.assistant-plan-custom button { min-width: 54px; justify-content: center; align-items: center; color: #fff; background: #4d7b6e; border-color: #4d7b6e; }
+.assistant-plan-custom button:disabled { cursor: default; opacity: .45; }
 .assistant-composer-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px; }
 .composer-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; color: #858b84; background: #efece4; border: 1px solid #e0dcd3; border-radius: 999px; font-size: 10px; transition: .18s ease; }
 .composer-toggle:hover { color: #5a605a; background: #e7e3da; }
