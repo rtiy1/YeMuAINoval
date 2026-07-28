@@ -162,8 +162,18 @@ export const api = {
   getAiUsage: () => request('/ai/usage'),
   runStoryAgent: (input, options = {}) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAgentThread: (projectId, chapterId) => request(`/ai/threads?projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(chapterId)}`),
+  getAgentThreads: ({ projectId = '', includeArchived = true, q = '' } = {}) => {
+    const query = new URLSearchParams()
+    if (projectId) query.set('projectId', projectId)
+    if (includeArchived) query.set('includeArchived', 'true')
+    if (q) query.set('q', q)
+    return request(`/ai/threads${query.size ? `?${query}` : ''}`)
+  },
+  getAgentThreadById: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`),
   createAgentThread: (projectId, chapterId) => request('/ai/threads', { method: 'POST', body: JSON.stringify({ projectId, chapterId }) }),
+  updateAgentThread: (threadId, updates) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'PATCH', body: JSON.stringify(updates) }),
   archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
+  resumeAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' }),
   createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   answerAgentTurn: (threadId, turnId, answers, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/input`, { method: 'POST', body: JSON.stringify({ answers }), signal: options.signal }),
   regenerateAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/regenerate`, { method: 'POST', signal: options.signal }),
@@ -174,6 +184,7 @@ export const api = {
   createAiTask: (input, options = {}) => request('/ai/tasks', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAiTasks: (projectId = '') => request(`/ai/tasks${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   getAiTask: (taskId, options = {}) => request(`/ai/tasks/${encodeURIComponent(taskId)}`, { signal: options.signal }),
+  applyAiTaskArtifacts: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}/artifacts/apply`, { method: 'POST' }),
   retryAiTask: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}/retry`, { method: 'POST' }),
   cancelAiTask: (taskId) => request(`/ai/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }),
   getWritingContext: (projectId, chapterId) => request(`/projects/${encodeURIComponent(projectId)}/chapters/${encodeURIComponent(chapterId)}/context`),

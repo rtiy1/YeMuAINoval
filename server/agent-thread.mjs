@@ -231,6 +231,8 @@ export function normalizeAgentThreads(db) {
     .map((thread) => ({
       ...thread,
       chapterId: thread.chapterId == null ? null : String(thread.chapterId),
+      title: text(thread.title).slice(0, 120),
+      isFavorited: thread.isFavorited === true,
       status: thread.status === 'archived' ? 'archived' : 'active',
       contextSummary: text(thread.contextSummary),
       compactedTurnIds: Array.isArray(thread.compactedTurnIds) ? [...new Set(thread.compactedTurnIds.filter(Boolean).map(String))].slice(-40) : [],
@@ -385,7 +387,13 @@ export function taskSource(task) {
     selectionStart: Number(payload.selection_start ?? payload.selectionStart) || 0,
     selectionEnd: Number(payload.selection_end ?? payload.selectionEnd) || 0,
     attachedFiles: Array.isArray(payload.attached_files)
-      ? payload.attached_files.slice(0, 12).map((item) => ({ name: text(item?.name), kind: text(item?.kind) })).filter((item) => item.name)
+      ? payload.attached_files.slice(0, 12).map((item) => ({
+        name: text(item?.name),
+        kind: text(item?.kind),
+        ...(item?.reference && typeof item.reference === 'object'
+          ? { reference: { type: text(item.reference.type), id: text(item.reference.id) } }
+          : {}),
+      })).filter((item) => item.name)
       : [],
   }
 }
@@ -572,10 +580,16 @@ export function agentThreadPublic(thread, tasks, taskPublic) {
     .filter((task) => !thread?.userId || task?.userId === thread.userId)
     .map((task) => [task.id, task]))
   const turns = (thread.turns || []).map((turn) => agentTurnPublic(thread, turn, taskMap.get(turn.taskId), taskPublic))
+  const fallbackTitle = text(thread.turns?.[0]?.message).replace(/\s+/g, ' ').slice(0, 60)
+  const latestMessage = text(thread.turns?.at(-1)?.message).replace(/\s+/g, ' ').slice(0, 160)
   return {
     id: thread.id,
     projectId: thread.projectId,
     chapterId: thread.chapterId,
+    title: text(thread.title) || fallbackTitle || '新会话',
+    isFavorited: thread.isFavorited === true,
+    latestMessage,
+    turnCount: turns.length,
     status: thread.status,
     contextSummary: thread.contextSummary || '',
     compactedTurnCount: Math.max(0, Number(thread.compactedTurnCount) || 0),

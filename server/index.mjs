@@ -33,6 +33,7 @@ import { invokeStoryAgent } from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
+import { applyStoryArtifacts } from './story-artifacts.mjs'
 import {
   agentThreadPublic,
   agentTurnPublic,
@@ -1256,6 +1257,7 @@ function writingTaskPublic(task) {
     })) : [],
     inputHistory: taskInputHistory(task), error: task.error || null,
     artifactApplication: task.artifactApplication?.applied === true ? task.artifactApplication : null,
+    artifactPreview: task.pendingArtifacts && task.artifactPreview ? task.artifactPreview : null,
     errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
     parentTaskId: task.parentTaskId || null, reused: task.reused === true,
     threadId: task.threadId || null, turnId: task.turnId || null,
@@ -1285,6 +1287,7 @@ function appendAgentTurn(thread, task, input) {
   task.turnId = turn.id
   thread.turns.push(turn)
   thread.turns = thread.turns.slice(-40)
+  if (!thread.title) thread.title = String(input.message || '').replace(/\s+/g, ' ').trim().slice(0, 60)
   thread.updatedAt = timestamp
   return turn
 }
@@ -2095,18 +2098,23 @@ app.get('/api/ai/threads', async (req, res, next) => {
   try {
     const projectId = cleanOptionalText(req.query.projectId, '作品 ID', 120)
     const chapterId = cleanOptionalText(req.query.chapterId, '章节 ID', 120)
+    const query = cleanOptionalText(req.query.q, '搜索关键词', 120).toLowerCase()
     const db = await loadDb()
-    if (!projectId && !chapterId) {
+    if (!chapterId) {
       const includeArchived = req.query.includeArchived === 'true'
       const threads = db.agentThreads
-        .filter((item) => item.userId === req.user.id && (includeArchived || item.status === 'active'))
-        .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-        .slice(0, 50)
+        .filter((item) => item.userId === req.user.id
+          && (!projectId || item.projectId === projectId)
+          && (includeArchived || item.status === 'active'))
         .map((thread) => agentThreadPublic(thread, db.writingTasks, writingTaskPublic))
+        .filter((thread) => !query || `${thread.title} ${thread.latestMessage}`.toLowerCase().includes(query))
+        .sort((left, right) => Number(right.isFavorited) - Number(left.isFavorited)
+          || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
+        .slice(0, 50)
       res.json({ threads })
       return
     }
-    if (!projectId || !chapterId) throw Object.assign(new Error('作品 ID 和章节 ID 必须同时提供'), { status: 400 })
+    if (!projectId) throw Object.assign(new Error('查询章节会话时必须提供作品 ID'), { status: 400 })
     const project = findOr404(db, projectId, req.user.id)
     chapterOr404(db, project, chapterId)
     const thread = db.agentThreads
@@ -2145,6 +2153,8 @@ app.post('/api/ai/threads', async (req, res, next) => {
         userId: req.user.id,
         projectId,
         chapterId: String(chapterId),
+        title: '',
+        isFavorited: false,
         status: 'active',
         turns: [],
         createdAt: timestamp,
@@ -2170,6 +2180,22 @@ app.get('/api/ai/threads/:threadId', async (req, res, next) => {
   }
 })
 
+app.patch('/api/ai/threads/:threadId', async (req, res, next) => {
+  try {
+    const thread = await updateDb((db) => {
+      const current = findAgentThread(db, req.params.threadId, req.user.id)
+      if (req.body?.title !== undefined) current.title = cleanText(req.body.title, '会话标题', 120)
+      if (req.body?.isFavorited !== undefined) current.isFavorited = req.body.isFavorited === true
+      current.updatedAt = new Date().toISOString()
+      return current
+    })
+    const db = await loadDb()
+    res.json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.delete('/api/ai/threads/:threadId', async (req, res, next) => {
   try {
     await updateDb((db) => {
@@ -2185,8 +2211,24 @@ app.delete('/api/ai/threads/:threadId', async (req, res, next) => {
 
 app.post('/api/ai/threads/:threadId/resume', async (req, res, next) => {
   try {
+    const thread = await updateDb((db) => {
+      const current = findAgentThread(db, req.params.threadId, req.user.id)
+      const timestamp = new Date().toISOString()
+      for (const candidate of db.agentThreads) {
+        if (candidate.id !== current.id
+          && candidate.userId === current.userId
+          && candidate.projectId === current.projectId
+          && String(candidate.chapterId) === String(current.chapterId)
+          && candidate.status === 'active') {
+          candidate.status = 'archived'
+          candidate.updatedAt = timestamp
+        }
+      }
+      current.status = 'active'
+      current.updatedAt = timestamp
+      return current
+    })
     const db = await loadDb()
-    const thread = findAgentThread(db, req.params.threadId, req.user.id, { active: true })
     res.json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic) })
   } catch (error) {
     next(error)
@@ -2583,6 +2625,40 @@ app.get('/api/ai/tasks/:taskId', async (req, res, next) => {
     const task = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
     if (!task) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
     res.json({ task: writingTaskPublic(task) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/tasks/:taskId/artifacts/apply', async (req, res, next) => {
+  try {
+    const task = await updateDb((db) => {
+      const current = db.writingTasks.find((item) => item.id === req.params.taskId && item.userId === req.user.id)
+      if (!current) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
+      if (!current.pendingArtifacts || !current.artifactPreview) {
+        if (current.artifactApplication?.applied) return current
+        throw Object.assign(new Error('这项资料变更已经失效或不存在'), { status: 409 })
+      }
+      const timestamp = new Date().toISOString()
+      const application = applyStoryArtifacts(db, {
+        userId: current.userId,
+        projectId: current.projectId,
+        artifacts: current.pendingArtifacts,
+        timestamp,
+      })
+      current.pendingArtifacts = null
+      current.artifactPreview = null
+      current.artifactApplication = application
+      if (current.result?.result && typeof current.result.result === 'object') {
+        delete current.result.result.artifacts_pending
+        current.result.result.artifacts_applied = application
+      }
+      current.events ||= []
+      current.events.push(createTaskEvent(current.id, current.events.length + 1, 'artifact', application.summary || '资料变更已确认', 'completed', application))
+      current.updatedAt = timestamp
+      return current
+    })
+    res.json({ task: writingTaskPublic(task), application: task.artifactApplication })
   } catch (error) {
     next(error)
   }

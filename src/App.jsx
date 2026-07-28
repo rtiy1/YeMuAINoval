@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Archive,
   ArrowLeft,
   ArrowUpDown,
   ArrowUpRight,
@@ -62,6 +63,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Star,
   Split,
   Store,
   Target,
@@ -2017,7 +2019,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
   </div>
 }
 
-function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, onRegenerate, choiceDisabled = false, regenerateDisabled = false }) {
+function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoose, onRegenerate, choiceDisabled = false, regenerateDisabled = false }) {
   const result = run.response?.result || {}
   const proposal = result.edit_proposal || null
   const outputText = typeof (proposal?.revised_text ?? result.output) === 'string'
@@ -2027,6 +2029,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, onRegenerate, 
   const showDiff = run.editRequested && outputText && originalText
   const [hunks, setHunks] = useState(() => showDiff ? buildEditHunks(originalText, outputText, proposal?.blocks || []) : [])
   const [copied, setCopied] = useState(false)
+  const [applyingArtifacts, setApplyingArtifacts] = useState(false)
 
   useEffect(() => {
     setHunks(showDiff ? buildEditHunks(originalText, outputText, proposal?.blocks || []) : [])
@@ -2216,6 +2219,23 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, onRegenerate, 
       </div>}
     </div>}
 
+    {run.artifactPreview && !run.artifactApplication && <section className="agent-mutation-preview">
+      <header><ShieldAlert size={15} /><div><strong>资料变更需要确认</strong><small>Agent 只能提议，确认后才会写入作品</small></div></header>
+      <div className="agent-mutation-counts">
+        {run.artifactPreview.projectUpdated && <span>作品设定</span>}
+        {run.artifactPreview.characters > 0 && <span>{run.artifactPreview.characters} 张人物卡</span>}
+        {run.artifactPreview.worldbuilding > 0 && <span>{run.artifactPreview.worldbuilding} 条世界观</span>}
+        {run.artifactPreview.chapters > 0 && <span>{run.artifactPreview.chapters} 章大纲</span>}
+      </div>
+      {Array.isArray(run.artifactPreview.targets) && <div className="agent-mutation-targets">{run.artifactPreview.targets.map((target, index) => <div key={`${target.kind}:${target.title}:${index}`}><span>{target.kind}</span><strong>{target.title}</strong></div>)}</div>}
+      <button type="button" disabled={applyingArtifacts} onClick={async () => {
+        setApplyingArtifacts(true)
+        try { await onApplyArtifacts(run) } finally { setApplyingArtifacts(false) }
+      }}>{applyingArtifacts ? <LoaderCircle size={13} className="spin" /> : <ShieldCheck size={13} />}{applyingArtifacts ? '写入中' : '确认写入'}</button>
+    </section>}
+
+    {run.artifactApplication?.applied && <div className="agent-mutation-applied"><ShieldCheck size={13} /><span>{run.artifactApplication.summary || '资料变更已确认'}</span></div>}
+
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
 
     {showDiff && changedHunks.length > 0 && <details className="agent-write-stage" open>
@@ -2282,6 +2302,81 @@ function AgentComposerMenu({ title, description, options, value, loading, onSele
   </div>
 }
 
+function agentThreadTime(value) {
+  const timestamp = new Date(value || 0).getTime()
+  if (!Number.isFinite(timestamp)) return ''
+  const delta = Math.max(0, Date.now() - timestamp)
+  if (delta < 60_000) return '刚刚'
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`
+  if (delta < 604_800_000) return `${Math.floor(delta / 86_400_000)} 天前`
+  return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(timestamp))
+}
+
+function AgentThreadHistory({ threads, chapters, currentThreadId, loading, switchingDisabled, onBack, onOpen, onRename, onFavorite, onArchive }) {
+  const [query, setQuery] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const chapterMap = useMemo(() => new Map(chapters.map((chapter) => [String(chapter.id), chapter.title])), [chapters])
+  const visibleThreads = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    return threads.filter((thread) => !normalized
+      || `${thread.title} ${thread.latestMessage} ${chapterMap.get(String(thread.chapterId)) || ''}`.toLowerCase().includes(normalized))
+  }, [chapterMap, query, threads])
+
+  async function submitRename(event, thread) {
+    event.preventDefault()
+    const title = editingTitle.trim()
+    if (title && title !== thread.title) await onRename(thread, title)
+    setEditingId(null)
+    setEditingTitle('')
+  }
+
+  return <div className="agent-history-view">
+    <div className="agent-history-toolbar">
+      <button type="button" className="icon-button small" onClick={onBack} aria-label="返回当前会话" title="返回当前会话"><ArrowLeft size={15} /></button>
+      <div><strong>会话历史</strong><small>{threads.length} 个会话</small></div>
+    </div>
+    <label className="agent-history-search">
+      <Search size={14} />
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、消息或章节" aria-label="搜索会话" />
+      {query && <button type="button" onClick={() => setQuery('')} aria-label="清空搜索"><X size={12} /></button>}
+    </label>
+    <div className="agent-history-list">
+      {loading && <div className="agent-history-empty"><LoaderCircle size={18} className="spin" /><span>正在读取会话</span></div>}
+      {!loading && visibleThreads.map((thread) => {
+        const isCurrent = thread.id === currentThreadId
+        const isArchived = thread.status === 'archived'
+        const isRunning = thread.turns?.some((turn) => ['queued', 'running', 'inProgress', 'waiting_input'].includes(turn.task?.status || turn.status))
+        return <article className={`agent-history-item ${isCurrent ? 'current' : ''}`} key={thread.id}>
+          <div className="agent-history-item-main">
+            {editingId === thread.id ? <form onSubmit={(event) => submitRename(event, thread)}>
+              <input autoFocus value={editingTitle} maxLength={120} onChange={(event) => setEditingTitle(event.target.value)} onBlur={() => setEditingId(null)} aria-label="会话标题" />
+            </form> : <button type="button" disabled={switchingDisabled || isCurrent} onClick={() => onOpen(thread)}>
+              <span>{thread.title || '新会话'}</span>
+              <small>{thread.latestMessage || '还没有消息'}</small>
+            </button>}
+            <div className="agent-history-meta">
+              <span>{chapterMap.get(String(thread.chapterId)) || `第 ${thread.chapterId} 章`}</span>
+              <span>{thread.turnCount || 0} 轮</span>
+              <span>{agentThreadTime(thread.updatedAt)}</span>
+              {isRunning && <em>运行中</em>}
+              {isCurrent && <em>当前</em>}
+              {isArchived && <em>已归档</em>}
+            </div>
+          </div>
+          <div className="agent-history-actions">
+            <button type="button" className={thread.isFavorited ? 'active' : ''} onClick={() => onFavorite(thread, !thread.isFavorited)} aria-label={thread.isFavorited ? '取消收藏' : '收藏会话'} title={thread.isFavorited ? '取消收藏' : '收藏会话'}><Star size={13} fill={thread.isFavorited ? 'currentColor' : 'none'} /></button>
+            <button type="button" onClick={() => { setEditingId(thread.id); setEditingTitle(thread.title || '') }} aria-label="重命名会话" title="重命名"><Type size={13} /></button>
+            <button type="button" disabled={isCurrent || isRunning || isArchived} onClick={() => onArchive(thread)} aria-label="归档会话" title="归档"><Archive size={13} /></button>
+          </div>
+        </article>
+      })}
+      {!loading && !visibleThreads.length && <div className="agent-history-empty"><History size={20} /><span>{query ? '没有匹配的会话' : '还没有历史会话'}</span></div>}
+    </div>
+  </div>
+}
+
 function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
@@ -2316,6 +2411,22 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState([])
   const [assistantThread, setAssistantThread] = useState(null)
+  const [assistantHistoryOpen, setAssistantHistoryOpen] = useState(false)
+  const [assistantHistory, setAssistantHistory] = useState([])
+  const [assistantHistoryLoading, setAssistantHistoryLoading] = useState(false)
+  const [assistantContextStatus, setAssistantContextStatus] = useState(null)
+  const [workspaceWidths, setWorkspaceWidths] = useState(() => {
+    if (typeof window === 'undefined') return { chapter: 300, assistant: 420 }
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('yemu:editor-panel-widths') || '{}')
+      return {
+        chapter: Math.min(420, Math.max(220, Number(saved.chapter) || 300)),
+        assistant: Math.min(520, Math.max(320, Number(saved.assistant) || 420)),
+      }
+    } catch {
+      return { chapter: 300, assistant: 420 }
+    }
+  })
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantRunning, setAssistantRunning] = useState(false)
   const [assistantElapsedMs, setAssistantElapsedMs] = useState(0)
@@ -2351,8 +2462,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const assistantStreamRef = useRef(null)
   const assistantInputRef = useRef(null)
   const assistantFileInputRef = useRef(null)
+  const requestedAssistantThreadRef = useRef(null)
   const artifactSyncRef = useRef(new Set())
   const agentControlsRef = useRef(null)
+  const editorLayoutRef = useRef(null)
+  const workspaceResizeRef = useRef(null)
   const displayChapter = activeChapter || chapters.at(-1) || { id: 1, title: '第一章', words: '0' }
   const visibleChapters = useMemo(() => [...chapters]
     .filter((chapter) => !unfinishedOnly || chapter.state !== 'done' || String(chapter.id) === String(displayChapter.id))
@@ -2479,13 +2593,13 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantAttachmentLoading(true)
     try {
       let content = file.content || ''
-      if (file.chapterId != null && String(file.chapterId) !== String(displayChapter.id)) {
+      if (!file.reference && file.chapterId != null && String(file.chapterId) !== String(displayChapter.id)) {
         const response = await api.getChapterDraft(project.id, file.chapterId)
         content = response.content || ''
-      } else if (file.chapterId != null) {
+      } else if (!file.reference && file.chapterId != null) {
         content = draft
       }
-      const attachment = { ...file, content: String(content).slice(0, 60000) }
+      const attachment = { ...file, content: file.reference ? '' : String(content).slice(0, 60000) }
       setAssistantAttachments((current) => [...current, attachment].slice(-6))
       replaceAssistantTrigger(`@${file.name} `)
     } catch (error) {
@@ -2593,11 +2707,124 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantLoading(true)
     setAssistantRunning(false)
     setAssistantElapsedMs(0)
+    setAssistantHistoryOpen(false)
     assistantAbortRef.current?.abort()
     assistantAbortRef.current = null
     assistantTaskIdRef.current = null
     assistantTurnIdRef.current = null
   }, [displayChapter.id])
+
+  useEffect(() => {
+    window.localStorage.setItem('yemu:editor-panel-widths', JSON.stringify(workspaceWidths))
+  }, [workspaceWidths])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setAssistantContextStatus(null)
+    api.getWritingContext(project.id, displayChapter.id)
+      .then(({ context }) => {
+        if (!controller.signal.aborted) setAssistantContextStatus(context?.summaryStatus || null)
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [displayChapter.id, project.id])
+
+  async function restoreAssistantThread(thread, controller) {
+    if (controller.signal.aborted) return
+    setAssistantThread(thread || null)
+    const restored = agentThreadMessages(thread)
+    setAssistantMessages(restored)
+    const running = [...restored].reverse().find((item) => item.role === 'agent' && ['queued', 'running'].includes(item.status))
+    if (!running?.taskId) return
+    setAssistantRunning(true)
+    assistantTaskIdRef.current = running.taskId
+    assistantTurnIdRef.current = running.turnId
+    const startedAt = performance.now() - Math.max(0, Number(running.durationMs) || 0)
+    await monitorAssistantTurn(thread.id, running.turnId, running.taskId, running.id, controller, startedAt)
+    if (assistantAbortRef.current === controller) {
+      assistantTaskIdRef.current = null
+      assistantTurnIdRef.current = null
+      setAssistantElapsedMs(performance.now() - startedAt)
+      setAssistantRunning(false)
+    }
+  }
+
+  async function loadAssistantThreadById(threadId) {
+    if (!threadId || assistantRunning) return
+    const controller = new AbortController()
+    assistantAbortRef.current?.abort()
+    assistantAbortRef.current = controller
+    setAssistantLoading(true)
+    setAssistantMessages([])
+    setAssistantThread(null)
+    setAssistantRunning(false)
+    setAssistantElapsedMs(0)
+    assistantTaskIdRef.current = null
+    assistantTurnIdRef.current = null
+    try {
+      const { thread } = await api.resumeAgentThread(threadId)
+      await restoreAssistantThread(thread, controller)
+    } catch (error) {
+      if (!controller.signal.aborted) onNotify(error.message || 'Agent 会话恢复失败')
+    } finally {
+      if (assistantAbortRef.current === controller) setAssistantLoading(false)
+    }
+  }
+
+  async function refreshAssistantHistory() {
+    setAssistantHistoryLoading(true)
+    try {
+      const response = await api.getAgentThreads({ projectId: project.id, includeArchived: true })
+      setAssistantHistory(response.threads || [])
+    } catch (error) {
+      onNotify(error.message || '会话历史读取失败')
+    } finally {
+      setAssistantHistoryLoading(false)
+    }
+  }
+
+  async function openAssistantHistoryView() {
+    setAssistantHistoryOpen(true)
+    await refreshAssistantHistory()
+  }
+
+  async function openHistoricalThread(thread) {
+    if (assistantRunning || !thread?.id) return
+    setAssistantHistoryOpen(false)
+    if (String(thread.chapterId) === String(displayChapter.id)) {
+      await loadAssistantThreadById(thread.id)
+      return
+    }
+    const chapter = chapters.find((item) => String(item.id) === String(thread.chapterId))
+    if (!chapter) {
+      onNotify('这个会话对应的章节已不存在')
+      return
+    }
+    requestedAssistantThreadRef.current = thread.id
+    await selectEditorChapter(chapter)
+  }
+
+  async function updateHistoricalThread(thread, updates) {
+    try {
+      const response = await api.updateAgentThread(thread.id, updates)
+      setAssistantHistory((current) => current.map((item) => item.id === thread.id ? response.thread : item)
+        .sort((left, right) => Number(right.isFavorited) - Number(left.isFavorited)
+          || String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''))))
+      if (assistantThread?.id === thread.id) setAssistantThread(response.thread)
+    } catch (error) {
+      onNotify(error.message || '会话更新失败')
+    }
+  }
+
+  async function archiveHistoricalThread(thread) {
+    try {
+      await api.archiveAgentThread(thread.id)
+      setAssistantHistory((current) => current.map((item) => item.id === thread.id ? { ...item, status: 'archived' } : item))
+      onNotify('会话已归档')
+    } catch (error) {
+      onNotify(error.message || '会话归档失败')
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2610,25 +2837,14 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantElapsedMs(0)
     assistantTaskIdRef.current = null
     assistantTurnIdRef.current = null
-    api.getAgentThread(project.id, displayChapter.id)
+    const requestedThreadId = requestedAssistantThreadRef.current
+    requestedAssistantThreadRef.current = null
+    const request = requestedThreadId
+      ? api.resumeAgentThread(requestedThreadId)
+      : api.getAgentThread(project.id, displayChapter.id)
+    request
       .then(async ({ thread }) => {
-        if (controller.signal.aborted) return
-        setAssistantThread(thread || null)
-        const restored = agentThreadMessages(thread)
-        setAssistantMessages(restored)
-        const running = [...restored].reverse().find((item) => item.role === 'agent' && ['queued', 'running'].includes(item.status))
-        if (!running?.taskId) return
-        setAssistantRunning(true)
-        assistantTaskIdRef.current = running.taskId
-        assistantTurnIdRef.current = running.turnId
-        const startedAt = performance.now() - Math.max(0, Number(running.durationMs) || 0)
-        await monitorAssistantTurn(thread.id, running.turnId, running.taskId, running.id, controller, startedAt)
-        if (assistantAbortRef.current === controller) {
-          assistantTaskIdRef.current = null
-          assistantTurnIdRef.current = null
-          setAssistantElapsedMs(performance.now() - startedAt)
-          setAssistantRunning(false)
-        }
+        await restoreAssistantThread(thread, controller)
       })
       .catch((error) => {
         if (!controller.signal.aborted) onNotify(error.message || 'Agent 会话恢复失败')
@@ -3477,7 +3693,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const editRequested = isEditorAgentEdit(command.message, effectiveSkill)
     const requestId = `agent-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const startedAt = performance.now()
-    const attachedFiles = assistantAttachments.map(({ key, name, kind, content }) => ({ key, name, kind, content }))
+    const attachedFiles = assistantAttachments.map(({ key, name, kind, content, reference }) => ({ key, name, kind, content, ...(reference ? { reference } : {}) }))
     const source = {
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
@@ -3527,6 +3743,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
+          tool_policy: {
+            externalSearch: agentWebSearch ? 'allow' : 'deny',
+            mutateStoryData: 'propose',
+            deleteStoryData: 'deny',
+          },
         },
         idempotencyKey: requestId,
       }, { signal: controller.signal })
@@ -3599,6 +3820,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : item.reasoningHistory || [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : item.inputHistory || [],
       usage: task.usage || item.usage || null,
+      artifactPreview: task.artifactPreview || null,
+      artifactApplication: task.artifactApplication || item.artifactApplication || null,
       durationMs: terminal ? agentTaskDurationMs(task) : performance.now() - startedAt,
     } : item))
     return terminal
@@ -3715,6 +3938,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     assistantTaskIdRef.current = null
     assistantTurnIdRef.current = null
     setAssistantMessages([])
+    setAssistantHistoryOpen(false)
     const threadId = assistantThread?.id
     setAssistantThread(null)
     setAssistantRunning(false)
@@ -3760,6 +3984,22 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     onAiApplied?.({ chapterId: displayChapter.id, content: before, runId: run.response?.run_id || run.id })
     setAssistantMessages((current) => current.map((item) => item.id === run.id ? { ...item, applied: true } : item))
     onNotify(hasSelection ? '已应用选中的 Agent 修改，可一键恢复' : '已应用 Agent 修改，可一键恢复')
+  }
+
+  async function applyAssistantArtifacts(run) {
+    if (!run?.taskId || !run.artifactPreview) return
+    try {
+      const response = await api.applyAiTaskArtifacts(run.taskId)
+      setAssistantMessages((current) => current.map((item) => item.taskId === run.taskId ? {
+        ...item,
+        artifactPreview: null,
+        artifactApplication: response.application || response.task?.artifactApplication || null,
+      } : item))
+      await onArtifactsApplied?.(response.application)
+      onNotify(response.application?.summary || '资料变更已写入')
+    } catch (error) {
+      onNotify(error.message || '资料变更写入失败')
+    }
   }
 
   function exportChapter() {
@@ -3833,7 +4073,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       name: `${project.title}.story.md`,
       kind: '作品设定',
       description: `${project.type} · ${project.genre} · 作品设定`,
-      content: `# ${project.title}\n\n篇幅：${project.type}\n题材：${project.genre}\n流派：${project.style || '未设置'}\n创作基调：${project.tone || '未设置'}`,
+      reference: { type: 'project', id: project.id },
     },
     ...chapters.map((chapter) => ({
       key: `chapter:${chapter.id}`,
@@ -3841,6 +4081,28 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       kind: '章节正文',
       description: `${String(chapter.id) === String(displayChapter.id) ? '当前章节 · ' : ''}${chapter.words || 0} 字`,
       chapterId: chapter.id,
+      reference: { type: 'chapter', id: chapter.id },
+    })),
+    ...matchedIdeas.map((idea) => ({
+      key: `idea:${idea.id}`,
+      name: idea.title,
+      kind: idea.label || '灵感卡片',
+      description: `${idea.pinned ? '已置顶 · ' : ''}${(idea.tags || []).slice(0, 3).join('、') || '创作资料'}`,
+      reference: { type: 'idea', id: idea.id },
+    })),
+    ...projectForeshadows.map((item) => ({
+      key: `foreshadow:${item.id}`,
+      name: item.title,
+      kind: '伏笔',
+      description: `${item.status || '未设置'} · 重要度 ${item.importance || 3}`,
+      reference: { type: 'foreshadow', id: item.id },
+    })),
+    ...storyMemories.filter((item) => item.status !== 'archived').map((item) => ({
+      key: `memory:${item.id}`,
+      name: item.title,
+      kind: '作品记忆',
+      description: `${item.type || '记忆'} · 重要度 ${item.importance || 3}`,
+      reference: { type: 'memory', id: item.id },
     })),
   ]
   const suggestionQuery = assistantSuggestion?.query || ''
@@ -3869,6 +4131,43 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   function openForeshadowEditor(target = null) {
     setForeshadowTarget(target)
     setForeshadowOpen(true)
+  }
+
+  function startWorkspaceResize(side, event) {
+    if (readingMode || window.matchMedia('(max-width: 1050px)').matches) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    workspaceResizeRef.current = { side }
+  }
+
+  function resizeWorkspace(event) {
+    const side = workspaceResizeRef.current?.side
+    const layout = editorLayoutRef.current
+    if (!side || !layout) return
+    const bounds = layout.getBoundingClientRect()
+    setWorkspaceWidths((current) => {
+      if (side === 'chapter') {
+        const maximum = Math.max(220, Math.min(420, bounds.width - current.assistant - 430))
+        return { ...current, chapter: Math.round(Math.min(maximum, Math.max(220, event.clientX - bounds.left))) }
+      }
+      const maximum = Math.max(320, Math.min(520, bounds.width - current.chapter - 430))
+      return { ...current, assistant: Math.round(Math.min(maximum, Math.max(320, bounds.right - event.clientX))) }
+    })
+  }
+
+  function stopWorkspaceResize(event) {
+    if (!workspaceResizeRef.current) return
+    workspaceResizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function nudgeWorkspace(side, event) {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+    event.preventDefault()
+    const screenDirection = event.key === 'ArrowRight' ? 1 : -1
+    setWorkspaceWidths((current) => side === 'chapter'
+      ? { ...current, chapter: Math.min(420, Math.max(220, current.chapter + screenDirection * 20)) }
+      : { ...current, assistant: Math.min(520, Math.max(320, current.assistant - screenDirection * 20)) })
   }
 
   return <>
@@ -3901,7 +4200,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         </div>
       </div>
 
-      <div className="editor-layout">
+      <div
+        className="editor-layout"
+        ref={editorLayoutRef}
+        style={{ '--chapter-panel-width': `${workspaceWidths.chapter}px`, '--assistant-panel-width': `${workspaceWidths.assistant}px` }}
+      >
         {mobileRailOpen && <button type="button" className="mobile-rail-scrim" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)} />}
         <aside className={`chapter-rail ${mobileRailOpen ? 'mobile-open' : ''}`}>
           <div className="rail-tabs" role="tablist" aria-label="作品资料">
@@ -3936,6 +4239,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
           {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}
         </aside>
+
+        <div className="workspace-resizer chapter-resizer" role="separator" tabIndex={0} aria-label="调整章节栏宽度" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="420" aria-valuenow={workspaceWidths.chapter} onKeyDown={(event) => nudgeWorkspace('chapter', event)} onPointerDown={(event) => startWorkspaceResize('chapter', event)} onPointerMove={resizeWorkspace} onPointerUp={stopWorkspaceResize} onPointerCancel={stopWorkspaceResize} />
 
         <section className="writing-canvas">
           <div className="writing-toolbar">
@@ -3998,12 +4303,26 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           </div>
         </section>
 
+        <div className="workspace-resizer assistant-resizer" role="separator" tabIndex={0} aria-label="调整助手栏宽度" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="520" aria-valuenow={workspaceWidths.assistant} onKeyDown={(event) => nudgeWorkspace('assistant', event)} onPointerDown={(event) => startWorkspaceResize('assistant', event)} onPointerMove={resizeWorkspace} onPointerUp={stopWorkspaceResize} onPointerCancel={stopWorkspaceResize} />
+
         <aside className={`insight-rail agent-rail ${assistantOpen ? '' : 'collapsed'}`}>
           {assistantOpen ? <>
             <div className="assistant-panel-heading agent-panel-heading">
               <div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>AGENT</span></div>
-              <div><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
+              <div><button className={`icon-button small ${assistantHistoryOpen ? 'active' : ''}`} aria-label="会话历史" title="会话历史" onClick={openAssistantHistoryView}><History size={15} /></button><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
             </div>
+            {assistantHistoryOpen ? <AgentThreadHistory
+              threads={assistantHistory}
+              chapters={chapters}
+              currentThreadId={assistantThread?.id}
+              loading={assistantHistoryLoading}
+              switchingDisabled={assistantRunning || assistantLoading}
+              onBack={() => setAssistantHistoryOpen(false)}
+              onOpen={openHistoricalThread}
+              onRename={(thread, title) => updateHistoricalThread(thread, { title })}
+              onFavorite={(thread, isFavorited) => updateHistoricalThread(thread, { isFavorited })}
+              onArchive={archiveHistoricalThread}
+            /> : <>
             <div className="agent-session-strip">
               <div className="agent-token-usage" title={agentSessionUsage.estimated ? '部分模型未返回 usage，缺失部分为估算值' : '模型返回的 Token 用量'}>
                 <span>Tokens{agentSessionUsage.estimated && agentSessionUsage.inputTokens ? ' ≈' : ''}</span>
@@ -4042,6 +4361,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   run={message}
                   elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs}
                   onApply={applyAssistantRevision}
+                  onApplyArtifacts={applyAssistantArtifacts}
                   onChoose={(reply) => submitAssistantAnswer(message, reply)}
                   onRegenerate={message.id === latestAgentRunId ? regenerateAssistant : null}
                   choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
@@ -4049,7 +4369,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 />)}
             </div>
             <div className="agent-composer-wrap">
-              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span><small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
+              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
               <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
                 {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
@@ -4154,6 +4474,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 </div>
               </form>
             </div>
+            </>}
           </> : <button className="assistant-reopen" aria-label={`展开${ASSISTANT_NAME}`} title={`展开${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}
         </aside>
       </div>

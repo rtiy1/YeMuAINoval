@@ -22,6 +22,27 @@ test('normalizes legacy databases without agent threads', () => {
   assert.deepEqual(db.agentThreads, [])
 })
 
+test('normalizes and exposes thread history metadata', () => {
+  const db = {
+    agentThreads: [{
+      id: 'thread-history',
+      userId: 'user-1',
+      projectId: 'project-1',
+      chapterId: 2,
+      isFavorited: true,
+      turns: [{ id: 'turn-1', taskId: 'task-1', message: '  继续写拍卖会  ' }],
+    }],
+    writingTasks: [{ id: 'task-1', userId: 'user-1', status: 'completed', result: { result: { output: '完成' } } }],
+  }
+  normalizeAgentThreads(db)
+  const output = agentThreadPublic(db.agentThreads[0], db.writingTasks, (task) => ({ id: task.id }))
+  assert.equal(output.chapterId, '2')
+  assert.equal(output.title, '继续写拍卖会')
+  assert.equal(output.latestMessage, '继续写拍卖会')
+  assert.equal(output.turnCount, 1)
+  assert.equal(output.isFavorited, true)
+})
+
 test('thread conversation includes only completed task pairs', () => {
   const thread = {
     turns: [

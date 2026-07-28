@@ -83,6 +83,7 @@ const aiServer = http.createServer(async (req, res) => {
     agentRequests.push(body)
     if (String(body.message || '').includes('取消任务')) await new Promise((resolve) => setTimeout(resolve, 300))
     const steerTurn = String(body.message || '').includes('追加指令测试')
+    const artifactTurn = String(body.message || '').includes('资料写入审批')
     const steeringMessages = Array.isArray(body.payload?.steering_messages) ? body.payload.steering_messages : []
     if (steerTurn && !steeringMessages.length) await new Promise((resolve) => setTimeout(resolve, 220))
     if (req.url.endsWith('/stream')) {
@@ -169,6 +170,7 @@ const aiServer = http.createServer(async (req, res) => {
             usage: choiceTurn
               ? { input_tokens: 70, output_tokens: 30, reasoning_output_tokens: 6, total_tokens: 100 }
               : { input_tokens: 120, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 8, total_tokens: 150 },
+            ...(artifactTurn ? { artifacts: { characters: [{ name: '审批人物', role: '配角', description: '只有确认后才写入的人物卡。' }] } } : {}),
           },
         }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -584,7 +586,9 @@ try {
   assert.equal(smartContext.response.status, 200)
   assert.equal(smartContext.payload.context.chapter.outline, '主角回到封闭多年的旧港调查。')
   assert.equal(smartContext.payload.context.materials[0].title, '未来邮戳')
-  assert.equal(smartContext.payload.context.version, 2)
+  assert.equal(smartContext.payload.context.version, 3)
+  assert.deepEqual(smartContext.payload.context.layers.near.chapters.map((chapter) => chapter.id), [1])
+  assert.deepEqual(smartContext.payload.context.summaryStatus.missingChapterIds, [1])
   assert.equal(smartContext.payload.context.storyMemory[0].title, '记者身份')
   assert.equal(smartContext.payload.context.storyMemory.length, 3)
   assert.equal(smartContext.payload.context.unresolvedForeshadows[0].title, '第三封信')
@@ -623,6 +627,10 @@ try {
   assert.equal(agentThread.response.status, 201)
   assert.equal(agentThread.payload.thread.status, 'active')
   assert.equal((await call('GET', '/api/ai/threads')).payload.threads[0].id, agentThread.payload.thread.id)
+  const titledThread = await call('PATCH', `/api/ai/threads/${agentThread.payload.thread.id}`, { title: '雨夜续写记录', isFavorited: true })
+  assert.equal(titledThread.response.status, 200)
+  assert.equal(titledThread.payload.thread.title, '雨夜续写记录')
+  assert.equal(titledThread.payload.thread.isFavorited, true)
   const reusedThread = await call('POST', '/api/ai/threads', { projectId, chapterId: String(firstChapterId) })
   assert.equal(reusedThread.response.status, 200)
   assert.equal(reusedThread.payload.thread.id, agentThread.payload.thread.id)
@@ -711,6 +719,22 @@ try {
     { role: 'user', text: '继续写作' },
     { role: 'assistant', text: '测试 AI 输出' },
   ])
+
+  const artifactTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '资料写入审批',
+    payload: { content: '雨落下来。', tool_policy: { mutateStoryData: 'propose' } },
+  })
+  assert.equal(artifactTask.response.status, 202)
+  await streamTurn(agentThread.payload.thread.id, artifactTask.payload.turn.id)
+  const pendingArtifactTask = await waitForTaskStatus(artifactTask.payload.task.id, 'completed')
+  assert.equal(pendingArtifactTask.artifactApplication, null)
+  assert.equal(pendingArtifactTask.artifactPreview.characters, 1)
+  assert.equal((await call('GET', '/api/ideas')).payload.ideas.some((item) => item.title === '审批人物'), false)
+  const appliedArtifacts = await call('POST', `/api/ai/tasks/${artifactTask.payload.task.id}/artifacts/apply`)
+  assert.equal(appliedArtifacts.response.status, 200)
+  assert.equal(appliedArtifacts.payload.application.characters, 1)
+  assert.equal((await call('GET', '/api/ideas')).payload.ideas.some((item) => item.title === '审批人物'), true)
 
   const steerTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
     skill: 'story',

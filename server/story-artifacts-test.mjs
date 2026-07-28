@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyStoryArtifacts } from './story-artifacts.mjs'
+import { applyStoryArtifacts, summarizeStoryArtifacts } from './story-artifacts.mjs'
+
+test('story artifacts provide a bounded mutation preview', () => {
+  assert.deepEqual(summarizeStoryArtifacts({
+    project: { genre: '悬疑' },
+    characters: [{ name: '林雾', description: '失踪记者。' }, { name: '', description: '无效' }],
+    worldbuilding: [{ title: '旧港', content: '常年有雾。' }],
+    chapters: [{ title: '第一章', outline: '抵达旧港。' }],
+  }), {
+    projectUpdated: true,
+    characters: 1,
+    worldbuilding: 1,
+    chapters: 1,
+    targets: [
+      { kind: '作品', title: '基础设定' },
+      { kind: '人物卡', title: '林雾' },
+      { kind: '世界观', title: '旧港' },
+      { kind: '章节大纲', title: '第一章' },
+    ],
+    summary: '准备写入作品设定、1 张人物卡、1 条世界观、1 章大纲',
+  })
+})
 
 test('story artifacts upsert project settings, cards, and chapter outlines idempotently', () => {
   const timestamp = '2026-07-28T00:00:00.000Z'

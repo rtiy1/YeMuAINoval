@@ -426,6 +426,8 @@ export function agentThreadMessages(thread) {
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : [],
       usage: task.usage || null,
+      artifactPreview: task.artifactPreview || null,
+      artifactApplication: task.artifactApplication || null,
       durationMs: agentTaskDurationMs(task),
     })
   }

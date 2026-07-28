@@ -18,6 +18,35 @@ function isBlankDefaultChapter(chapter, draft) {
     && /^(?:第\s*[一二三四五六七八九十百千万两\d]+\s*章|未命名章节?)$/.test(text(chapter?.title, 100))
 }
 
+export function summarizeStoryArtifacts(artifacts) {
+  if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)) return null
+  const projectUpdated = Boolean(artifacts.project && typeof artifacts.project === 'object'
+    && ['genre', 'style', 'premise'].some((key) => text(artifacts.project[key], 1)))
+  const characters = list(artifacts.characters, 24).filter((item) => item && typeof item === 'object' && text(item.name || item.title, 1) && text(item.description || item.body || item.summary, 1))
+  const worldbuilding = list(artifacts.worldbuilding, 40).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.content || item.body || item.description, 1))
+  const chapters = list(artifacts.chapters, 100).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.outline || item.content || item.summary, 1))
+  const preview = {
+    projectUpdated,
+    characters: characters.length,
+    worldbuilding: worldbuilding.length,
+    chapters: chapters.length,
+    targets: [
+      ...(projectUpdated ? [{ kind: '作品', title: '基础设定' }] : []),
+      ...characters.map((item) => ({ kind: '人物卡', title: text(item.name || item.title, 80) })),
+      ...worldbuilding.map((item) => ({ kind: '世界观', title: text(item.title || item.name, 120) })),
+      ...chapters.map((item) => ({ kind: '章节大纲', title: text(item.title || item.name, 100) })),
+    ].slice(0, 24),
+  }
+  const parts = [
+    preview.projectUpdated ? '作品设定' : '',
+    preview.characters ? `${preview.characters} 张人物卡` : '',
+    preview.worldbuilding ? `${preview.worldbuilding} 条世界观` : '',
+    preview.chapters ? `${preview.chapters} 章大纲` : '',
+  ].filter(Boolean)
+  if (!parts.length) return null
+  return { ...preview, summary: `准备写入${parts.join('、')}` }
+}
+
 function upsertIdea(db, {
   userId,
   projectId,

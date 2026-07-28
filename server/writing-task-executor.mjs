@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { invokeStoryAgent, invokeStoryAgentDelegates, classifyTaskError } from './story-agent.mjs'
 import { accumulateTaskUsage, archiveTaskReasoning } from './agent-thread.mjs'
 import { maybeCompactAgentThread } from './context-compaction.mjs'
-import { applyStoryArtifacts } from './story-artifacts.mjs'
+import { applyStoryArtifacts, summarizeStoryArtifacts } from './story-artifacts.mjs'
 import { updateDb } from './store.mjs'
 
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
@@ -362,14 +362,23 @@ export async function executeWritingTask(taskId, {
         label: `完成 ${result.selected_skill || task.skill || 'story'} Skill`,
         meta: { selectedSkill: result.selected_skill || task.skill || null, route: result.route || '', references: references.length, checks: checks.length },
       })
-      const artifactApplication = result.status === 'completed'
+      const artifacts = result?.result?.artifacts
+      const mutationPolicy = task.input?.payload?.tool_policy?.mutateStoryData
+      const artifactPreview = result.status === 'completed' ? summarizeStoryArtifacts(artifacts) : null
+      const artifactApplication = artifactPreview && mutationPolicy !== 'propose'
         ? applyStoryArtifacts(db, {
           userId: task.userId,
           projectId: task.projectId,
-          artifacts: result?.result?.artifacts,
+          artifacts,
           timestamp,
         })
         : null
+      if (artifactPreview && mutationPolicy === 'propose') {
+        task.pendingArtifacts = structuredClone(artifacts)
+        task.artifactPreview = artifactPreview
+        result.result.artifacts_pending = artifactPreview
+        appendEvent(task, 'artifact', artifactPreview.summary, 'completed', { ...artifactPreview, approvalRequired: true })
+      }
       if (artifactApplication?.applied) {
         task.artifactApplication = artifactApplication
         result.result.artifacts_applied = artifactApplication
