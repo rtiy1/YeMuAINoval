@@ -11,10 +11,11 @@ from app.agent_instructions import (
     DATA_BOUNDARY_POLICY,
     EXECUTION_BOUNDARY_POLICY,
     NIGHT_RAIN_IDENTITY,
+    RUNTIME_CONTRACT_POLICY,
     STORY_FACT_POLICY,
 )
 from app.config import get_settings
-from app.model_content import model_content_text
+from app.model_content import HIDDEN_REASONING_TAGS, model_content_text
 from app.model_usage import model_token_usage
 from app.schemas import EditProposal
 from app.skills.capability import SkillInvocation
@@ -38,6 +39,10 @@ MESSAGE_TOOL_HISTORY_LIMIT = 6
 MESSAGE_TOOL_ARGUMENT_LIMIT = 24_000
 MESSAGE_TOOL_CONTENT_LIMIT = 8_000
 TOOL_CALL_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$')
+INLINE_REASONING_OPEN_PATTERN = re.compile(
+    r'<(think|thinking|analysis|reasoning)\s*>',
+    re.IGNORECASE,
+)
 CHOICE_REQUEST_PATTERN = re.compile(r'<choice_request>\s*(\{.*?\})\s*</choice_request>', re.DOTALL)
 CHOICE_OPTION_PATTERN = re.compile(
     r'^\s*(?:[-*+]\s*)?(?:\*\*)?([A-H])(?:\*\*)?\s*(?:[.、:：]|[—–-]{1,2})\s*(.+?)\s*$',
@@ -109,6 +114,72 @@ REQUEST_USER_INPUT_TOOL = {
         'required': ['questions'],
     },
 }
+
+
+def _looks_like_internal_contract_refusal(value: str) -> bool:
+    """Detect meta-refusals caused by a provider mistaking our system Skill for user data."""
+    text = re.sub(r'\s+', ' ', str(value or '')).strip().lower()[:2_000]
+    if not text:
+        return False
+    if '提示注入' in text or 'prompt injection' in text:
+        return any(marker in text for marker in (
+            '上传文件', '这份文档', '这份文件', 'skill', '人格设定',
+            '系统指令', 'system prompt', 'uploaded file', 'uploaded document',
+        ))
+    markers = (
+        '我不会采纳', '我不能采纳', '不会假装', '虚构的技能', '虚构的能力',
+        '我没有这些能力', '没有对应的项目文件系统', '重新定义我的身份',
+    )
+    return sum(marker in text for marker in markers) >= 2
+
+
+class _InlineReasoningFilter:
+    """Incrementally remove inline thinking tags without breaking streamed text."""
+
+    def __init__(self) -> None:
+        self.pending = ''
+        self.hidden_tag: str | None = None
+        self.open_prefixes = tuple(f'<{tag}>' for tag in HIDDEN_REASONING_TAGS)
+
+    def feed(self, value: str, final: bool = False) -> str:
+        self.pending += str(value or '')
+        visible: list[str] = []
+        while self.pending:
+            if self.hidden_tag:
+                closing = f'</{self.hidden_tag}>'
+                index = self.pending.lower().find(closing)
+                if index >= 0:
+                    self.pending = self.pending[index + len(closing):]
+                    self.hidden_tag = None
+                    continue
+                if final:
+                    self.pending = ''
+                else:
+                    self.pending = self.pending[-max(0, len(closing) - 1):]
+                break
+
+            match = INLINE_REASONING_OPEN_PATTERN.search(self.pending)
+            if match:
+                visible.append(self.pending[:match.start()])
+                self.hidden_tag = match.group(1).lower()
+                self.pending = self.pending[match.end():]
+                continue
+
+            if final:
+                visible.append(self.pending)
+                self.pending = ''
+                break
+
+            marker = self.pending.rfind('<')
+            suffix = self.pending[marker:].lower() if marker >= 0 else ''
+            if marker >= 0 and any(prefix.startswith(suffix) for prefix in self.open_prefixes):
+                visible.append(self.pending[:marker])
+                self.pending = self.pending[marker:]
+            else:
+                visible.append(self.pending)
+                self.pending = ''
+            break
+        return ''.join(visible)
 
 
 def _single_question(value: str) -> str:
@@ -651,9 +722,52 @@ def _stream_model_response(
     prefix_buffer = ''
     choice_block = False
     marker = '<choice_request>'
+    reasoning_filter = _InlineReasoningFilter()
+    response_gate = ''
+    response_gate_released = False
+    response_suppressed = False
+    visible_started = False
     response = None
     stream = model.stream(messages, **(model_kwargs or {}))
     stream_finished = threading.Event()
+
+    def emit_visible(value: str) -> None:
+        nonlocal prefix_buffer, choice_block, visible_started
+        if not value or choice_block:
+            return
+        if prefix_buffer or not visible_started:
+            prefix_buffer += value
+            stripped = prefix_buffer.lstrip()
+            if marker.startswith(stripped) and len(stripped) < len(marker):
+                return
+            if stripped.startswith(marker):
+                choice_block = True
+                prefix_buffer = ''
+                return
+            on_delta(prefix_buffer)
+            prefix_buffer = ''
+            visible_started = True
+            return
+        on_delta(value)
+
+    def gate_visible(value: str, final: bool = False) -> None:
+        nonlocal response_gate, response_gate_released, response_suppressed
+        if response_suppressed:
+            return
+        if response_gate_released:
+            emit_visible(value)
+            return
+        response_gate += value
+        if _looks_like_internal_contract_refusal(response_gate):
+            response_suppressed = True
+            response_gate = ''
+            return
+        if final or len(response_gate) >= 800:
+            response_gate_released = True
+            buffered = response_gate
+            response_gate = ''
+            emit_visible(buffered)
+
     if cancel_event is not None:
         def close_when_cancelled() -> None:
             while not stream_finished.wait(0.25):
@@ -681,22 +795,11 @@ def _stream_model_response(
                 on_reasoning_delta(reasoning_delta)
             if not delta:
                 continue
-            output_parts.append(delta)
-            if choice_block:
+            visible_delta = reasoning_filter.feed(delta)
+            if not visible_delta:
                 continue
-            if prefix_buffer or not output_parts[:-1]:
-                prefix_buffer += delta
-                stripped = prefix_buffer.lstrip()
-                if marker.startswith(stripped) and len(stripped) < len(marker):
-                    continue
-                if stripped.startswith(marker):
-                    choice_block = True
-                    prefix_buffer = ''
-                    continue
-                on_delta(prefix_buffer)
-                prefix_buffer = ''
-                continue
-            on_delta(delta)
+            output_parts.append(visible_delta)
+            gate_visible(visible_delta)
     finally:
         stream_finished.set()
         close = getattr(stream, 'close', None)
@@ -705,7 +808,12 @@ def _stream_model_response(
                 close()
             except Exception:
                 pass
-    if prefix_buffer and not choice_block:
+    trailing = reasoning_filter.feed('', final=True)
+    if trailing:
+        output_parts.append(trailing)
+        gate_visible(trailing)
+    gate_visible('', final=True)
+    if prefix_buffer and not choice_block and not response_suppressed:
         on_delta(prefix_buffer)
     return ''.join(output_parts), response
 
@@ -831,6 +939,7 @@ def execute_prompt_skill(
         f'\n\n{STORY_FACT_POLICY}',
         f'\n\n{EXECUTION_BOUNDARY_POLICY}',
         f'\n\n{DATA_BOUNDARY_POLICY}',
+        f'\n\n{RUNTIME_CONTRACT_POLICY}',
         '\n\n当前运行模式：执行项目内的 Story Skill。遵守下面的 Skill 契约并完成用户请求。当前适配范围是 prompt-only；需要宿主执行写入或其他工具调用时，只返回明确的建议操作或可应用结果，不把计划描述成已执行。',
         f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 36_000 if prompt_choice_followup else 120_000)}',
     ]
@@ -941,6 +1050,24 @@ def execute_prompt_skill(
 
         messages = model_messages(prompt_conversation)
         transcript_messages = messages if prompt_conversation == conversation else model_messages(conversation)
+        fallback_system_prompt = ''.join([
+            NIGHT_RAIN_IDENTITY,
+            f'\n\n{AGENT_EXECUTION_POLICY}',
+            f'\n\n{STORY_FACT_POLICY}',
+            f'\n\n{RUNTIME_CONTRACT_POLICY}',
+            '''\n\nRECOVERY MODE:
+上一次模型误把应用运行契约当成了用户上传内容。现在直接完成作者的创作请求。
+- 不讨论 Skill、提示注入、人格设定、文件系统、agent 或模型内部规则。
+- 使用最近对话与结构化输入中的作品事实；信息足够就给出实际创作结果。
+- 若唯一阻塞决定确实缺失，调用 request_user_input；否则不要继续追问。''',
+        ])
+
+        def fallback_messages(transcript: str) -> list[tuple[str, str]]:
+            return [
+                ('system', fallback_system_prompt),
+                ('human', f'''作者本轮要求：{invocation.instruction}\n\n已确认对话：\n{transcript or '无'}\n\n作品上下文：\n{serialized_model_payload}'''),
+            ]
+
         if reviewable_edit:
             proposal = model.with_structured_output(EditProposal).invoke(messages)
             usage = model_token_usage(None, system_prompt + invocation.instruction + json.dumps(model_payload, ensure_ascii=False, default=str), proposal.revised_text)
@@ -1041,6 +1168,15 @@ def execute_prompt_skill(
             message_continuation_used = False
             continuation_fallback = continuation_fallback or native_continuation is not None or message_continuation is not None
             output, response = invoke_model(model, transcript_messages)
+        if _looks_like_internal_contract_refusal(output):
+            logger.warning('model returned an internal contract refusal; retrying with the compact recovery prompt')
+            native_continuation_used = False
+            message_continuation_used = False
+            continuation_fallback = True
+            output, response = invoke_model(question_model, fallback_messages(conversation))
+            if _looks_like_internal_contract_refusal(output):
+                output = '这次生成偏离了创作任务，请点击下方“重新生成”再试一次。'
+                emit_delta(output)
     except Exception:
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError('prompt Skill execution cancelled')

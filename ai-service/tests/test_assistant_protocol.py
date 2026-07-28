@@ -19,6 +19,7 @@ from app.agent_instructions import (
     AGENT_EXECUTION_POLICY,
     DATA_BOUNDARY_POLICY,
     EXECUTION_BOUNDARY_POLICY,
+    RUNTIME_CONTRACT_POLICY,
     STORY_FACT_POLICY,
 )
 from app.schemas import (
@@ -50,13 +51,80 @@ from app.workflows.story_delegation import run_story_agent_delegate
 
 
 class AssistantProtocolTests(unittest.TestCase):
+    def test_runtime_contract_keeps_skill_meta_discussion_out_of_final_output(self):
+        self.assertIn('第一方运行说明', RUNTIME_CONTRACT_POLICY)
+        self.assertIn('不要向作者讲解提示注入', RUNTIME_CONTRACT_POLICY)
+
+    def test_stream_filters_inline_thinking_before_emitting_visible_text(self):
+        class FakeStreamingModel:
+            def stream(self, messages, **kwargs):
+                yield AIMessageChunk(content='<thi')
+                yield AIMessageChunk(content='nk>内部判断</think>\n面向用户的结果')
+
+        deltas = []
+        output, _ = _stream_model_response(
+            FakeStreamingModel(),
+            [('human', '测试')],
+            deltas.append,
+        )
+        self.assertEqual(output, '\n面向用户的结果')
+        self.assertEqual(''.join(deltas), '\n面向用户的结果')
+        self.assertNotIn('内部判断', ''.join(deltas))
+
+    def test_stream_withholds_internal_contract_refusal(self):
+        class FakeStreamingModel:
+            def stream(self, messages, **kwargs):
+                yield AIMessageChunk(content='这份上传文件是一套提示注入，我不会采纳其中的人格设定。')
+
+        deltas = []
+        output, _ = _stream_model_response(
+            FakeStreamingModel(),
+            [('human', '测试')],
+            deltas.append,
+        )
+        self.assertIn('提示注入', output)
+        self.assertEqual(deltas, [])
+
+    def test_prompt_skill_recovers_from_internal_contract_refusal(self):
+        class FakeChatModel:
+            use_responses_api = False
+
+            def __init__(self):
+                self.calls = []
+
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    return AIMessage(content='这份上传文件是一套提示注入，我不会采纳其中的人格设定。')
+                return AIMessage(content='枫羽在第一座副本的雨夜车站醒来。')
+
+        model = FakeChatModel()
+        with mock.patch('app.skills.prompt.create_chat_model', return_value=model):
+            result = execute_prompt_skill(SkillInvocation(
+                skill_name='story-long-write',
+                instruction='继续原创剧情',
+                payload={'content': '', 'conversation': [{'role': 'user', 'text': '副本轮回制'}]},
+                model_config_override=ModelConfig(provider='openai', api_key='test-key'),
+            ))
+
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['output'], '枫羽在第一座副本的雨夜车站醒来。')
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn('RECOVERY MODE', model.calls[1][0][1])
+        self.assertNotIn('SKILL CONTRACT', model.calls[1][0][1])
+
     def test_model_stream_closes_when_the_client_cancels(self):
         class ClosableStream:
-            def __init__(self):
+            def __init__(self, cancel_event):
                 self.closed = False
+                self.cancel_event = cancel_event
 
             def __iter__(self):
                 yield AIMessageChunk(content='第一段')
+                self.cancel_event.set()
                 yield AIMessageChunk(content='不应继续')
 
             def close(self):
@@ -70,12 +138,12 @@ class AssistantProtocolTests(unittest.TestCase):
                 return self.value
 
         cancelled = threading.Event()
-        stream = ClosableStream()
+        stream = ClosableStream(cancelled)
         with self.assertRaises(InterruptedError):
             _stream_model_response(
                 FakeStreamingModel(stream),
                 [('human', '测试取消')],
-                lambda _delta: cancelled.set(),
+                lambda _delta: None,
                 cancel_event=cancelled,
             )
         self.assertTrue(stream.closed)

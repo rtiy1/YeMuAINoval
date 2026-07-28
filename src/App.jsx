@@ -54,6 +54,7 @@ import {
   Pin,
   Plus,
   Redo2,
+  RotateCcw,
   Search,
   SearchCode,
   Send,
@@ -153,6 +154,11 @@ const agentModeOptions = [
   { value: 'build', label: 'Build', description: '创作、续写并生成可审阅修改', badge: '默认' },
   { value: 'review', label: 'Review', description: '只审查问题，不直接改写正文' },
   { value: 'plan', label: 'Plan', description: '只读分析、收敛决策并输出可执行计划' },
+]
+
+const agentTeamOptions = [
+  { value: 'solo', label: '单智能体', description: '由夜雨直接完成，响应更快、消耗更低', badge: '默认' },
+  { value: 'team', label: '多智能体', description: '两个子智能体并行审阅，再由夜雨汇总最终回复', badge: '协作' },
 ]
 
 const authQuotes = [
@@ -1988,7 +1994,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
   </div>
 }
 
-function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled = false }) {
+function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, onRegenerate, choiceDisabled = false, regenerateDisabled = false }) {
   const result = run.response?.result || {}
   const proposal = result.edit_proposal || null
   const outputText = typeof (proposal?.revised_text ?? result.output) === 'string'
@@ -2011,6 +2017,8 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
   const checks = Array.isArray(result.checks) ? result.checks : []
   const findings = Array.isArray(result.findings) ? result.findings : []
   const events = compactAgentEvents(run.events)
+  const subagentEvents = events.filter((event) => event.type === 'subagent')
+  const multiAgentEnabled = run.source?.multiAgent === true || subagentEvents.length > 0
   const plan = Array.isArray(run.plan) ? run.plan : []
   const reasoningHistory = Array.isArray(run.reasoningHistory) ? run.reasoningHistory.filter((item) => String(item?.summary || '').trim()) : []
   const inputHistory = Array.isArray(run.inputHistory) ? run.inputHistory : []
@@ -2064,7 +2072,19 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     } catch {
-      // Clipboard permissions vary in embedded browsers; copying is optional.
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const succeeded = document.execCommand('copy')
+      textarea.remove()
+      if (succeeded) {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1200)
+      }
     }
   }
 
@@ -2102,7 +2122,14 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
       <Info size={12} />
     </div>}
 
-    <details className="agent-reasoning" open={run.status === 'running' || ['needs_input', 'waiting_input'].includes(effectiveStatus)}>
+    {multiAgentEnabled && <div className="agent-trace-row agent-team-row">
+      <UsersRound size={14} />
+      <strong>多智能体协作</strong>
+      <span>{subagentEvents.length ? `${subagentEvents.length} 个子智能体 · 夜雨汇总` : '连续性与场景规划并行审阅'}</span>
+      <Check size={12} />
+    </div>}
+
+    <details className="agent-reasoning" open={run.status === 'running'}>
       <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>执行过程</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
       <div className="agent-reasoning-body">
         {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
@@ -2119,7 +2146,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
             {event.count > 1 ? <small>{event.count} 轮</small> : agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
           </div>)}
         </div>
-        {events.filter((event) => event.type === 'subagent' && event.meta?.reportSummary).map((event) => <div className="agent-reasoning-summary" key={`${event.id}:report`}>
+        {subagentEvents.filter((event) => event.meta?.reportSummary).map((event) => <div className="agent-reasoning-summary" key={`${event.id}:report`}>
           <UsersRound size={12} />
           <div>
             <strong>{event.label}</strong>
@@ -2148,12 +2175,22 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
     </details>
 
     {(run.status !== 'running' || run.text || hasInputRequest) && <div className={`agent-answer ${run.status === 'running' ? 'streaming' : ''} ${['failed', 'cancelled', 'needs_model', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`} aria-live="polite">
-      <div className="agent-answer-heading"><Bot size={15} /><strong>{isPlanMode ? '计划' : ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
+      <div className="agent-answer-heading"><Bot size={15} /><strong>{isPlanMode ? '计划' : ASSISTANT_NAME}</strong></div>
       {run.status === 'running'
         ? <AgentMarkdown value={run.text} streaming />
         : choicePrompt
         ? <AgentChoicePrompt prompt={choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
         : <AgentMarkdown value={run.text} />}
+      {run.status !== 'running' && !choicePrompt && Boolean(outputText || run.text) && <div className="agent-answer-actions">
+        <button type="button" onClick={copyResult} title="复制回复" aria-label="复制回复">
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          <span>{copied ? '已复制' : '复制回复'}</span>
+        </button>
+        {onRegenerate && <button type="button" disabled={regenerateDisabled} onClick={() => onRegenerate(run)} title="使用相同输入重新生成本次回复" aria-label="重新生成">
+          <RotateCcw size={13} />
+          <span>重新生成</span>
+        </button>}
+      </div>}
     </div>}
 
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
@@ -3277,6 +3314,66 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }
   }
 
+  async function regenerateAssistant(run) {
+    const threadId = assistantThread?.id
+    const turnId = run?.turnId
+    if (!threadId || !turnId || assistantRunning || assistantLoading) return
+    const previousRun = { ...run }
+    const startedAt = performance.now()
+    const controller = new AbortController()
+    assistantAbortRef.current = controller
+    assistantTaskIdRef.current = run.taskId || null
+    assistantTurnIdRef.current = turnId
+    setAssistantRunning(true)
+    setAssistantElapsedMs(0)
+    setAssistantMessages((current) => current.map((item) => item.id === run.id ? {
+      ...item,
+      status: 'running',
+      text: '',
+      response: null,
+      events: [],
+      plan: [],
+      progress: 0,
+      statusMessage: '正在重新生成回复',
+      reasoningSummary: '',
+      reasoningHistory: [],
+      inputHistory: [],
+      durationMs: 0,
+    } : item))
+    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
+    try {
+      const regenerated = await api.regenerateAgentTurn(threadId, turnId, { signal: controller.signal })
+      const task = regenerated.task
+      assistantTaskIdRef.current = task.id
+      setAssistantMessages((current) => current.map((item) => item.id === run.id ? {
+        ...item,
+        taskId: task.id,
+        turnId,
+        status: 'running',
+        items: regenerated.turn?.items || [],
+        events: regenerated.turn ? agentTurnEvents(regenerated.turn) : task.events || [],
+        plan: regenerated.turn?.plan || [],
+        progress: task.progress || 0,
+        statusMessage: task.statusMessage || '正在重新生成回复',
+      } : item))
+      await monitorAssistantTurn(threadId, turnId, task.id, run.id, controller, startedAt)
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        setAssistantMessages((current) => current.map((item) => item.id === run.id ? previousRun : item))
+        onNotify(error.message || '重新生成失败，原回复已保留')
+      }
+    } finally {
+      window.clearInterval(timer)
+      if (assistantAbortRef.current === controller) {
+        assistantAbortRef.current = null
+        assistantTaskIdRef.current = null
+        assistantTurnIdRef.current = null
+        setAssistantElapsedMs(performance.now() - startedAt)
+        setAssistantRunning(false)
+      }
+    }
+  }
+
   async function submitAssistantSteer(message) {
     const threadId = assistantThread?.id
     const turnId = assistantTurnIdRef.current
@@ -3360,6 +3457,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
       mode: agentMode,
+      multiAgent: agentMultiAgent,
       sourceText: draft,
       selectionStart,
       selectionEnd,
@@ -3692,6 +3790,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       return total
     }, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, estimated: false })
   const latestAgentRun = [...assistantMessages].reverse().find((message) => message.role === 'agent')
+  const latestAgentRunId = latestAgentRun?.id || null
   const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
   const agentContextUsed = Math.max(0, latestAgentUsage
     ? latestAgentUsage.inputTokens + latestAgentUsage.outputTokens
@@ -3914,7 +4013,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs}
                   onApply={applyAssistantRevision}
                   onChoose={(reply) => submitAssistantAnswer(message, reply)}
+                  onRegenerate={message.id === latestAgentRunId ? regenerateAssistant : null}
                   choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
+                  regenerateDisabled={assistantRunning || assistantLoading || message.id !== latestAgentRunId}
                 />)}
             </div>
             <div className="agent-composer-wrap">
@@ -3922,6 +4023,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
                 {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
+                {agentMultiAgent && <div className="agent-team-banner">
+                  <UsersRound size={14} />
+                  <span><strong>多智能体协作已开启</strong><small>{agentMode === 'review' ? '连续性守卫与文本审阅并行，夜雨汇总' : '连续性守卫与场景规划并行，夜雨汇总'}</small></span>
+                  <button type="button" onClick={() => setAgentMultiAgent(false)} title="关闭多智能体协作" aria-label="关闭多智能体协作"><X size={12} /></button>
+                </div>}
                 <textarea
                   ref={assistantInputRef}
                   value={assistantInput}
@@ -3965,8 +4071,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 <div className="agent-composer-footer">
                   <div className="agent-composer-controls" ref={agentControlsRef}>
                     <button type="button" className={`agent-mode-trigger ${agentPickerOpen === 'mode' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'mode'} onClick={() => toggleAgentPicker('mode')} title="选择执行模式"><UserRound size={13} /><span>{agentModeOptions.find((option) => option.value === agentMode)?.label || 'Build'}</span></button>
+                    <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '单智能体'}</span><ChevronDown size={11} /></button>
                     <button type="button" className={`agent-tool-button ${agentWebSearch ? 'active' : ''}`} aria-pressed={agentWebSearch} onClick={() => setAgentWebSearch((active) => !active)} title={agentWebSearch ? '关闭联网搜索' : '开启联网搜索'}><Globe size={13} /><span>联网</span></button>
-                    <button type="button" className={`agent-tool-button ${agentMultiAgent ? 'active' : ''}`} aria-pressed={agentMultiAgent} onClick={() => setAgentMultiAgent((active) => !active)} title={agentMultiAgent ? '关闭双子代理协作' : '开启双子代理协作（会额外使用 token）'}><UsersRound size={13} /><span>协作</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
                       <Bot size={13} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
@@ -4000,6 +4106,14 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                       value={agentMode}
                       loading={false}
                       onSelect={(value) => { setAgentMode(value); setAgentPickerOpen(null) }}
+                    />}
+                    {agentPickerOpen === 'team' && <AgentComposerMenu
+                      title="智能体协作"
+                      description="多智能体会额外消耗 token，但会先并行审阅再统一回答"
+                      options={agentTeamOptions}
+                      value={agentMultiAgent ? 'team' : 'solo'}
+                      loading={false}
+                      onSelect={(value) => { setAgentMultiAgent(value === 'team'); setAgentPickerOpen(null) }}
                     />}
                     <button type="button" className="agent-tool-button icon-only" onClick={onOpenSettings} title="打开模型设置" aria-label="打开模型设置"><Settings2 size={14} /></button>
                   </div>

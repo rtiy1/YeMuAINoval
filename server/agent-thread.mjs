@@ -379,6 +379,7 @@ export function taskSource(task) {
     chapterId: task?.chapterId ?? payload.chapter_id ?? payload.chapterId ?? null,
     chapterTitle: text(payload.chapter_title || payload.chapterTitle),
     mode: text(payload.collaboration_mode) || 'build',
+    multiAgent: payload.multi_agent === true,
     sourceText: typeof payload.source_text === 'string' ? payload.source_text : typeof payload.sourceText === 'string' ? payload.sourceText : typeof payload.content === 'string' ? payload.content : '',
     selectedText: typeof payload.selected_text === 'string' ? payload.selected_text : typeof payload.selectedText === 'string' ? payload.selectedText : '',
     selectionStart: Number(payload.selection_start ?? payload.selectionStart) || 0,

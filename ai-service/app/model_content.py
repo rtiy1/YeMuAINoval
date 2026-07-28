@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -13,6 +14,25 @@ NON_OUTPUT_BLOCK_TYPES = {
     'function_call',
     'input_json_delta',
 }
+HIDDEN_REASONING_TAGS = ('think', 'thinking', 'analysis', 'reasoning')
+HIDDEN_REASONING_PATTERN = re.compile(
+    r'<(?P<tag>think|thinking|analysis|reasoning)\b[^>]*>.*?</(?P=tag)\s*>',
+    re.IGNORECASE | re.DOTALL,
+)
+UNCLOSED_REASONING_PATTERN = re.compile(
+    r'<(?:think|thinking|analysis|reasoning)\b[^>]*>.*\Z',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_hidden_reasoning_text(value: str) -> str:
+    """Remove provider-specific inline thinking tags from user-visible text."""
+    text = str(value or '')
+    previous = None
+    while text != previous:
+        previous = text
+        text = HIDDEN_REASONING_PATTERN.sub('', text)
+    return UNCLOSED_REASONING_PATTERN.sub('', text).strip()
 
 
 def model_content_text(value: Any, _seen: set[int] | None = None) -> str:
@@ -20,7 +40,7 @@ def model_content_text(value: Any, _seen: set[int] | None = None) -> str:
     if value is None:
         return ''
     if isinstance(value, str):
-        return value.strip()
+        return strip_hidden_reasoning_text(value)
     if isinstance(value, (int, float, bool)):
         return str(value)
 

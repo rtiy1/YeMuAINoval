@@ -1067,6 +1067,7 @@ const aiInvocationPaths = [
   /^\/api\/ai\/tasks\/[^/]+\/retry$/,
   /^\/api\/ai\/threads\/[^/]+\/turns$/,
   /^\/api\/ai\/threads\/[^/]+\/turns\/[^/]+\/input$/,
+  /^\/api\/ai\/threads\/[^/]+\/turns\/[^/]+\/regenerate$/,
   /^\/api\/ai\/threads\/[^/]+\/turns\/[^/]+\/steer$/,
   /^\/api\/ai\/reviews\/chapter$/,
   /^\/api\/writing-assistant\/messages$/,
@@ -1416,6 +1417,48 @@ async function startWritingTask(user, body, forcedThreadId = null) {
   })
   if (!reused) await dispatchWritingTask(task)
   return { task, reused }
+}
+
+async function regenerateAgentTurn(user, threadId, turnId) {
+  const prepared = await updateDb((db) => {
+    const thread = findAgentThread(db, threadId, user.id, { active: true })
+    const turn = findAgentTurn(thread, turnId)
+    if (thread.turns.at(-1)?.id !== turn.id) {
+      throw Object.assign(new Error('只能重新生成当前会话的最后一次回复'), { status: 409 })
+    }
+    const original = db.writingTasks.find((item) => item.id === turn.taskId && item.userId === user.id)
+    if (!original) throw Object.assign(new Error('原始 Agent 任务不存在'), { status: 404 })
+    if (!['completed', 'failed', 'cancelled'].includes(original.status)) {
+      throw Object.assign(new Error(original.status === 'waiting_input'
+        ? '请先回答当前问题，再重新生成回复'
+        : '当前回复仍在生成中'), { status: 409 })
+    }
+    const input = structuredClone(original.input)
+    const providerCalls = input.payload?.multi_agent === true && input.skill !== 'story-search' ? 3 : 1
+    for (let index = 0; index < providerCalls; index += 1) {
+      recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-turn-regenerate' : 'ai-turn-regenerate-subagent')
+    }
+    const attempt = Math.max(1, Number(original.attempt) || 1) + 1
+    const created = createWritingTask({
+      userId: user.id,
+      input,
+      requestKey: `${original.requestKey || taskRequestKey(user.id, input)}:regenerate:${crypto.randomUUID()}`,
+      parentTaskId: original.id,
+      attempt,
+      threadId: thread.id,
+    })
+    created.turnId = turn.id
+    created.statusMessage = `正在重新生成（第 ${attempt} 次）`
+    created.events[0] = createTaskEvent(created.id, 1, 'lifecycle', created.statusMessage)
+    turn.taskId = created.id
+    turn.regenerationCount = Math.max(0, Number(turn.regenerationCount) || 0) + 1
+    turn.regeneratedAt = created.createdAt
+    thread.updatedAt = created.updatedAt
+    db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
+    return { task: created, turn }
+  })
+  await dispatchWritingTask(prepared.task)
+  return prepared
 }
 
 async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
@@ -2194,6 +2237,26 @@ app.post('/api/ai/threads/:threadId/turns/:turnId/input', async (req, res, next)
     res.status(202).json({
       turn: agentTurnPublic(thread, turn, currentTask, writingTaskPublic),
       task: writingTaskPublic(currentTask),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/turns/:turnId/regenerate', async (req, res, next) => {
+  try {
+    const regenerated = await regenerateAgentTurn(
+      req.user,
+      req.params.threadId,
+      req.params.turnId,
+    )
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    const turn = findAgentTurn(thread, req.params.turnId)
+    const task = db.writingTasks.find((item) => item.id === turn.taskId) || regenerated.task
+    res.status(202).json({
+      turn: agentTurnPublic(thread, turn, task, writingTaskPublic),
+      task: writingTaskPublic(task),
     })
   } catch (error) {
     next(error)
