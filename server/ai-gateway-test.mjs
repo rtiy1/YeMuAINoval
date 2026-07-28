@@ -46,13 +46,23 @@ try {
     STORY_DATA_FILE: path.join(tempDir, 'db.json'),
     AI_SERVICE_URL: aiUrl,
     AI_SERVICE_TOKEN: 'integration-service-token',
+    NODE_ENV: 'test',
+    EMAIL_PROVIDER: 'test',
+    EMAIL_VERIFICATION_EXPOSE_CODE: 'true',
   })
   const apiUrl = await waitForUrl(api, /Story API listening on (http:\/\/[^\s]+)/, 'API 网关启动超时')
 
+  const codeResponse = await fetch(`${apiUrl}/api/auth/register/code`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'integration@example.com' }),
+  })
+  assert.equal(codeResponse.status, 202)
+  const { verificationCode } = await codeResponse.json()
   const registration = await fetch(`${apiUrl}/api/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: '集成测试', email: 'integration@example.com', password: 'password123' }),
+    body: JSON.stringify({ name: '集成测试', email: 'integration@example.com', password: 'password123', verificationCode }),
   })
   assert.equal(registration.status, 201)
   const session = await registration.json()

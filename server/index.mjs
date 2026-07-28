@@ -7,10 +7,14 @@ import express from 'express'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import {
+  authSessionConfig,
   createAccessToken,
+  createEmailVerificationCode,
+  createPasswordResetToken,
   createRefreshSession,
   decryptSecret,
   encryptSecret,
+  hashPasswordResetToken,
   hashRefreshToken,
   hashPassword,
   maskKey,
@@ -18,15 +22,28 @@ import {
   refreshCookie,
   usesDefaultSecret,
   verifyAccessToken,
+  verifyEmailVerificationCode,
   verifyPassword,
 } from './auth.mjs'
+import { emailConfig, sendPasswordResetEmail, sendRegistrationVerificationEmail } from './email.mjs'
 import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 import * as chatMemory from './chat-memory.mjs'
 import { invokeStoryAgent } from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
-import { agentThreadPublic, agentTurnPublic, threadConversation } from './agent-thread.mjs'
+import {
+  agentThreadPublic,
+  agentTurnPublic,
+  archiveTaskReasoning,
+  normalizeAgentInputAnswers,
+  reasoningItemId,
+  taskInputHistory,
+  taskReasoningHistory,
+  taskSteeringHistory,
+  taskSubagents,
+  threadConversation,
+} from './agent-thread.mjs'
 import { readSkillPackage, removeSkillPackage, validateSkillPackage, writeSkillPackage } from './skill-market-storage.mjs'
 import { reviewSkillPackage, skillReviewPublicConfig } from './skill-review.mjs'
 import { decorateInstalledMarketSkill, isMarketSkillPublished, marketSkillKey } from './market-skill-runtime.mjs'
@@ -38,6 +55,21 @@ const host = process.env.HOST || '127.0.0.1'
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(serverDir, '..', 'dist')
 const allowedOrigins = (process.env.WEB_ORIGIN || 'http://127.0.0.1:5173,http://localhost:5173').split(',').map((origin) => origin.trim()).filter(Boolean)
+const appPublicUrl = (() => {
+  const configured = process.env.APP_PUBLIC_URL || allowedOrigins[0] || 'http://127.0.0.1:5173'
+  let parsed
+  try {
+    parsed = new URL(configured)
+  } catch {
+    throw new Error('APP_PUBLIC_URL must be a valid HTTP or HTTPS URL')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+    throw new Error('APP_PUBLIC_URL must be a public HTTP or HTTPS URL without embedded credentials')
+  }
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.toString()
+})()
 const corsMiddleware = cors({ origin: true, credentials: true })
 const aiServiceUrl = (process.env.AI_SERVICE_URL || 'http://127.0.0.1:8890').replace(/\/$/, '')
 const aiServiceToken = process.env.AI_SERVICE_TOKEN || 'local-ai-service-token'
@@ -56,9 +88,15 @@ const GENRE_SUGGESTIONS = [
 ]
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
 const writingTaskControllers = new Map()
+if (isTaskQueueEnabled() && !String(process.env.DATABASE_URL || '').trim()) {
+  throw new Error('Redis AI task queue requires DATABASE_URL so API and workers share transactional state')
+}
 const registrationMode = process.env.REGISTRATION_MODE || (process.env.NODE_ENV === 'production' ? 'owner-only' : 'open')
 if (!['open', 'owner-only', 'closed'].includes(registrationMode)) {
   throw new Error('REGISTRATION_MODE must be open, owner-only, or closed')
+}
+if (process.env.NODE_ENV === 'production' && registrationMode !== 'closed' && !emailConfig.configured) {
+  throw new Error('Email delivery must be configured when registration is enabled in production')
 }
 if (process.env.NODE_ENV === 'production') {
   if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error('AUTH_SECRET must contain at least 32 characters in production')
@@ -120,6 +158,22 @@ app.use(['/api/auth/register', '/api/auth/login'], rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { error: '登录尝试过于频繁，请稍后再试' },
+}))
+
+app.use('/api/auth/register/code', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '验证码发送过于频繁，请稍后再试' },
+}))
+
+app.use(['/api/auth/password/forgot', '/api/auth/password/reset'], rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '密码找回请求过于频繁，请稍后再试' },
 }))
 
 function cleanText(value, field, maxLength) {
@@ -739,6 +793,7 @@ async function authenticate(req, _res, next) {
     const db = await loadDb()
     const user = db.users.find((item) => item.id === payload.sub)
     if (!user) throw unauthorized('账号不存在')
+    if (Number(payload.authVersion ?? 0) !== (Number(user.authVersion) || 0)) throw unauthorized('登录已过期，请重新登录')
     req.user = user
     next()
   } catch (error) {
@@ -755,7 +810,63 @@ app.get('/api/health', async (_req, res, next) => {
       projects: db.projects.length,
       storage: storeInfo(),
       skillReview: skillReviewPublicConfig(),
+      email: emailConfig,
+      authSession: {
+        accessMinutes: authSessionConfig.accessTtlSeconds / 60,
+        refreshDays: authSessionConfig.refreshTtlMs / (24 * 60 * 60 * 1000),
+      },
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+const registrationCodeResponseMessage = '如果该邮箱可以注册，我们会发送一封验证码邮件，请检查收件箱和垃圾邮件。'
+
+app.post('/api/auth/register/code', async (req, res, next) => {
+  try {
+    const email = cleanEmail(req.body?.email)
+    const verificationRequest = await updateDb((db) => {
+      if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
+        throw Object.assign(new Error('当前站点未开放注册'), { status: 403 })
+      }
+      const now = Date.now()
+      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => new Date(item.expiresAt).getTime() > now && Number(item.attempts || 0) < 5)
+      if (db.users.some((item) => item.email === email)) return null
+      const existing = db.emailVerificationCodes.find((item) => item.email === email)
+      if (existing && now - new Date(existing.createdAt).getTime() < 60_000) return { cooldown: true }
+      const verification = createEmailVerificationCode(email)
+      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
+      db.emailVerificationCodes.push(verification.record)
+      return verification
+    })
+
+    if (verificationRequest?.record) {
+      try {
+        const delivery = await sendRegistrationVerificationEmail({
+          to: email,
+          code: verificationRequest.code,
+          expiresInMinutes: authSessionConfig.emailVerificationTtlMs / (60 * 1000),
+          idempotencyKey: verificationRequest.record.id,
+        })
+        if (!delivery.delivered) {
+          await updateDb((db) => {
+            db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verificationRequest.record.id)
+          })
+        }
+      } catch (error) {
+        await updateDb((db) => {
+          db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verificationRequest.record.id)
+        }).catch(() => undefined)
+        console.error(`Registration verification email delivery failed: ${error.message}`)
+      }
+    }
+
+    const payload = { message: registrationCodeResponseMessage, retryAfterSeconds: 60 }
+    if (process.env.NODE_ENV === 'test' && process.env.EMAIL_VERIFICATION_EXPOSE_CODE === 'true' && verificationRequest?.code) {
+      payload.verificationCode = verificationRequest.code
+    }
+    res.status(202).json(payload)
   } catch (error) {
     next(error)
   }
@@ -766,21 +877,38 @@ app.post('/api/auth/register', async (req, res, next) => {
     const name = cleanText(req.body?.name, '昵称', 40)
     const email = cleanEmail(req.body?.email)
     const password = cleanPassword(req.body?.password)
+    const verificationCode = typeof req.body?.verificationCode === 'string' ? req.body.verificationCode.trim() : ''
+    if (!/^\d{6}$/.test(verificationCode)) {
+      throw Object.assign(new Error('请输入 6 位邮箱验证码'), { status: 400 })
+    }
     const passwordHash = await hashPassword(password)
     const user = {
       id: crypto.randomUUID(),
       name,
       email,
       passwordHash,
+      authVersion: 0,
       createdAt: new Date().toISOString(),
     }
-    const created = await updateDb((db) => {
+    const result = await updateDb((db) => {
       if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
         throw Object.assign(new Error('当前站点未开放注册'), { status: 403 })
       }
       if (db.users.some((item) => item.email === email)) {
         throw Object.assign(new Error('该邮箱已经注册'), { status: 409 })
       }
+      const now = Date.now()
+      const verification = db.emailVerificationCodes.find((item) => item.email === email && new Date(item.expiresAt).getTime() > now && Number(item.attempts || 0) < 5)
+      if (!verification || !verifyEmailVerificationCode(email, verificationCode, verification.codeHash)) {
+        if (verification) {
+          verification.attempts = Number(verification.attempts || 0) + 1
+          if (verification.attempts >= 5) db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verification.id)
+        } else {
+          db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
+        }
+        return { error: '邮箱验证码无效或已过期，请重新获取' }
+      }
+      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
       db.users.push(user)
       if (!db.projects.some((project) => project.userId === user.id)) {
         const timestamp = new Date().toISOString()
@@ -793,8 +921,10 @@ app.post('/api/auth/register', async (req, res, next) => {
         db.drafts[project.id] = {}
         createChapterRecord(db, project, '第一章')
       }
-      return user
+      return { user }
     })
+    if (result.error) throw Object.assign(new Error(result.error), { status: 400 })
+    const created = result.user
     res.status(201).json(await issueSession(created, req, res))
   } catch (error) {
     next(error)
@@ -809,6 +939,77 @@ app.post('/api/auth/login', async (req, res, next) => {
     const user = db.users.find((item) => item.email === email)
     if (!user || !(await verifyPassword(password, user.passwordHash))) throw unauthorized('邮箱或密码不正确')
     res.json(await issueSession(user, req, res))
+  } catch (error) {
+    next(error)
+  }
+})
+
+const passwordResetResponseMessage = '如果该邮箱已注册，我们会发送一封密码重置邮件，请检查收件箱和垃圾邮件。'
+
+app.post('/api/auth/password/forgot', async (req, res, next) => {
+  try {
+    const email = cleanEmail(req.body?.email)
+    const resetRequest = await updateDb((db) => {
+      const now = Date.now()
+      db.passwordResetTokens = db.passwordResetTokens.filter((item) => new Date(item.expiresAt).getTime() > now)
+      const user = db.users.find((item) => item.email === email)
+      if (!user) return null
+      const reset = createPasswordResetToken(user.id)
+      db.passwordResetTokens = db.passwordResetTokens.filter((item) => item.userId !== user.id)
+      db.passwordResetTokens.push(reset.record)
+      return { user: publicUser(user), ...reset }
+    })
+
+    if (resetRequest) {
+      const resetUrl = new URL(appPublicUrl)
+      resetUrl.searchParams.set('reset_token', resetRequest.token)
+      try {
+        await sendPasswordResetEmail({
+          to: resetRequest.user.email,
+          name: resetRequest.user.name,
+          resetUrl: resetUrl.toString(),
+          expiresInMinutes: authSessionConfig.passwordResetTtlMs / (60 * 1000),
+          idempotencyKey: resetRequest.record.id,
+        })
+      } catch (error) {
+        console.error(`Password reset email delivery failed: ${error.message}`)
+      }
+    }
+
+    const payload = { message: passwordResetResponseMessage }
+    if (process.env.NODE_ENV === 'test' && process.env.PASSWORD_RESET_EXPOSE_TOKEN === 'true' && resetRequest) {
+      payload.resetToken = resetRequest.token
+    }
+    res.status(202).json(payload)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/auth/password/reset', async (req, res, next) => {
+  try {
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : ''
+    if (token.length < 32 || token.length > 200) {
+      throw Object.assign(new Error('重置链接无效或已过期，请重新申请'), { status: 400 })
+    }
+    const password = cleanPassword(req.body?.password)
+    const passwordHash = await hashPassword(password)
+    const tokenHash = hashPasswordResetToken(token)
+    await updateDb((db) => {
+      const now = Date.now()
+      const reset = db.passwordResetTokens.find((item) => item.tokenHash === tokenHash && new Date(item.expiresAt).getTime() > now)
+      const user = reset && db.users.find((item) => item.id === reset.userId)
+      if (!reset || !user) {
+        db.passwordResetTokens = db.passwordResetTokens.filter((item) => new Date(item.expiresAt).getTime() > now)
+        throw Object.assign(new Error('重置链接无效或已过期，请重新申请'), { status: 400 })
+      }
+      user.passwordHash = passwordHash
+      user.authVersion = (Number(user.authVersion) || 0) + 1
+      db.sessions = db.sessions.filter((session) => session.userId !== user.id)
+      db.passwordResetTokens = db.passwordResetTokens.filter((item) => item.userId !== user.id)
+    })
+    clearRefreshCookie(res)
+    res.json({ message: '密码已更新，请使用新密码登录。' })
   } catch (error) {
     next(error)
   }
@@ -864,6 +1065,8 @@ const aiInvocationPaths = [
   /^\/api\/ai\/tasks$/,
   /^\/api\/ai\/tasks\/[^/]+\/retry$/,
   /^\/api\/ai\/threads\/[^/]+\/turns$/,
+  /^\/api\/ai\/threads\/[^/]+\/turns\/[^/]+\/input$/,
+  /^\/api\/ai\/threads\/[^/]+\/turns\/[^/]+\/steer$/,
   /^\/api\/ai\/reviews\/chapter$/,
   /^\/api\/writing-assistant\/messages$/,
   /^\/api\/projects\/[^/]+\/chapters\/[^/]+\/memory-candidates$/,
@@ -949,7 +1152,17 @@ function validateStoryAgentInput(input) {
   const message = cleanText(input?.message, '智能体指令', 4000)
   const skill = input?.skill === undefined || input?.skill === null ? null : cleanText(input.skill, 'Skill 名称', 80)
   if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
-  const payload = input?.payload && typeof input.payload === 'object' && !Array.isArray(input.payload) ? input.payload : {}
+  const rawPayload = input?.payload && typeof input.payload === 'object' && !Array.isArray(input.payload) ? input.payload : {}
+  const {
+    _model_continuation: _reservedContinuation,
+    _agent_reports: _reservedAgentReports,
+    _agent_role: _reservedAgentRole,
+    steering_messages: _reservedSteeringMessages,
+    ...payload
+  } = rawPayload
+  if (payload.multi_agent !== undefined && typeof payload.multi_agent !== 'boolean') {
+    throw Object.assign(new Error('多智能体开关必须是布尔值'), { status: 400 })
+  }
   if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
   return { message, skill, payload }
 }
@@ -981,7 +1194,12 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
     id, userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
     skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt, threadId,
     status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
-    result: null, partialOutput: '', reasoningSummary: '', error: null, errorCode: null, retryable: false, cancelRequested: false,
+    result: null, partialOutput: '', reasoningSummary: '', reasoningHistory: [], interactionAttempt: 1,
+    executionGeneration: 1, activeExecutionId: null,
+    steerRevision: 0, appliedSteerRevision: 0, steerRequested: false, steeringHistory: [],
+    subagents: [],
+    modelContinuation: null, continuationMode: null,
+    usage: null, usageHistory: [], error: null, errorCode: null, retryable: false, cancelRequested: false,
     events: [createTaskEvent(id, 1, 'lifecycle', attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队')],
     createdAt: timestamp, updatedAt: timestamp,
   }
@@ -994,7 +1212,21 @@ function writingTaskPublic(task) {
   return {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
     skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
-    statusMessage: task.statusMessage || '', result: task.result || null, partialOutput: task.partialOutput || '', reasoningSummary: task.reasoningSummary || '', error: task.error || null,
+    statusMessage: task.statusMessage || '', result: task.result || null, partialOutput: task.partialOutput || '', reasoningSummary: task.reasoningSummary || '',
+    reasoningHistory: taskReasoningHistory(task), interactionAttempt: Math.max(1, Number(task.interactionAttempt) || 1),
+    reasoningItemId: reasoningItemId(task), usage: task.usage || null,
+    continuationMode: task.continuationMode || null,
+    steerRevision: Math.max(0, Number(task.steerRevision) || 0),
+    appliedSteerRevision: Math.max(0, Number(task.appliedSteerRevision) || 0),
+    steeringHistory: taskSteeringHistory(task),
+    subagents: taskSubagents(task),
+    usageHistory: Array.isArray(task.usageHistory) ? task.usageHistory.slice(-20).map((item) => ({
+      interactionAttempt: Math.max(1, Number(item?.interactionAttempt) || 1),
+      status: item?.status || 'completed',
+      usage: item?.usage || null,
+      createdAt: item?.createdAt || null,
+    })) : [],
+    inputHistory: taskInputHistory(task), error: task.error || null,
     errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
     parentTaskId: task.parentTaskId || null, reused: task.reused === true,
     threadId: task.threadId || null, turnId: task.turnId || null,
@@ -1051,11 +1283,24 @@ function streamDelay(req, milliseconds) {
 
 async function executeWritingTaskLocally(taskId, userId) {
   const controller = new AbortController()
-  writingTaskControllers.set(taskId, controller)
+  const executionId = crypto.randomUUID()
+  const entry = { controller, executionId }
+  writingTaskControllers.set(taskId, entry)
+  let outcome = null
   try {
-    await runWritingTask(taskId, { userId, controller, requeueOnAbort: true })
+    outcome = await runWritingTask(taskId, {
+      userId,
+      controller,
+      executionId,
+      requeueOnAbort: true,
+    })
   } finally {
-    writingTaskControllers.delete(taskId)
+    if (writingTaskControllers.get(taskId) === entry) writingTaskControllers.delete(taskId)
+  }
+  if (outcome?.status === 'requeued' && outcome.reason === 'steer') {
+    const db = await loadDb()
+    const task = db.writingTasks.find((item) => item.id === taskId && item.userId === userId)
+    if (task?.status === 'queued') await dispatchWritingTask(task)
   }
 }
 
@@ -1100,6 +1345,7 @@ async function startWritingTask(user, body, forcedThreadId = null) {
     input.payload = {
       ...input.payload,
       conversation: [...threadConversation(thread, db.writingTasks), ...priorConversation].slice(-24),
+      continuation_conversation: [],
       conversation_summary: thread.contextSummary || '',
       compacted_turn_count: Math.max(0, Number(thread.compactedTurnCount) || 0),
     }
@@ -1121,7 +1367,17 @@ async function startWritingTask(user, body, forcedThreadId = null) {
       return existing
     }
     const thread = threadId ? findAgentThread(db, threadId, user.id, { active: true }) : null
-    recordQueuedAiUsage(db, user.id, 'ai-task')
+    if (thread) {
+      const activeTurn = [...(thread.turns || [])].reverse().find((turn) => {
+        const activeTask = db.writingTasks.find((item) => item.id === turn.taskId)
+        return activeTask && ['queued', 'running', 'waiting_input'].includes(activeTask.status)
+      })
+      if (activeTurn) throw Object.assign(new Error('当前 Agent 会话已有未完成轮次'), { status: 409 })
+    }
+    const providerCalls = input.payload.multi_agent === true && input.skill !== 'story-search' ? 3 : 1
+    for (let index = 0; index < providerCalls; index += 1) {
+      recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-task' : 'ai-task-subagent')
+    }
     const created = createWritingTask({ userId: user.id, input, requestKey, threadId })
     db.writingTasks = [created, ...db.writingTasks].slice(0, 500)
     if (thread) appendAgentTurn(thread, created, input)
@@ -1139,39 +1395,92 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
     if (!task || task.status !== 'waiting_input' || task.result?.status !== 'needs_input') {
       throw Object.assign(new Error('当前 Agent 没有等待用户输入'), { status: 409 })
     }
-    const question = task.result?.result?.question
-    const answerText = Object.entries(answers || {})
-      .flatMap(([id, value]) => Array.isArray(value) ? [`${id}：${value.join('、')}`] : [`${id}：${String(value || '')}`])
-      .filter((value) => !value.endsWith('：'))
-      .join('\n')
-    if (!answerText) throw Object.assign(new Error('请至少回答一个问题'), { status: 400 })
-    const questionText = Array.isArray(question?.questions)
-      ? question.questions.map((item, index) => `问题 ${index + 1}：${item.question}`).join('\n')
-      : String(question?.question || '')
+    recordQueuedAiUsage(db, user.id, 'ai-task-input')
+    const timestamp = new Date().toISOString()
+    const inputRequest = task.result?.result?.question
+    const normalized = normalizeAgentInputAnswers(inputRequest, answers)
+    const modelContinuation = ['openai_responses', 'message_tools'].includes(task.modelContinuation?.protocol)
+      && task.modelContinuation.callId === inputRequest?.requestId
+      ? task.modelContinuation
+      : null
+    const existingConversation = Array.isArray(task.input?.payload?.conversation) ? task.input.payload.conversation : []
+    const pendingContinuation = Array.isArray(task.input?.payload?.continuation_conversation) ? task.input.payload.continuation_conversation : []
+    const continuation = [
+      { role: 'assistant', text: normalized.questionText },
+      { role: 'user', text: normalized.answerText },
+    ]
+    const requestHistory = Array.isArray(task.input?.payload?.request_user_input_history)
+      ? task.input.payload.request_user_input_history
+      : []
+    const { _model_continuation: _staleContinuation, ...payloadWithoutContinuation } = task.input?.payload || {}
     task.input = {
       ...task.input,
-      message: `${task.input.message}\n\n用户回答：\n${answerText}`,
       payload: {
-        ...task.input.payload,
-        continuation_conversation: [
-          { role: 'assistant', text: questionText },
-          { role: 'user', text: answerText },
-        ],
+        ...payloadWithoutContinuation,
+        conversation: existingConversation,
+        continuation_conversation: [...pendingContinuation, ...continuation].slice(-12),
+        ...(modelContinuation ? {
+          _model_continuation: modelContinuation.protocol === 'openai_responses'
+            ? {
+              protocol: 'openai_responses',
+              previous_response_id: modelContinuation.responseId,
+              call_id: modelContinuation.callId,
+              answers: normalized.answers,
+            }
+            : {
+              protocol: 'message_tools',
+              call_id: modelContinuation.callId,
+              tool_name: modelContinuation.toolName,
+              arguments: modelContinuation.arguments,
+              assistant_content: modelContinuation.assistantContent,
+              history: modelContinuation.history.map((item) => ({
+                call_id: item.callId,
+                tool_name: item.toolName,
+                arguments: item.arguments,
+                assistant_content: item.assistantContent,
+                output: item.output,
+              })),
+              base_choice_followup: modelContinuation.baseChoiceFollowup,
+              answers: normalized.answers,
+            },
+        } : {}),
+        request_user_input_history: [...requestHistory, {
+          requestId: inputRequest?.requestId || null,
+          interactionAttempt: Math.max(1, Number(task.interactionAttempt) || 1),
+          questions: Array.isArray(inputRequest?.questions) ? inputRequest.questions : [inputRequest],
+          response: normalized,
+          requestedAt: task.inputRequestStartedAt || task.updatedAt || null,
+          resolvedAt: timestamp,
+        }].slice(-6),
       },
     }
+    archiveTaskReasoning(task, { turnId: turn.id, completedAt: timestamp })
+    task.interactionAttempt = Math.max(1, Number(task.interactionAttempt) || 1) + 1
     task.result = null
     task.partialOutput = ''
     task.reasoningSummary = ''
+    task.reasoningStartedAt = null
+    task.reasoningCompletedAt = null
+    task.inputRequestStartedAt = null
+    task.modelContinuation = null
+    task.continuationMode = modelContinuation?.protocol || 'transcript'
     task.error = null
     task.errorCode = null
     task.retryable = false
     task.cancelRequested = false
+    task.executionGeneration = Math.max(1, Number(task.executionGeneration) || 1) + 1
+    task.activeExecutionId = null
     task.status = 'queued'
     task.progress = 0
-    task.statusMessage = '已收到回答，继续执行 Agent'
+    task.statusMessage = '已确认补充信息，继续执行 Agent'
     task.events ||= []
-    task.events.push(createTaskEvent(task.id, task.events.length + 1, 'lifecycle', '收到用户回答，继续执行', 'completed'))
-    task.updatedAt = new Date().toISOString()
+    task.events.push(createTaskEvent(task.id, task.events.length + 1, 'input', '已确认补充信息', 'completed', {
+      requestId: inputRequest?.requestId || null,
+      questions: Object.keys(normalized.answers).length,
+      interactionAttempt: task.interactionAttempt,
+      continuationMode: task.continuationMode,
+    }))
+    task.updatedAt = timestamp
     thread.updatedAt = task.updatedAt
     return { task, turn }
   })
@@ -1183,11 +1492,104 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
   return { task, turn }
 }
 
+async function steerAgentTurn(user, threadId, turnId, body) {
+  const message = cleanText(body?.message, '追加指令', 4000)
+  const expectedTurnId = cleanText(body?.expectedTurnId, '预期轮次 ID', 120)
+  if (expectedTurnId !== turnId) throw Object.assign(new Error('预期轮次与当前轮次不一致'), { status: 409 })
+  const idempotencyKey = cleanOptionalText(
+    body?.idempotencyKey || body?.clientUserMessageId,
+    '追加指令幂等键',
+    160,
+  )
+  const prepared = await updateDb((db) => {
+    const thread = findAgentThread(db, threadId, user.id, { active: true })
+    const turn = findAgentTurn(thread, turnId)
+    const task = db.writingTasks.find((item) => item.id === turn.taskId && item.userId === user.id)
+    if (task) task.steeringHistory ||= []
+    if (task && idempotencyKey) {
+      const existing = task.steeringHistory.find((item) => item.idempotencyKey === idempotencyKey)
+      if (existing) {
+        if (existing.text !== message) throw Object.assign(new Error('同一幂等键不能提交不同追加指令'), { status: 409 })
+        return { task, turn, input: existing, reused: true }
+      }
+    }
+    if (!task || !['queued', 'running'].includes(task.status)) {
+      throw Object.assign(new Error(task?.status === 'waiting_input'
+        ? '当前轮次正在等待结构化回答，请使用回答入口'
+        : '只有正在执行的 Agent 轮次可以追加指令'), { status: 409 })
+    }
+    const activeTurn = [...(thread.turns || [])].reverse().find((item) => {
+      const activeTask = db.writingTasks.find((candidate) => candidate.id === item.taskId && candidate.userId === user.id)
+      return activeTask && ['queued', 'running'].includes(activeTask.status)
+    })
+    if (!activeTurn || activeTurn.id !== turn.id) {
+      throw Object.assign(new Error('该轮次不是当前活动轮次'), { status: 409 })
+    }
+    const currentHistory = taskSteeringHistory(task)
+    if (currentHistory.length >= 8 || currentHistory.reduce((sum, item) => sum + item.text.length, 0) + message.length > 16_000) {
+      throw Object.assign(new Error('当前轮次的追加指令已达到上限，请等待完成后开启新轮次'), { status: 409 })
+    }
+    const firstPending = task.status === 'running' && !task.steeringHistory.some((item) => item.status === 'pending')
+    if (firstPending) {
+      const providerCalls = task.input?.payload?.multi_agent === true && task.skill !== 'story-search' ? 3 : 1
+      for (let index = 0; index < providerCalls; index += 1) {
+        recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-task-steer' : 'ai-task-steer-subagent')
+      }
+    }
+    const timestamp = new Date().toISOString()
+    const revision = Math.max(0, Number(task.steerRevision) || 0) + 1
+    const input = {
+      id: crypto.randomUUID(),
+      idempotencyKey: idempotencyKey || null,
+      text: message,
+      revision,
+      status: task.status === 'queued' ? 'applied' : 'pending',
+      createdAt: timestamp,
+      ...(task.status === 'queued' ? { appliedAt: timestamp } : {}),
+    }
+    task.steeringHistory.push(input)
+    task.steeringHistory = task.steeringHistory.slice(-8)
+    task.steerRevision = revision
+    if (task.status === 'queued') {
+      const payload = task.input?.payload && typeof task.input.payload === 'object' ? task.input.payload : {}
+      const steeringMessages = Array.isArray(payload.steering_messages) ? payload.steering_messages : []
+      task.input = {
+        ...task.input,
+        payload: {
+          ...payload,
+          steering_messages: [...steeringMessages, { id: input.id, text: input.text, revision }].slice(-8),
+        },
+      }
+      task.appliedSteerRevision = revision
+      task.statusMessage = '已将追加指令合并到待执行轮次'
+    } else {
+      task.steerRequested = true
+      task.statusMessage = '已接收追加指令，将在当前生成边界继续'
+    }
+    task.events ||= []
+    task.events.push(createTaskEvent(task.id, task.events.length + 1, 'input', '已接收追加指令', 'completed', {
+      steerId: input.id,
+      revision,
+      status: input.status,
+    }))
+    task.updatedAt = timestamp
+    thread.updatedAt = timestamp
+    return { task, turn, input, reused: false }
+  })
+  const db = await loadDb()
+  const thread = findAgentThread(db, threadId, user.id)
+  const turn = findAgentTurn(thread, turnId)
+  const task = db.writingTasks.find((item) => item.id === prepared.task.id)
+  const publicInput = taskSteeringHistory(task).find((item) => item.id === prepared.input.id)
+  return { thread, task, turn, input: publicInput, reused: prepared.reused }
+}
+
 async function interruptWritingTask(userId, taskId) {
-  const task = await updateDb((db) => {
+  const prepared = await updateDb((db) => {
     const current = db.writingTasks.find((item) => item.id === taskId && item.userId === userId)
     if (!current) throw Object.assign(new Error('AI 任务不存在'), { status: 404 })
-    if (['completed', 'failed', 'cancelled'].includes(current.status)) return current
+    if (['completed', 'failed', 'cancelled'].includes(current.status)) return { task: current, executionId: null }
+    const executionId = current.activeExecutionId || null
     current.cancelRequested = true
     current.status = 'cancelled'
     current.statusMessage = '任务已取消，可重新提交'
@@ -1202,16 +1604,28 @@ async function interruptWritingTask(userId, taskId) {
       }
     }
     current.events.push(createTaskEvent(current.id, current.events.length + 1, 'lifecycle', '用户停止了任务', 'cancelled'))
+    for (const steer of current.steeringHistory || []) {
+      if (steer.status === 'pending') steer.status = 'cancelled'
+    }
+    for (const subagent of current.subagents || []) {
+      if (subagent.status === 'running') {
+        subagent.status = 'interrupted'
+        subagent.completedAt = timestamp
+      }
+    }
     current.updatedAt = timestamp
     if (current.threadId) {
       const thread = db.agentThreads.find((item) => item.id === current.threadId)
       if (thread) thread.updatedAt = current.updatedAt
     }
-    return current
+    return { task: current, executionId }
   })
-  writingTaskControllers.get(task.id)?.abort()
-  await publishTaskCancellation(task.id)
-  return task
+  const localExecution = writingTaskControllers.get(prepared.task.id)
+  if (localExecution && (!prepared.executionId || localExecution.executionId === prepared.executionId)) {
+    localExecution.controller.abort()
+  }
+  await publishTaskCancellation(prepared.task.id, prepared.executionId)
+  return prepared.task
 }
 
 async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
@@ -1742,6 +2156,30 @@ app.post('/api/ai/threads/:threadId/turns/:turnId/input', async (req, res, next)
   }
 })
 
+app.post('/api/ai/threads/:threadId/turns/:turnId/steer', async (req, res, next) => {
+  try {
+    const steered = await steerAgentTurn(
+      req.user,
+      req.params.threadId,
+      req.params.turnId,
+      req.body || {},
+    )
+    res.status(steered.reused ? 200 : 202).json({
+      turn: agentTurnPublic(
+        steered.thread,
+        steered.turn,
+        steered.task,
+        writingTaskPublic,
+      ),
+      task: writingTaskPublic(steered.task),
+      input: steered.input,
+      reused: steered.reused,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.get('/api/ai/threads/:threadId/turns/:turnId', async (req, res, next) => {
   try {
     const db = await loadDb()
@@ -1771,6 +2209,16 @@ app.post('/api/ai/threads/:threadId/turns/:turnId/interrupt', async (req, res, n
 })
 
 app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
+  const initialDb = await loadDb()
+  const initialThread = initialDb.agentThreads.find((item) => item.id === req.params.threadId && item.userId === req.user.id)
+  const initialTurn = initialThread?.turns.find((item) => item.id === req.params.turnId)
+  const initialTask = initialTurn
+    ? initialDb.writingTasks.find((item) => item.id === initialTurn.taskId && item.userId === req.user.id)
+    : null
+  if (!initialThread || !initialTurn || !initialTask) {
+    res.status(404).json({ error: 'Agent 轮次不存在' })
+    return
+  }
   res.status(200)
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -1787,6 +2235,9 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
   let outputItemStarted = false
   let lastReasoningLength = 0
   let reasoningItemStarted = false
+  let reasoningItemCompleted = false
+  let lastInteractionAttempt = null
+  let lastSteerRevision = null
   let lastHeartbeat = Date.now()
   const itemVersions = new Map()
   try {
@@ -1800,10 +2251,85 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         break
       }
       const publicTurn = agentTurnPublic(thread, turn, task, writingTaskPublic)
-      const turnVersion = `${publicTurn.status}:${publicTurn.updatedAt || ''}`
+      const interactionAttempt = Math.max(1, Number(publicTurn.task?.interactionAttempt) || 1)
+      const steerRevision = Math.max(0, Number(publicTurn.task?.steerRevision) || 0)
+      const turnVersion = `${publicTurn.status}:${interactionAttempt}:${steerRevision}:${publicTurn.updatedAt || ''}`
       if (!turnStarted) {
         turnStarted = true
-        res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
+        lastInteractionAttempt = interactionAttempt
+        lastSteerRevision = steerRevision
+        const replayDeltas = task.status !== 'waiting_input'
+        const streamTurn = publicTurn.task && replayDeltas
+          ? {
+            ...publicTurn,
+            status: 'inProgress',
+            completedAt: null,
+            task: {
+              ...publicTurn.task,
+              status: ['queued', 'running'].includes(task.status) ? task.status : 'running',
+              result: null,
+              error: null,
+              partialOutput: '',
+              reasoningSummary: '',
+            },
+          }
+          : publicTurn
+        if (!replayDeltas) {
+          lastOutputLength = String(publicTurn.task?.partialOutput || '').length
+          lastReasoningLength = String(publicTurn.task?.reasoningSummary || '').length
+        }
+        res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: streamTurn })}\n\n`)
+      }
+      if (steerRevision > (lastSteerRevision ?? steerRevision)) {
+        for (const input of (publicTurn.task?.steeringHistory || []).filter((item) => item.revision > lastSteerRevision)) {
+          res.write(`event: turn/steer/accepted\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            input,
+          })}\n\n`)
+        }
+        lastSteerRevision = steerRevision
+      }
+      if (lastInteractionAttempt != null && interactionAttempt !== lastInteractionAttempt) {
+        if (reasoningItemStarted && !reasoningItemCompleted) {
+          res.write(`event: item/completed\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            item: {
+              id: reasoningItemId(task, turn.id, lastInteractionAttempt),
+              type: 'reasoning',
+              status: 'interrupted',
+              summary: [],
+              meta: { modelReasoning: true, interactionAttempt: lastInteractionAttempt },
+              completedAt: task.updatedAt || null,
+            },
+          })}\n\n`)
+        }
+        if (outputItemStarted) {
+          res.write(`event: item/completed\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            item: {
+              id: `${turn.id}:agent:${lastInteractionAttempt}`,
+              type: task.input?.payload?.collaboration_mode === 'plan' ? 'plan' : 'agentMessage',
+              status: 'interrupted',
+              content: [],
+              completedAt: task.updatedAt || null,
+            },
+          })}\n\n`)
+        }
+        lastOutputLength = 0
+        outputItemStarted = false
+        lastReasoningLength = 0
+        reasoningItemStarted = false
+        reasoningItemCompleted = false
+        lastInteractionAttempt = interactionAttempt
+        res.write(`event: turn/steered\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          interactionAttempt,
+          appliedSteerRevision: publicTurn.task?.appliedSteerRevision || 0,
+        })}\n\n`)
       }
       const planVersion = JSON.stringify(publicTurn.plan || [])
       if (publicTurn.plan?.length && planVersion !== lastPlanVersion) {
@@ -1816,6 +2342,8 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       }
       const partialOutput = String(publicTurn.task?.partialOutput || '')
       const reasoningSummary = String(publicTurn.task?.reasoningSummary || '')
+      const currentReasoningItemId = publicTurn.task?.reasoningItemId || reasoningItemId(task, turn.id)
+      const currentAgentItemId = `${turn.id}:agent:${interactionAttempt}`
       if (reasoningSummary.length > lastReasoningLength) {
         const delta = reasoningSummary.slice(lastReasoningLength)
         lastReasoningLength = reasoningSummary.length
@@ -1824,14 +2352,42 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           res.write(`event: item/started\ndata: ${JSON.stringify({
             threadId: thread.id,
             turnId: turn.id,
-            item: { id: `${turn.id}:reasoning`, type: 'reasoning', status: 'inProgress', summary: [] },
+            item: {
+              id: currentReasoningItemId,
+              type: 'reasoning',
+              status: 'inProgress',
+              summary: [],
+              meta: { modelReasoning: true, interactionAttempt: publicTurn.task?.interactionAttempt || 1 },
+            },
+          })}\n\n`)
+          res.write(`event: item/reasoning/summaryPartAdded\ndata: ${JSON.stringify({
+            threadId: thread.id,
+            turnId: turn.id,
+            itemId: currentReasoningItemId,
+            summaryIndex: 0,
           })}\n\n`)
         }
-        res.write(`event: item/reasoning/summaryDelta\ndata: ${JSON.stringify({
+        res.write(`event: item/reasoning/summaryTextDelta\ndata: ${JSON.stringify({
           threadId: thread.id,
           turnId: turn.id,
-          itemId: `${turn.id}:reasoning`,
+          itemId: currentReasoningItemId,
+          summaryIndex: 0,
           delta,
+        })}\n\n`)
+      }
+      if (reasoningItemStarted && !reasoningItemCompleted && !['queued', 'running'].includes(task.status)) {
+        reasoningItemCompleted = true
+        res.write(`event: item/completed\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          item: {
+            id: currentReasoningItemId,
+            type: 'reasoning',
+            status: task.status === 'failed' ? 'failed' : task.status === 'cancelled' ? 'interrupted' : 'completed',
+            summary: [{ type: 'summary_text', text: reasoningSummary }],
+            meta: { modelReasoning: true, interactionAttempt: publicTurn.task?.interactionAttempt || 1 },
+            completedAt: task.reasoningCompletedAt || task.updatedAt || null,
+          },
         })}\n\n`)
       }
       if (partialOutput.length > lastOutputLength) {
@@ -1844,18 +2400,19 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           res.write(`event: item/started\ndata: ${JSON.stringify({
             threadId: thread.id,
             turnId: turn.id,
-            item: { id: `${turn.id}:agent`, type: outputItemType, status: 'inProgress', text: '' },
+            item: { id: currentAgentItemId, type: outputItemType, status: 'inProgress', text: '' },
           })}\n\n`)
         }
         const deltaEvent = planMode ? 'item/plan/delta' : 'item/agentMessage/delta'
         res.write(`event: ${deltaEvent}\ndata: ${JSON.stringify({
           threadId: thread.id,
           turnId: turn.id,
-          itemId: `${turn.id}:agent`,
+          itemId: currentAgentItemId,
           delta,
         })}\n\n`)
       }
       for (const item of publicTurn.items) {
+        if (item.meta?.modelReasoning === true) continue
         const version = `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta || {})}`
         if (itemVersions.get(item.id) === version) continue
         itemVersions.set(item.id, version)
@@ -1886,7 +2443,11 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
 app.post('/api/ai/agent/runs', async (req, res, next) => {
   try {
     const input = validateStoryAgentInput(req.body || {})
-    res.json(await runWithAiQuota(req.user.id, 'agent-run', () => invokeStoryAgent(req.user, input)))
+    const result = await runWithAiQuota(req.user.id, 'agent-run', () => invokeStoryAgent(req.user, input))
+    if (result?.result && typeof result.result === 'object' && !Array.isArray(result.result)) {
+      delete result.result.response_continuation
+    }
+    res.json(result)
   } catch (error) {
     if (isNetworkError(error)) {
       next(Object.assign(new Error('AI 服务暂不可用'), { status: 503 }))
@@ -2844,7 +3405,7 @@ async function shutdown(signal) {
   if (shuttingDown) return
   shuttingDown = true
   console.log(`Received ${signal}; shutting down Story API`)
-  for (const controller of writingTaskControllers.values()) controller.abort()
+  for (const entry of writingTaskControllers.values()) entry.controller.abort()
   const closed = new Promise((resolve) => server.close(resolve))
   const forceClose = setTimeout(() => server.closeAllConnections(), 8_000)
   await closed

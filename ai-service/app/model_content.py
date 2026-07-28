@@ -4,6 +4,15 @@ from typing import Any
 
 
 TEXT_KEYS = ('text', 'content', 'output', 'message', 'summary', 'reply', 'revised_text')
+NON_OUTPUT_BLOCK_TYPES = {
+    'reasoning',
+    'thinking',
+    'reasoning_content',
+    'tool_use',
+    'tool_call',
+    'function_call',
+    'input_json_delta',
+}
 
 
 def model_content_text(value: Any, _seen: set[int] | None = None) -> str:
@@ -30,6 +39,9 @@ def model_content_text(value: Any, _seen: set[int] | None = None) -> str:
         return model_content_text(value.text, seen)
 
     if isinstance(value, Mapping):
+        block_type = str(value.get('type') or '')
+        if block_type in NON_OUTPUT_BLOCK_TYPES:
+            return ''
         for key in TEXT_KEYS:
             if key in value:
                 text = model_content_text(value[key], seen)

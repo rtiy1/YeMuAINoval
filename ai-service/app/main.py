@@ -14,6 +14,8 @@ from app.schemas import (
     ContextCompactResponse,
     ReviewResult,
     SkillCatalogResponse,
+    StoryAgentDelegateRequest,
+    StoryAgentDelegateResponse,
     StoryAgentRequest,
     StoryAgentResponse,
     StoryMemoryExtractRequest,
@@ -30,6 +32,7 @@ from app.workflows.context_compaction import compact_story_context
 from app.workflows.memory import extract_story_memories
 from app.workflows.writing_assistant import generate_writing_proposal
 from app.workflows.story_agent import run_story_agent, run_story_agent_streaming
+from app.workflows.story_delegation import run_story_agent_delegate
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title='Story Studio AI Service', version='0.1.0')
@@ -73,19 +76,67 @@ async def invoke_story_agent(request: StoryAgentRequest):
         raise HTTPException(status_code=500, detail='story agent failed') from error
 
 
+@app.post('/v1/agents/story/delegate', response_model=StoryAgentDelegateResponse, dependencies=[Depends(verify_service_token)])
+def invoke_story_agent_delegate(request: StoryAgentDelegateRequest):
+    return run_story_agent_delegate(request)
+
+
+@app.post('/v1/agents/story/delegate/stream', dependencies=[Depends(verify_service_token)])
+async def stream_story_agent_delegate(request: StoryAgentDelegateRequest):
+    def event_stream():
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+        cancelled = threading.Event()
+
+        def run():
+            try:
+                response = run_story_agent_delegate(request, cancel_event=cancelled)
+                events.put(('response/completed', {'response': response.model_dump()}))
+            except InterruptedError:
+                pass
+            except Exception as error:
+                logger.exception('streaming story delegate failed')
+                events.put(('error', {'error': str(error) or 'story delegate failed'}))
+            finally:
+                events.put(('close', None))
+
+        threading.Thread(target=run, daemon=True).start()
+        try:
+            while True:
+                try:
+                    event, payload = events.get(timeout=1)
+                except queue.Empty:
+                    yield ': keep-alive\n\n'
+                    continue
+                if event == 'close':
+                    break
+                yield f'event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n'
+        finally:
+            cancelled.set()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no'},
+    )
+
+
 @app.post('/v1/agents/story/stream', dependencies=[Depends(verify_service_token)])
 async def stream_story_agent(request: StoryAgentRequest):
     def event_stream():
         events: queue.Queue[tuple[str, object]] = queue.Queue()
+        cancelled = threading.Event()
 
         def run():
             try:
                 response = run_story_agent_streaming(
                     request,
                     lambda delta: events.put(('item/agentMessage/delta', {'delta': delta})),
-                    lambda delta: events.put(('item/reasoning/summaryDelta', {'delta': delta})),
+                    lambda delta: events.put(('item/reasoning/summaryTextDelta', {'delta': delta})),
+                    cancel_event=cancelled,
                 )
                 events.put(('response/completed', {'response': response.model_dump()}))
+            except InterruptedError:
+                pass
             except Exception as error:
                 logger.exception('streaming story agent failed')
                 events.put(('error', {'error': str(error) or 'story agent failed'}))
@@ -93,11 +144,18 @@ async def stream_story_agent(request: StoryAgentRequest):
                 events.put(('close', None))
 
         threading.Thread(target=run, daemon=True).start()
-        while True:
-            event, payload = events.get()
-            if event == 'close':
-                break
-            yield f'event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n'
+        try:
+            while True:
+                try:
+                    event, payload = events.get(timeout=1)
+                except queue.Empty:
+                    yield ': keep-alive\n\n'
+                    continue
+                if event == 'close':
+                    break
+                yield f'event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n'
+        finally:
+            cancelled.set()
 
     return StreamingResponse(
         event_stream(),

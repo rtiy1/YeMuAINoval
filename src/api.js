@@ -126,6 +126,7 @@ async function downloadRequest(path, retry = true) {
 }
 
 export const api = {
+  requestRegistrationCode: (email) => request('/auth/register/code', { method: 'POST', body: JSON.stringify({ email }) }, false),
   register: async (credentials) => {
     const payload = await request('/auth/register', { method: 'POST', body: JSON.stringify(credentials) }, false)
     accessToken = payload.accessToken
@@ -136,6 +137,8 @@ export const api = {
     accessToken = payload.accessToken
     return payload
   },
+  requestPasswordReset: (email) => request('/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }) }, false),
+  resetPassword: (token, password) => request('/auth/password/reset', { method: 'POST', body: JSON.stringify({ token, password }) }, false),
   restoreSession: () => refreshSession(false),
   logout: async () => {
     await request('/auth/logout', { method: 'POST' }, false).catch(() => undefined)
@@ -163,6 +166,7 @@ export const api = {
   archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
   createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   answerAgentTurn: (threadId, turnId, answers, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/input`, { method: 'POST', body: JSON.stringify({ answers }), signal: options.signal }),
+  steerAgentTurn: (threadId, turnId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/steer`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { signal: options.signal }),
   streamAgentTurn: (threadId, turnId, options = {}) => streamRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/stream`, options),
   interruptAgentTurn: (threadId, turnId) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/interrupt`, { method: 'POST' }),

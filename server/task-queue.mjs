@@ -42,10 +42,13 @@ export async function enqueueWritingTask(taskId) {
   }
 }
 
-export async function publishTaskCancellation(taskId) {
+export async function publishTaskCancellation(taskId, executionId = null) {
   if (!isTaskQueueEnabled()) return false
   try {
-    await producer().publish(TASK_CANCEL_CHANNEL, taskId)
+    await producer().publish(TASK_CANCEL_CHANNEL, JSON.stringify({
+      taskId,
+      executionId: executionId || null,
+    }))
     return true
   } catch {
     return false

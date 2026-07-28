@@ -141,7 +141,12 @@ def run_story_agent(request: StoryAgentRequest) -> StoryAgentResponse:
     )
 
 
-def run_story_agent_streaming(request: StoryAgentRequest, on_delta, on_reasoning_delta=None) -> StoryAgentResponse:
+def run_story_agent_streaming(
+    request: StoryAgentRequest,
+    on_delta,
+    on_reasoning_delta=None,
+    cancel_event=None,
+) -> StoryAgentResponse:
     """按 Codex item delta 语义流式执行 prompt-only Skill；其他执行器安全回退。"""
     selection = select_skill({
         'message': request.message,
@@ -170,7 +175,7 @@ def run_story_agent_streaming(request: StoryAgentRequest, on_delta, on_reasoning
         instruction=request.message,
         payload=request.payload,
         model_config_override=request.model_config_override,
-    ), on_delta=on_delta, on_reasoning_delta=on_reasoning_delta)
+    ), on_delta=on_delta, on_reasoning_delta=on_reasoning_delta, cancel_event=cancel_event)
     result_status = result.get('status') if isinstance(result, dict) else None
     status = result_status if result_status in {'needs_model', 'failed', 'needs_input'} else 'completed'
     return StoryAgentResponse(

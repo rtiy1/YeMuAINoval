@@ -5,6 +5,7 @@ import {
   agentResponseText,
   agentThreadMessages,
   agentTurnEvents,
+  compactAgentEvents,
   formatAgentDuration,
   isEditorAgentEdit,
   normalizeStructuredAgentQuestion,
@@ -104,7 +105,7 @@ test('editor agent renders structured blocking questions returned by skills', ()
     ],
   })
   assert.equal(parsed.question, '副本核心体验选哪一种？')
-  assert.equal(parsed.options[1].reply, 'B：生存闯关')
+  assert.equal(parsed.options[1].reply, '生存闯关')
   assert.equal(parsed.options[0].description, '强调规则推理')
 })
 
@@ -129,6 +130,24 @@ test('editor agent preserves a structured multi-question queue', () => {
   assert.equal(parsed.questions.length, 2)
   assert.equal(parsed.questions[1].id, 'tone')
   assert.equal(parsed.questions[1].header, '体验')
+  assert.equal(parsed.questions[0].options[0].reply, '无限流')
+})
+
+test('editor agent compacts repeated execution cycles and drops queue noise', () => {
+  const compacted = compactAgentEvents([
+    { id: 'queued', type: 'lifecycle', label: '任务已排队', status: 'completed' },
+    { id: 'context-1', type: 'lifecycle', label: '读取作品、章节与连续性上下文', status: 'completed' },
+    { id: 'skill-1', type: 'skill', label: '完成 story-long-write Skill', status: 'completed', meta: { selectedSkill: 'story-long-write' } },
+    { id: 'input-1', type: 'lifecycle', label: '收到用户回答，继续执行', status: 'completed' },
+    { id: 'context-2', type: 'lifecycle', label: '读取作品、章节与连续性上下文', status: 'completed' },
+    { id: 'skill-2', type: 'skill', label: '完成 story-long-write Skill', status: 'completed', meta: { selectedSkill: 'story-long-write' } },
+    { id: 'input-2', type: 'lifecycle', label: '已确认补充信息', status: 'completed' },
+  ])
+  assert.deepEqual(compacted.map(({ label, count }) => ({ label, count })), [
+    { label: '读取作品、章节与连续性上下文', count: 2 },
+    { label: '完成 story-long-write Skill', count: 2 },
+    { label: '已确认补充信息', count: 2 },
+  ])
 })
 
 test('editor agent formats durations and aborts polling', async () => {
@@ -184,6 +203,81 @@ test('editor agent restores persisted thread turns', () => {
   assert.deepEqual(messages[1].plan.map((item) => item.status), ['completed', 'completed'])
 })
 
+test('editor agent restores steer messages and maps collaboration agents', () => {
+  const thread = {
+    turns: [{
+      id: 'turn-team',
+      taskId: 'task-team',
+      message: '续写',
+      task: {
+        id: 'task-team',
+        status: 'completed',
+        steeringHistory: [{ id: 'steer-team', text: '改成第三人称', status: 'applied' }],
+        result: { result: { output: '第三人称正文' } },
+      },
+      items: [{
+        id: 'subagent-team',
+        type: 'collabAgentToolCall',
+        status: 'completed',
+        summary: '连续性子代理已返回报告',
+        meta: { role: 'continuity_guard', reportSummary: '时间线一致。' },
+      }],
+    }],
+  }
+  const messages = agentThreadMessages(thread)
+  assert.deepEqual(messages.map((item) => item.role), ['user', 'user', 'agent'])
+  assert.equal(messages[1].steer, true)
+  assert.equal(messages[2].events[0].type, 'subagent')
+  assert.equal(messages[2].events[0].meta.reportSummary, '时间线一致。')
+})
+
+test('editor agent restores an in-flight partial output without substituting the status label', () => {
+  const messages = agentThreadMessages({
+    turns: [{
+      id: 'turn-running',
+      taskId: 'task-running',
+      message: '继续写',
+      task: {
+        id: 'task-running',
+        status: 'running',
+        partialOutput: '已经生成的半段正文',
+        statusMessage: '正在生成回复',
+      },
+      items: [],
+    }],
+  })
+  assert.equal(messages[1].text, '已经生成的半段正文')
+  assert.equal(messages[1].status, 'running')
+})
+
+test('editor agent restores resolved answers and all reasoning summaries', () => {
+  const messages = agentThreadMessages({
+    turns: [{
+      id: 'turn-history',
+      taskId: 'task-history',
+      message: '设计一个副本',
+      items: [],
+      task: {
+        id: 'task-history',
+        status: 'completed',
+        result: { status: 'completed', result: { output: '副本设计完成' } },
+        inputHistory: [{
+          requestId: 'call-history',
+          response: { answerText: '题材：规则怪谈' },
+        }],
+        reasoningHistory: [{ id: 'reason-1', summary: '先确认题材。' }],
+        reasoningSummary: '根据题材完成设计。',
+        usage: { input_tokens: 120, output_tokens: 50, total_tokens: 170 },
+      },
+    }],
+  })
+  assert.deepEqual(messages.map((item) => item.role), ['user', 'user', 'agent'])
+  assert.equal(messages[1].text, '题材：规则怪谈')
+  assert.equal(messages[2].reasoningHistory[0].summary, '先确认题材。')
+  assert.equal(messages[2].reasoningSummary, '根据题材完成设计。')
+  assert.equal(messages[2].usage.total_tokens, 170)
+})
+
 test('editor agent maps in-progress and interrupted items to timeline events', () => {
   assert.deepEqual(agentTurnEvents({
     items: [
@@ -195,4 +289,16 @@ test('editor agent maps in-progress and interrupted items to timeline events', (
     { type: 'skill', status: 'running' },
     { type: 'lifecycle', status: 'cancelled' },
   ])
+})
+
+test('editor agent does not render model reasoning as a fake lifecycle event', () => {
+  assert.deepEqual(agentTurnEvents({
+    items: [{
+      id: 'model-reasoning',
+      type: 'reasoning',
+      status: 'completed',
+      summary: [{ type: 'summary_text', text: '核对上下文。' }],
+      meta: { modelReasoning: true },
+    }],
+  }), [])
 })

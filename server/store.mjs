@@ -82,7 +82,7 @@ async function readRelationalState(client, auxiliary) {
     ...clone(auxiliary || {}),
     users: users.rows.map((row) => ({
       id: row.id, name: row.name, email: row.email, passwordHash: row.password_hash,
-      settings: row.settings, createdAt: timestamp(row.created_at),
+      settings: row.settings, authVersion: Number(row.auth_version) || 0, createdAt: timestamp(row.created_at),
     })),
     sessions: sessions.rows.map((row) => ({
       id: row.id, userId: row.user_id, tokenHash: row.token_hash, userAgent: row.user_agent,
@@ -130,8 +130,8 @@ async function replaceRelationalState(client, db) {
 
   for (const user of db.users) {
     await client.query(
-      'INSERT INTO users (id, name, email, password_hash, settings, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6)',
-      [user.id, user.name, user.email, user.passwordHash, user.settings ? JSON.stringify(user.settings) : null, user.createdAt],
+      'INSERT INTO users (id, name, email, password_hash, settings, auth_version, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)',
+      [user.id, user.name, user.email, user.passwordHash, user.settings ? JSON.stringify(user.settings) : null, Number(user.authVersion) || 0, user.createdAt],
     )
   }
   for (const session of db.sessions) {
@@ -252,11 +252,12 @@ async function syncRelationalState(client, previousDb, db) {
   for (const [id, user] of current.users) {
     if (!changed(previous.users.get(id), user)) continue
     await client.query(
-      `INSERT INTO users (id, name, email, password_hash, settings, created_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      `INSERT INTO users (id, name, email, password_hash, settings, auth_version, created_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email,
-         password_hash = EXCLUDED.password_hash, settings = EXCLUDED.settings, created_at = EXCLUDED.created_at`,
-      [user.id, user.name, user.email, user.passwordHash, user.settings ? JSON.stringify(user.settings) : null, user.createdAt],
+         password_hash = EXCLUDED.password_hash, settings = EXCLUDED.settings,
+         auth_version = EXCLUDED.auth_version, created_at = EXCLUDED.created_at`,
+      [user.id, user.name, user.email, user.passwordHash, user.settings ? JSON.stringify(user.settings) : null, Number(user.authVersion) || 0, user.createdAt],
     )
   }
   for (const [id, session] of current.sessions) {
@@ -372,6 +373,8 @@ function normalizeDb(db) {
   db ||= {}
   db.users ||= []
   db.sessions ||= []
+  db.passwordResetTokens ||= []
+  db.emailVerificationCodes ||= []
   db.projects ||= []
   db.chapters ||= {}
   db.drafts ||= {}
@@ -460,6 +463,7 @@ function normalizeDb(db) {
   }
   for (const user of db.users) {
     if (!Object.hasOwn(user, 'settings')) user.settings = null
+    if (!Object.hasOwn(user, 'authVersion')) user.authVersion = 0
   }
   return db
 }

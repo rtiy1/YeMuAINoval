@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
 import { enrichStoryAgentPayload } from './writing-context.mjs'
@@ -45,13 +46,18 @@ function userModelConfig(user) {
   }
 }
 
-export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000), onDelta = null, onReasoningDelta = null) {
+async function preparedStoryAgentBody(user, input) {
   const db = await loadDb()
   const payload = enrichStoryAgentPayload(db, user.id, input.payload || {})
   const prepared = await decorateInstalledMarketSkill(user.id, { ...input, payload })
   const body = { message: prepared.message, skill: prepared.skill || null, payload: prepared.payload }
   const modelConfig = userModelConfig(user)
   if (modelConfig) body.model_config = modelConfig
+  return body
+}
+
+export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000), onDelta = null, onReasoningDelta = null) {
+  const body = await preparedStoryAgentBody(user, input)
   const response = await fetch(`${aiServiceUrl}${onDelta ? '/v1/agents/story/stream' : '/v1/agents/story'}`, {
     method: 'POST',
     headers: {
@@ -68,7 +74,7 @@ export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout
     await consumeSseStream(response.body, async ({ event, data }) => {
       const payload = data ? JSON.parse(data) : null
       if (event === 'item/agentMessage/delta' && typeof payload?.delta === 'string') await onDelta(payload.delta)
-      if (event === 'item/reasoning/summaryDelta' && typeof payload?.delta === 'string' && onReasoningDelta) await onReasoningDelta(payload.delta)
+      if (event === 'item/reasoning/summaryTextDelta' && typeof payload?.delta === 'string' && onReasoningDelta) await onReasoningDelta(payload.delta)
       if (event === 'response/completed') completed = payload?.response || null
       if (event === 'error') streamError = payload?.error || 'Story Agent 流式执行失败'
     })
@@ -79,6 +85,88 @@ export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout
   const result = await response.json().catch(() => null)
   if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, 'Story Agent 处理失败')), { status: response.status >= 500 ? 502 : response.status })
   return result
+}
+
+function delegateRoles(input) {
+  const skill = String(input?.skill || '')
+  if (skill === 'story-search' || input?.payload?.multi_agent !== true) return []
+  if (/(?:review|analyze|scan|deslop)/.test(skill)) return ['continuity_guard', 'prose_critic']
+  return ['continuity_guard', 'scene_planner']
+}
+
+export async function invokeStoryAgentDelegates(user, input, signal = AbortSignal.timeout(120_000), onEvent = null) {
+  const roles = delegateRoles(input)
+  if (!roles.length) return []
+  const body = await preparedStoryAgentBody(user, input)
+  const runs = roles.map(async (role, ordinal) => {
+    const id = `${role}:${ordinal + 1}`
+    const runId = crypto.randomUUID()
+    await onEvent?.({
+      id,
+      runId,
+      path: `/root/${role}`,
+      role,
+      ordinal,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    })
+    try {
+      const response = await fetch(`${aiServiceUrl}/v1/agents/story/delegate/stream`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-service-token': aiServiceToken,
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ ...body, role }),
+        signal,
+      })
+      if (!response.ok) {
+        const result = await response.json().catch(() => null)
+        throw Object.assign(new Error(serviceErrorMessage(result?.detail, '子代理审阅失败')), { status: response.status })
+      }
+      let result = null
+      let streamError = null
+      await consumeSseStream(response.body, ({ event, data }) => {
+        const payload = data ? JSON.parse(data) : null
+        if (event === 'response/completed') result = payload?.response || null
+        if (event === 'error') streamError = payload?.error || '子代理审阅失败'
+      })
+      if (streamError) throw new Error(streamError)
+      if (!result) throw new Error('子代理流式响应未正常完成')
+      const completed = {
+        id,
+        runId,
+        path: `/root/${role}`,
+        role,
+        ordinal,
+        status: result?.status === 'completed' ? 'completed' : result?.status || 'failed',
+        summary: typeof result?.summary === 'string' ? result.summary.slice(0, 6_000) : '',
+        usage: result?.usage && typeof result.usage === 'object' ? result.usage : null,
+        error: result?.error || null,
+        completedAt: new Date().toISOString(),
+      }
+      await onEvent?.(completed)
+      return completed
+    } catch (error) {
+      if (signal.aborted) throw error
+      const failed = {
+        id,
+        runId,
+        path: `/root/${role}`,
+        role,
+        ordinal,
+        status: 'failed',
+        summary: '',
+        usage: null,
+        error: '子代理审阅失败，主代理已降级继续',
+        completedAt: new Date().toISOString(),
+      }
+      await onEvent?.(failed)
+      return failed
+    }
+  })
+  return Promise.all(runs)
 }
 
 export async function invokeContextCompaction(user, input, signal = AbortSignal.timeout(120_000)) {
