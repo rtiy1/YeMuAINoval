@@ -13,6 +13,15 @@ function positiveInteger(value) {
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0
 }
 
+function mergeReasoningSummaries(...values) {
+  const summaries = []
+  for (const value of values) {
+    const summary = String(value || '').trim()
+    if (summary && !summaries.includes(summary)) summaries.push(summary)
+  }
+  return summaries.join('\n\n').slice(0, 12_000)
+}
+
 function executionMatches(task, executionId, executionGeneration) {
   return task?.activeExecutionId === executionId
     && positiveInteger(task.executionGeneration) === executionGeneration
@@ -360,7 +369,10 @@ export async function executeWritingTask(taskId, {
       task.progress = 100
       task.statusMessage = result.status === 'needs_input' ? '等待用户回答' : 'AI Skill 执行完成'
       task.partialOutput = partialOutput || task.partialOutput || ''
-      task.reasoningSummary = (reasoningSummary || task.reasoningSummary || '').slice(0, 12_000)
+      task.reasoningSummary = mergeReasoningSummaries(
+        reasoningSummary || task.reasoningSummary,
+        result?.result?.reasoning_summary,
+      )
       task.reasoningCompletedAt = timestamp
       task.inputRequestStartedAt = result.status === 'needs_input' ? timestamp : null
       task.modelContinuation = result.status === 'needs_input' ? privateContinuation : null

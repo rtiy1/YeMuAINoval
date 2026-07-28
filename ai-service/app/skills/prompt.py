@@ -367,6 +367,49 @@ def _legacy_markdown_choice_request(output: str) -> dict[str, Any] | None:
     return normalize_choice_request({'questions': raw_questions})
 
 
+def _repair_unescaped_json_quotes(value: str) -> str:
+    """Repair prose quotes inside compatibility JSON without relaxing its schema."""
+    source = str(value or '')
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    for index, character in enumerate(source):
+        if not in_string:
+            repaired.append(character)
+            if character == '"':
+                in_string = True
+            continue
+        if escaped:
+            repaired.append(character)
+            escaped = False
+            continue
+        if character == '\\':
+            repaired.append(character)
+            escaped = True
+            continue
+        if character != '"':
+            repaired.append(character)
+            continue
+        next_index = index + 1
+        while next_index < len(source) and source[next_index].isspace():
+            next_index += 1
+        following = source[next_index] if next_index < len(source) else ''
+        if not following or following in ':,}]':
+            repaired.append(character)
+            in_string = False
+        else:
+            repaired.append('\\"')
+    return ''.join(repaired)
+
+
+def choice_request_preamble(output: str) -> str:
+    """Return model-visible decision prose that preceded a compatibility request."""
+    marker = re.search(r'<choice_request>', str(output or ''), re.IGNORECASE)
+    if not marker:
+        return ''
+    return str(output or '')[:marker.start()].strip()[:4_000]
+
+
 def extract_choice_request(output: str, message: Any = None) -> dict[str, Any] | None:
     tool_request = _choice_request_from_tool_calls(message)
     if tool_request:
@@ -376,7 +419,10 @@ def extract_choice_request(output: str, message: Any = None) -> dict[str, Any] |
         try:
             normalized = normalize_choice_request(json.loads(match.group(1)))
         except (json.JSONDecodeError, TypeError):
-            normalized = None
+            try:
+                normalized = normalize_choice_request(json.loads(_repair_unescaped_json_quotes(match.group(1))))
+            except (json.JSONDecodeError, TypeError):
+                normalized = None
         if normalized:
             return normalized
     return _legacy_markdown_choice_request(output)
@@ -1021,6 +1067,7 @@ def execute_prompt_skill(
     )
     if choice_request:
         usage_output = output or json.dumps(choice_request, ensure_ascii=False, default=str)
+        decision_summary = choice_request_preamble(output)
         result = {
             'status': 'needs_input',
             'skill': invocation.skill_name,
@@ -1035,6 +1082,8 @@ def execute_prompt_skill(
             'continuation_mode': continuation_mode,
             'usage': model_token_usage(response, system_prompt + invocation.instruction + json.dumps(model_payload, ensure_ascii=False, default=str), usage_output),
         }
+        if decision_summary:
+            result['reasoning_summary'] = decision_summary
         response_id = _model_response_id(response) if responses_enabled else None
         if response_id and choice_request.get('requestId'):
             result['response_continuation'] = {

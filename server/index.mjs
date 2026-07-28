@@ -47,6 +47,7 @@ import {
 import { readSkillPackage, removeSkillPackage, validateSkillPackage, writeSkillPackage } from './skill-market-storage.mjs'
 import { reviewSkillPackage, skillReviewPublicConfig } from './skill-review.mjs'
 import { decorateInstalledMarketSkill, isMarketSkillPublished, marketSkillKey } from './market-skill-runtime.mjs'
+import { parseAgentChoiceResponse } from '../src/editor-agent.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -1205,14 +1206,44 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
   }
 }
 
+function legacyChoiceRecovery(task) {
+  if (!task || task.result?.status === 'needs_input') return null
+  const output = [
+    task.result?.result?.output,
+    task.partialOutput,
+  ].find((value) => typeof value === 'string' && value.includes('<choice_request>'))
+  const recovered = parseAgentChoiceResponse(output)
+  if (!recovered) return null
+  recovered.request.requestId ||= `${task.turnId || task.id}:compat-choice`
+  return recovered
+}
+
+function recoveredChoiceResult(task, recovered) {
+  return {
+    ...(task.result || {}),
+    status: 'needs_input',
+    result: {
+      ...(task.result?.result || {}),
+      status: 'needs_input',
+      output: recovered.request.question,
+      question: recovered.request,
+    },
+  }
+}
+
 function writingTaskPublic(task) {
-  const inputRequest = task.result?.status === 'needs_input' && task.result?.result?.question
-    ? task.result.result.question
+  const recovered = legacyChoiceRecovery(task)
+  const publicResult = recovered ? recoveredChoiceResult(task, recovered) : task.result
+  const publicStatus = recovered ? 'waiting_input' : task.status
+  const inputRequest = publicResult?.status === 'needs_input' && publicResult?.result?.question
+    ? publicResult.result.question
     : null
   return {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
-    skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
-    statusMessage: task.statusMessage || '', result: task.result || null, partialOutput: task.partialOutput || '', reasoningSummary: task.reasoningSummary || '',
+    skill: task.skill || null, message: task.message, status: publicStatus, progress: task.progress || 0,
+    statusMessage: recovered ? '等待用户回答' : task.statusMessage || '', result: publicResult || null,
+    partialOutput: recovered ? '' : task.partialOutput || '',
+    reasoningSummary: task.reasoningSummary || recovered?.reasoning || '',
     reasoningHistory: taskReasoningHistory(task), interactionAttempt: Math.max(1, Number(task.interactionAttempt) || 1),
     reasoningItemId: reasoningItemId(task), usage: task.usage || null,
     continuationMode: task.continuationMode || null,
@@ -1392,6 +1423,19 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
     const thread = findAgentThread(db, threadId, user.id, { active: true })
     const turn = findAgentTurn(thread, turnId)
     const task = db.writingTasks.find((item) => item.id === turn.taskId)
+    const recovered = legacyChoiceRecovery(task)
+    if (recovered) {
+      task.status = 'waiting_input'
+      task.statusMessage = '等待用户回答'
+      task.result = recoveredChoiceResult(task, recovered)
+      task.partialOutput = ''
+      task.reasoningSummary = task.reasoningSummary || recovered.reasoning
+      task.reasoningStartedAt ||= task.createdAt
+      task.reasoningCompletedAt ||= task.updatedAt
+      task.inputRequestStartedAt ||= task.updatedAt
+      task.modelContinuation = null
+      task.continuationMode = 'transcript'
+    }
     if (!task || task.status !== 'waiting_input' || task.result?.status !== 'needs_input') {
       throw Object.assign(new Error('当前 Agent 没有等待用户输入'), { status: 409 })
     }
