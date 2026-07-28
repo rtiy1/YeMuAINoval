@@ -14,8 +14,15 @@ const aiServer = http.createServer(async (req, res) => {
   const body = JSON.parse(raw || '{}')
   received.push(body)
   if (body.message === '停机恢复') await new Promise((resolve) => setTimeout(resolve, 1_000))
+  const response = { status: 'completed', result: { output: 'worker 输出' } }
+  if (req.url?.endsWith('/stream')) {
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' })
+    res.write(`event: item/agentMessage/delta\ndata: ${JSON.stringify({ delta: 'worker ' })}\n\n`)
+    res.end(`event: response/completed\ndata: ${JSON.stringify({ response })}\n\n`)
+    return
+  }
   res.writeHead(200, { 'content-type': 'application/json' })
-  res.end(JSON.stringify({ status: 'completed', result: { output: 'worker 输出' } }))
+  res.end(JSON.stringify(response))
 })
 await new Promise((resolve, reject) => {
   aiServer.once('error', reject)
