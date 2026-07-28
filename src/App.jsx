@@ -1790,9 +1790,19 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
   }
 
   function choose(option) {
-    if (disabled || selected) return
+    if (disabled) return
+    const selectedOption = options.find((item) => item.key === selected)
+    if (selected && !selectedOption?.isOther) return
     setSelected(option.key)
-    if (option.isOther) return
+    if (option.isOther) {
+      setCustomValue('')
+      return
+    }
+  }
+
+  function submitSelected() {
+    const option = options.find((item) => item.key === selected)
+    if (disabled || !option || option.isOther) return
     completeAnswer(option.reply)
   }
 
@@ -1813,7 +1823,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
           type="button"
           key={option.key}
           className={selected === option.key ? 'selected' : ''}
-          disabled={disabled || Boolean(selected)}
+          disabled={disabled || (Boolean(selected) && !options.find((item) => item.key === selected)?.isOther)}
           onClick={() => choose(option)}
         >
           <strong>{option.key}</strong>
@@ -1832,6 +1842,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
         />
         <button type="submit" disabled={!customValue.trim()}>继续</button>
       </form>}
+      {selected && !options.find((option) => option.key === selected)?.isOther && <button type="button" className="agent-choice-confirm" disabled={disabled} onClick={submitSelected}>继续</button>}
       {prompt.hint && <small className="agent-choice-hint">{prompt.hint}</small>}
     </section>
   </div>
