@@ -10,6 +10,7 @@ import {
   isEditorAgentEdit,
   normalizeStructuredAgentQuestion,
   parseAgentChoicePrompt,
+  parseAgentChoiceResponse,
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from '../src/editor-agent.mjs'
@@ -73,6 +74,20 @@ test('editor agent converts markdown choices into structured options', () => {
 
 test('editor agent leaves ordinary prose unchanged', () => {
   assert.equal(parseAgentChoicePrompt('这是普通的章节分析，没有需要选择的内容。'), null)
+})
+
+test('editor agent repairs malformed compatibility choices and separates their reasoning preamble', () => {
+  const parsed = parseAgentChoiceResponse(`项目是空白状态，用户只给了宽泛方向，需要确认一个关键分叉。
+<choice_request>
+{"questions":[{"id":"infinite_flow_mode","header":"无限流模式","question":"你想要的"无限流"是哪种运转方式？","options":[{"label":"副本轮回制","description":"进入一个个独立"副本世界"完成任务"},{"label":"多元宇宙穿梭","description":"世界之间保持持续因果"},{"label":"融合流","description":"副本与长期羁绊结合"}]}]}
+</choice_request>`)
+
+  assert.equal(parsed.request.protocol, 'request_user_input')
+  assert.equal(parsed.request.questions[0].id, 'infinite_flow_mode')
+  assert.equal(parsed.prompt.question, '你想要的"无限流"是哪种运转方式？')
+  assert.deepEqual(parsed.prompt.options.map((option) => option.label), ['副本轮回制', '多元宇宙穿梭', '融合流'])
+  assert.match(parsed.prompt.options[0].description, /"副本世界"/)
+  assert.match(parsed.reasoning, /需要确认一个关键分叉/)
 })
 
 test('editor agent converts markdown comparison tables into selectable directions', () => {

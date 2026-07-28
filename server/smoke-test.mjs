@@ -76,8 +76,25 @@ const aiServer = http.createServer(async (req, res) => {
     if (steerTurn && !steeringMessages.length) await new Promise((resolve) => setTimeout(resolve, 220))
     if (req.url.endsWith('/stream')) {
       const inputHistory = Array.isArray(body.payload?.request_user_input_history) ? body.payload.request_user_input_history : []
-      const choiceTurn = String(body.message || '').includes('确认副本方向')
-      const response = choiceTurn && !inputHistory.length
+      const malformedChoiceTurn = String(body.message || '').includes('兼容选项损坏测试')
+      const choiceTurn = String(body.message || '').includes('确认副本方向') || malformedChoiceTurn
+      const malformedChoiceOutput = `项目是空白状态，用户给的是宽泛方向，需要确认一个关键分叉。
+<choice_request>
+{"questions":[{"id":"infinite_flow_mode","header":"无限流模式","question":"你想要的"无限流"是哪种运转方式？","options":[{"label":"副本轮回制","description":"进入独立"副本世界"完成任务"},{"label":"融合流","description":"副本与长期羁绊结合"}]}]}
+</choice_request>`
+      const response = malformedChoiceTurn && !inputHistory.length
+        ? {
+          run_id: 'smoke-malformed-choice-run-1',
+          status: 'completed',
+          route: 'story',
+          selected_skill: body.skill || 'story',
+          result: {
+            output: malformedChoiceOutput,
+            continuation_mode: 'transcript',
+            usage: { input_tokens: 40, output_tokens: 30, total_tokens: 70 },
+          },
+        }
+        : choiceTurn && !inputHistory.length
         ? {
           run_id: 'smoke-choice-run-1',
           status: 'needs_input',
@@ -144,14 +161,18 @@ const aiServer = http.createServer(async (req, res) => {
           },
         }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      const reasoning = choiceTurn
+      const reasoning = malformedChoiceTurn && !inputHistory.length
+        ? ''
+        : choiceTurn
         ? inputHistory.length ? '根据补充信息完成设计。' : '先确认会影响设计的副本方向。'
         : steerTurn
           ? steeringMessages.length ? '根据追加指令重新规划。' : '正在生成第一版。'
           : '正在核对章节上下文。'
       res.write(`event: item/reasoning/summaryTextDelta\ndata: ${JSON.stringify({ delta: reasoning })}\n\n`)
-      if (!choiceTurn || inputHistory.length) {
-        const output = choiceTurn
+      if (!choiceTurn || inputHistory.length || malformedChoiceTurn) {
+        const output = malformedChoiceTurn && !inputHistory.length
+          ? malformedChoiceOutput
+          : choiceTurn
           ? '已按规则怪谈完成副本设计。'
           : steerTurn
             ? steeringMessages.length ? '已改为第三人称。' : '这是应被追加指令取代的旧输出。'
@@ -867,6 +888,31 @@ try {
   const choiceTurn = choiceThread.payload.thread.turns.find((turn) => turn.id === choiceTask.payload.turn.id)
   assert.equal(choiceTurn.items.filter((item) => item.type === 'reasoning').length, 2)
   assert.equal(choiceTurn.items.find((item) => item.type === 'requestUserInput').status, 'completed')
+
+  const malformedChoiceTask = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
+    skill: 'story',
+    message: '兼容选项损坏测试',
+    payload: { content: '' },
+  })
+  assert.equal(malformedChoiceTask.response.status, 202)
+  const recoveredMalformedChoice = await streamTurn(agentThread.payload.thread.id, malformedChoiceTask.payload.turn.id)
+  const recoveredMalformedTask = recoveredMalformedChoice.events.at(-1).payload.turn.task
+  assert.equal(recoveredMalformedTask.status, 'waiting_input')
+  assert.equal(recoveredMalformedTask.result.status, 'needs_input')
+  assert.equal(recoveredMalformedTask.inputRequest.questions[0].id, 'infinite_flow_mode')
+  assert.deepEqual(recoveredMalformedTask.inputRequest.options.map((option) => option.label), ['副本轮回制', '融合流'])
+  assert.match(recoveredMalformedTask.reasoningSummary, /需要确认一个关键分叉/)
+  assert.doesNotMatch(recoveredMalformedTask.result.result.output, /choice_request/)
+  const answeredMalformedChoice = await call(
+    'POST',
+    `/api/ai/threads/${agentThread.payload.thread.id}/turns/${malformedChoiceTask.payload.turn.id}/input`,
+    { answers: { infinite_flow_mode: '融合流' } },
+  )
+  assert.equal(answeredMalformedChoice.response.status, 202)
+  await streamTurn(agentThread.payload.thread.id, malformedChoiceTask.payload.turn.id)
+  const completedMalformedChoice = await waitForTaskStatus(malformedChoiceTask.payload.task.id, 'completed')
+  assert.equal(completedMalformedChoice.result.result.output, '已按规则怪谈完成副本设计。')
+  assert.match(completedMalformedChoice.reasoningHistory[0].summary, /需要确认一个关键分叉/)
 
   const interruptedTurn = await call('POST', `/api/ai/threads/${agentThread.payload.thread.id}/turns`, {
     skill: 'story',

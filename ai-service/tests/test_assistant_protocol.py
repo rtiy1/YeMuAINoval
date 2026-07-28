@@ -38,6 +38,7 @@ from app.skills.prompt import (
     _conversation_context,
     _stream_model_response,
     _stream_chunk_parts,
+    choice_request_preamble,
     execute_prompt_skill,
     extract_choice_request,
 )
@@ -209,6 +210,49 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertEqual(parsed['options'][1]['value'], '生存闯关')
         self.assertEqual(parsed['protocol'], 'request_user_input')
         self.assertTrue(parsed['questions'][0]['isOther'])
+
+    def test_prompt_skill_repairs_unescaped_quotes_in_compatibility_question(self):
+        output = '''项目为空白状态，这个方向存在一个会改变世界骨架的关键分叉。
+<choice_request>
+{"questions":[{"id":"infinite_flow_mode","header":"无限流模式","question":"你想要的"无限流"是哪种运转方式？","options":[{"label":"副本轮回制","description":"进入独立"副本世界"完成任务"},{"label":"融合流","description":"副本之间保持长期羁绊"}]}]}
+</choice_request>'''
+        parsed = extract_choice_request(output)
+        self.assertEqual(parsed['questions'][0]['id'], 'infinite_flow_mode')
+        self.assertEqual(parsed['question'], '你想要的"无限流"是哪种运转方式？')
+        self.assertIn('"副本世界"', parsed['options'][0]['description'])
+        self.assertEqual(
+            choice_request_preamble(output),
+            '项目为空白状态，这个方向存在一个会改变世界骨架的关键分叉。',
+        )
+
+    def test_prompt_skill_routes_compatibility_preamble_to_reasoning_summary(self):
+        class FakeCompatibilityModel:
+            use_responses_api = False
+
+            def bind_tools(self, tools):
+                raise NotImplementedError
+
+            def invoke(self, messages, **kwargs):
+                return AIMessage(content='''项目为空白状态，需要确认世界模式。
+<choice_request>
+{"questions":[{"id":"world_mode","header":"世界模式","question":"选择"副本"还是连续世界？","options":[{"label":"副本轮回","description":"独立关卡"},{"label":"连续世界","description":"长期因果"}]}]}
+</choice_request>''')
+
+        with mock.patch('app.skills.prompt.create_chat_model', return_value=FakeCompatibilityModel()):
+            result = execute_prompt_skill(SkillInvocation(
+                skill_name='story-long-write',
+                instruction='设计无限流新书',
+                model_config_override=ModelConfig(
+                    provider='openai',
+                    model='custom-model',
+                    api_key='test-key',
+                    api_base_url='https://gateway.example/v1',
+                ),
+            ))
+        self.assertEqual(result['status'], 'needs_input')
+        self.assertEqual(result['question']['questions'][0]['id'], 'world_mode')
+        self.assertEqual(result['reasoning_summary'], '项目为空白状态，需要确认世界模式。')
+        self.assertNotIn('choice_request', result['output'])
 
     def test_request_user_input_tool_has_bounded_closed_schema(self):
         parameters = REQUEST_USER_INPUT_TOOL['parameters']

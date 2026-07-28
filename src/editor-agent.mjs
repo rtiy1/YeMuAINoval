@@ -41,6 +41,87 @@ function cleanAgentChoiceText(value) {
     .trim()
 }
 
+function repairUnescapedJsonQuotes(value) {
+  const source = String(value || '')
+  let repaired = ''
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]
+    if (!inString) {
+      repaired += character
+      if (character === '"') inString = true
+      continue
+    }
+    if (escaped) {
+      repaired += character
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      repaired += character
+      escaped = true
+      continue
+    }
+    if (character !== '"') {
+      repaired += character
+      continue
+    }
+    let nextIndex = index + 1
+    while (nextIndex < source.length && /\s/.test(source[nextIndex])) nextIndex += 1
+    const next = source[nextIndex] || ''
+    if (!next || [':', ',', '}', ']'].includes(next)) {
+      repaired += character
+      inString = false
+    } else {
+      repaired += '\\"'
+    }
+  }
+  return repaired
+}
+
+export function parseAgentChoiceResponse(value) {
+  const source = String(value || '')
+  const match = /<choice_request>\s*([\s\S]*?)\s*<\/choice_request>/i.exec(source)
+  if (!match) return null
+  let raw
+  try {
+    raw = JSON.parse(match[1])
+  } catch {
+    try {
+      raw = JSON.parse(repairUnescapedJsonQuotes(match[1]))
+    } catch {
+      return null
+    }
+  }
+  const prompt = normalizeStructuredAgentQuestion(raw)
+  if (!prompt) return null
+  const questions = prompt.questions.map((question) => ({
+    id: question.id,
+    header: question.header || '需要确认',
+    question: question.question,
+    isOther: question.isOther !== false,
+    options: question.options.filter((option) => !option.isOther).map((option) => ({
+      key: option.key,
+      label: option.label,
+      value: option.reply || option.label,
+      description: option.description || '',
+    })),
+  }))
+  const request = {
+    protocol: 'request_user_input',
+    requestId: cleanAgentChoiceText(raw?.requestId || raw?.request_id) || null,
+    question: questions[0].question,
+    options: questions[0].options,
+    questions,
+  }
+  return {
+    prompt,
+    request,
+    reasoning: cleanAgentChoiceText(source.slice(0, match.index)),
+  }
+}
+
 function firstChoiceQuestion(value) {
   const question = cleanAgentChoiceText(value)
   const marks = [question.indexOf('？'), question.indexOf('?')].filter((index) => index >= 0)

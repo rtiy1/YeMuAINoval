@@ -92,6 +92,7 @@ import {
   isEditorAgentEdit,
   normalizeStructuredAgentQuestion,
   parseAgentChoicePrompt,
+  parseAgentChoiceResponse,
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from './editor-agent.mjs'
@@ -2039,9 +2040,13 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
   ].filter(Boolean)
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
   const isPlanMode = run.mode === 'plan' || run.source?.mode === 'plan'
-  const effectiveStatus = result.status === 'needs_input' ? 'needs_input' : run.status
-  const hasInputRequest = effectiveStatus === 'needs_input' && result.question
-  const choicePrompt = normalizeStructuredAgentQuestion(result.question) || (hasInputRequest ? parseAgentChoicePrompt(run.text) : null)
+  const compatibilityChoice = parseAgentChoiceResponse(run.text)
+  const effectiveReasoningSummary = run.reasoningSummary || compatibilityChoice?.reasoning || ''
+  const effectiveStatus = result.status === 'needs_input' || compatibilityChoice ? 'needs_input' : run.status
+  const choicePrompt = normalizeStructuredAgentQuestion(result.question)
+    || compatibilityChoice?.prompt
+    || (effectiveStatus === 'needs_input' ? parseAgentChoicePrompt(run.text) : null)
+  const hasInputRequest = effectiveStatus === 'needs_input' && Boolean(choicePrompt)
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     waiting_input: '等待你的回答', needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
@@ -2132,11 +2137,11 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
           : <div className="agent-reasoning-summary" key={entry.id || `${run.id}:reasoning-history:${ordinal}`}>
             <BrainCircuit size={12} />
             <div>
-              <strong>模型推理摘要 {reasoningHistory.length > 1 || run.reasoningSummary ? `${ordinal}/${reasoningHistory.length + (run.reasoningSummary ? 1 : 0)}` : ''}</strong>
+              <strong>模型推理摘要 {reasoningHistory.length > 1 || effectiveReasoningSummary ? `${ordinal}/${reasoningHistory.length + (effectiveReasoningSummary ? 1 : 0)}` : ''}</strong>
               <AgentMarkdown value={entry.summary} />
             </div>
           </div>)}
-        {run.reasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要 {reasoningHistory.length ? `${reasoningHistory.length + 1}/${reasoningHistory.length + 1}` : ''}</strong><AgentMarkdown value={run.reasoningSummary} streaming={run.status === 'running'} /></div></div>}
+        {effectiveReasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要 {reasoningHistory.length ? `${reasoningHistory.length + 1}/${reasoningHistory.length + 1}` : ''}</strong><AgentMarkdown value={effectiveReasoningSummary} streaming={run.status === 'running'} /></div></div>}
         {checks.length > 0 && <div className="agent-tool-row done"><CheckSquare2 size={13} /><span>完成 {checks.length} 项确定性检查</span></div>}
         {run.response?.route && <code>{run.response.route}</code>}
       </div>
