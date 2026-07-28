@@ -1791,8 +1791,6 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
 
   function choose(option) {
     if (disabled) return
-    const selectedOption = options.find((item) => item.key === selected)
-    if (selected && !selectedOption?.isOther) return
     setSelected(option.key)
     if (option.isOther) {
       setCustomValue('')
@@ -1823,7 +1821,7 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
           type="button"
           key={option.key}
           className={selected === option.key ? 'selected' : ''}
-          disabled={disabled || (Boolean(selected) && !options.find((item) => item.key === selected)?.isOther)}
+          disabled={disabled}
           onClick={() => choose(option)}
         >
           <strong>{option.key}</strong>
