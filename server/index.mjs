@@ -988,6 +988,9 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
 }
 
 function writingTaskPublic(task) {
+  const inputRequest = task.result?.status === 'needs_input' && task.result?.result?.question
+    ? task.result.result.question
+    : null
   return {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
     skill: task.skill || null, message: task.message, status: task.status, progress: task.progress || 0,
@@ -995,6 +998,7 @@ function writingTaskPublic(task) {
     errorCode: task.errorCode || null, retryable: task.retryable === true, attempt: task.attempt || 1,
     parentTaskId: task.parentTaskId || null, reused: task.reused === true,
     threadId: task.threadId || null, turnId: task.turnId || null,
+    inputRequest,
     events: Array.isArray(task.events) ? task.events.slice(-100) : [],
     cancelRequested: task.cancelRequested === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
   }
@@ -1090,9 +1094,12 @@ async function startWritingTask(user, body, forcedThreadId = null) {
     if (!projectId || thread.projectId !== projectId || String(thread.chapterId) !== String(chapterId)) {
       throw Object.assign(new Error('Agent 会话与当前作品章节不匹配'), { status: 409 })
     }
+    const priorConversation = Array.isArray(input.payload.continuation_conversation)
+      ? input.payload.continuation_conversation
+      : []
     input.payload = {
       ...input.payload,
-      conversation: threadConversation(thread, db.writingTasks),
+      conversation: [...threadConversation(thread, db.writingTasks), ...priorConversation].slice(-24),
       conversation_summary: thread.contextSummary || '',
       compacted_turn_count: Math.max(0, Number(thread.compactedTurnCount) || 0),
     }
@@ -1122,6 +1129,58 @@ async function startWritingTask(user, body, forcedThreadId = null) {
   })
   if (!reused) await dispatchWritingTask(task)
   return { task, reused }
+}
+
+async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
+  const prepared = await updateDb((db) => {
+    const thread = findAgentThread(db, threadId, user.id, { active: true })
+    const turn = findAgentTurn(thread, turnId)
+    const task = db.writingTasks.find((item) => item.id === turn.taskId)
+    if (!task || task.status !== 'waiting_input' || task.result?.status !== 'needs_input') {
+      throw Object.assign(new Error('当前 Agent 没有等待用户输入'), { status: 409 })
+    }
+    const question = task.result?.result?.question
+    const answerText = Object.entries(answers || {})
+      .flatMap(([id, value]) => Array.isArray(value) ? [`${id}：${value.join('、')}`] : [`${id}：${String(value || '')}`])
+      .filter((value) => !value.endsWith('：'))
+      .join('\n')
+    if (!answerText) throw Object.assign(new Error('请至少回答一个问题'), { status: 400 })
+    const questionText = Array.isArray(question?.questions)
+      ? question.questions.map((item, index) => `问题 ${index + 1}：${item.question}`).join('\n')
+      : String(question?.question || '')
+    task.input = {
+      ...task.input,
+      message: `${task.input.message}\n\n用户回答：\n${answerText}`,
+      payload: {
+        ...task.input.payload,
+        continuation_conversation: [
+          { role: 'assistant', text: questionText },
+          { role: 'user', text: answerText },
+        ],
+      },
+    }
+    task.result = null
+    task.partialOutput = ''
+    task.reasoningSummary = ''
+    task.error = null
+    task.errorCode = null
+    task.retryable = false
+    task.cancelRequested = false
+    task.status = 'queued'
+    task.progress = 0
+    task.statusMessage = '已收到回答，继续执行 Agent'
+    task.events ||= []
+    task.events.push(createTaskEvent(task.id, task.events.length + 1, 'lifecycle', '收到用户回答，继续执行', 'completed'))
+    task.updatedAt = new Date().toISOString()
+    thread.updatedAt = task.updatedAt
+    return { task, turn }
+  })
+  await dispatchWritingTask(prepared.task)
+  const db = await loadDb()
+  const thread = findAgentThread(db, threadId, user.id)
+  const task = db.writingTasks.find((item) => item.id === prepared.task.id)
+  const turn = findAgentTurn(thread, turnId)
+  return { task, turn }
 }
 
 async function interruptWritingTask(userId, taskId) {
@@ -1659,6 +1718,24 @@ app.post('/api/ai/threads/:threadId/turns', async (req, res, next) => {
       turn: agentTurnPublic(thread, turn, currentTask, writingTaskPublic),
       task: { ...writingTaskPublic(currentTask), reused },
       reused,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/turns/:turnId/input', async (req, res, next) => {
+  try {
+    const answers = req.body?.answers && typeof req.body.answers === 'object' && !Array.isArray(req.body.answers)
+      ? req.body.answers
+      : {}
+    const { task, turn } = await resumeAgentTurnWithInput(req.user, req.params.threadId, req.params.turnId, answers)
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    const currentTask = db.writingTasks.find((item) => item.id === task.id) || task
+    res.status(202).json({
+      turn: agentTurnPublic(thread, turn, currentTask, writingTaskPublic),
+      task: writingTaskPublic(currentTask),
     })
   } catch (error) {
     next(error)

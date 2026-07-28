@@ -1570,6 +1570,8 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
   const [modelList, setModelList] = useState([])
   const [modelLoading, setModelLoading] = useState(false)
   const [modelSaving, setModelSaving] = useState(false)
+  const [customQuestionId, setCustomQuestionId] = useState('')
+  const [customAnswer, setCustomAnswer] = useState('')
   const conversationRef = useRef(null)
   const requirements = session?.requirements || {}
   const messages = session?.messages || []
@@ -1634,6 +1636,15 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
     onSend(message, options)
   }
 
+  function submitCustomQuestion(event, questionId) {
+    event?.preventDefault()
+    const value = customAnswer.trim()
+    if (!value || loading) return
+    setCustomQuestionId('')
+    setCustomAnswer('')
+    send(value)
+  }
+
   function submit(event) {
     event?.preventDefault()
     const message = input.trim()
@@ -1690,7 +1701,11 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
                 <section className="assistant-plan-question" key={question.id}>
                   <span>需要确认</span>
                   <h3>{question.question}</h3>
-                  {question.options?.length > 0 && <div>{question.options.map((option) => <button type="button" key={option.value} onClick={() => send(option.value)}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</button>)}</div>}
+                  {question.options?.length > 0 && <div>{[
+                    ...question.options,
+                    ...(question.options.some((option) => /^(其他|自定义|other)$/i.test(option.label || '')) ? [] : [{ label: '其他', value: '__custom__', description: '自定义输入' }]),
+                  ].map((option) => <button type="button" key={option.value} onClick={() => option.value === '__custom__' ? setCustomQuestionId(question.id) : send(option.value)}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</button>)}</div>}
+                  {customQuestionId === question.id && <form className="assistant-plan-custom" onSubmit={(event) => submitCustomQuestion(event, question.id)}><input autoFocus value={customAnswer} maxLength={1000} onChange={(event) => setCustomAnswer(event.target.value)} placeholder="输入你的自定义答案…" aria-label="自定义答案" /><button type="submit" disabled={!customAnswer.trim()}>继续</button></form>}
                 </section>
               ))}
             </div>
@@ -1743,21 +1758,58 @@ function ProjectCard({ project, onOpen }) {
 }
 
 function AgentChoicePrompt({ prompt, disabled, onChoose }) {
+  const questions = Array.isArray(prompt.questions) && prompt.questions.length
+    ? prompt.questions
+    : [{ id: 'question_1', header: '', question: prompt.question, options: prompt.options, isOther: true }]
+  const [questionIndex, setQuestionIndex] = useState(0)
+  const [answers, setAnswers] = useState({})
   const [selected, setSelected] = useState('')
+  const [customValue, setCustomValue] = useState('')
+  const currentQuestion = questions[Math.min(questionIndex, questions.length - 1)]
+  const modelOptions = (Array.isArray(currentQuestion.options) ? currentQuestion.options : []).map((option) => ({
+    ...option,
+    isOther: /^(其他|自定义|other)$/i.test(String(option.label || '').trim()),
+  }))
+  const allowOther = currentQuestion.isOther !== false || modelOptions.some((option) => option.isOther)
+  const hasOther = modelOptions.some((option) => option.isOther)
+  const options = hasOther || !allowOther
+    ? modelOptions
+    : [...modelOptions, { key: 'OTHER', label: '其他', description: '自定义输入你的想法', reply: '', isOther: true }]
+
+  function completeAnswer(value) {
+    const nextAnswers = { ...answers, [currentQuestion.id]: value }
+    if (questionIndex < questions.length - 1) {
+      setAnswers(nextAnswers)
+      setQuestionIndex((current) => current + 1)
+      setSelected('')
+      setCustomValue('')
+      return
+    }
+    const reply = questions.map((question) => `${question.header || question.question}：${nextAnswers[question.id] || ''}`).join('\n')
+    onChoose({ answers: nextAnswers, text: reply })
+  }
 
   function choose(option) {
     if (disabled || selected) return
     setSelected(option.key)
-    onChoose(option.reply)
+    if (option.isOther) return
+    completeAnswer(option.reply)
+  }
+
+  function submitCustom(event) {
+    event?.preventDefault()
+    const value = customValue.trim()
+    if (disabled || !options.find((option) => option.key === selected)?.isOther || !value) return
+    completeAnswer(`其他：${value}`)
   }
 
   return <div className="agent-choice-response">
     {prompt.intro && <p className="agent-choice-intro">{prompt.intro}</p>}
     <section className="agent-choice-card" aria-label="请选择一个方向">
-      <header><span>需要你确认</span><small>选择一项继续</small></header>
-      <p>{prompt.question}</p>
+      <header><span>{currentQuestion.header || '需要你确认'}</span><small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length} · 选择后继续` : '选择一项继续'}</small></header>
+      <p>{currentQuestion.question}</p>
       <div className="agent-choice-options">
-        {prompt.options.map((option) => <button
+        {options.map((option) => <button
           type="button"
           key={option.key}
           className={selected === option.key ? 'selected' : ''}
@@ -1769,6 +1821,17 @@ function AgentChoicePrompt({ prompt, disabled, onChoose }) {
           {selected === option.key ? <Check size={13} /> : <ChevronRight size={13} />}
         </button>)}
       </div>
+      {selected && options.find((option) => option.key === selected)?.isOther && <form className="agent-choice-custom" onSubmit={submitCustom}>
+        <input
+          autoFocus
+          value={customValue}
+          maxLength={1000}
+          onChange={(event) => setCustomValue(event.target.value)}
+          placeholder="输入你的自定义答案…"
+          aria-label="自定义答案"
+        />
+        <button type="submit" disabled={!customValue.trim()}>继续</button>
+      </form>}
       {prompt.hint && <small className="agent-choice-hint">{prompt.hint}</small>}
     </section>
   </div>
@@ -1804,10 +1867,11 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
   const choicePrompt = normalizeStructuredAgentQuestion(result.question) || parseAgentChoicePrompt(run.text)
   const isPlanMode = run.mode === 'plan' || run.source?.mode === 'plan'
+  const effectiveStatus = result.status === 'needs_input' ? 'needs_input' : run.status
   const statusLabel = {
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
-  }[run.status] || '运行中'
+  }[effectiveStatus] || '运行中'
 
   function toggleHunk(id, accepted) {
     setHunks((current) => current.map((hunk) => hunk.id === id ? { ...hunk, accepted } : hunk))
@@ -1825,6 +1889,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
     }
   }
 
+  const hasInputRequest = result.status === 'needs_input' && result.question
   return <article className={`agent-turn ${run.status}`}>
     <details className="agent-exploration" open>
       <summary className="agent-trace-row">
@@ -1878,7 +1943,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onChoose, choiceDisabled
       </div>
     </details>
 
-    {(run.status !== 'running' || run.text) && <div className={`agent-answer ${run.status === 'running' ? 'streaming' : ''} ${['failed', 'cancelled', 'needs_model', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`} aria-live="polite">
+    {(run.status !== 'running' || run.text || hasInputRequest) && <div className={`agent-answer ${run.status === 'running' ? 'streaming' : ''} ${['failed', 'cancelled', 'needs_model', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`} aria-live="polite">
       <div className="agent-answer-heading"><Bot size={15} /><strong>{isPlanMode ? '计划' : ASSISTANT_NAME}</strong><button type="button" onClick={copyResult} title="复制结果" aria-label="复制结果">{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>
       {run.status === 'running'
         ? <AgentMarkdown value={run.text} streaming />
@@ -2952,6 +3017,44 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     return false
   }
 
+  async function submitAssistantAnswer(run, response) {
+    const threadId = assistantThread?.id
+    const turnId = run?.turnId
+    const answer = String(response?.text || response || '').trim()
+    const answers = response?.answers && typeof response.answers === 'object' ? response.answers : { answer }
+    if (!threadId || !turnId || !answer || assistantRunning || assistantLoading) return
+    const startedAt = performance.now()
+    const requestId = run.id
+    const controller = new AbortController()
+    assistantAbortRef.current = controller
+    assistantTaskIdRef.current = run.taskId || null
+    assistantTurnIdRef.current = turnId
+    setAssistantRunning(true)
+    setAssistantElapsedMs(0)
+    setAssistantMessages((current) => current.flatMap((item) => item.id === requestId
+      ? [{ id: `${requestId}-answer-${Date.now()}`, role: 'user', text: answer }, { ...item, status: 'running', text: '', durationMs: 0 }]
+      : [item]))
+    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
+    try {
+      const resumed = await api.answerAgentTurn(threadId, turnId, answers, { signal: controller.signal })
+      const task = resumed.task
+      assistantTaskIdRef.current = task.id
+      await monitorAssistantTurn(threadId, turnId, task.id, requestId, controller, startedAt)
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        setAssistantMessages((current) => current.map((item) => item.id === requestId ? { ...item, status: 'failed', text: error.message || 'Agent 回答提交失败。' } : item))
+      }
+    } finally {
+      window.clearInterval(timer)
+      if (assistantAbortRef.current === controller) {
+        assistantAbortRef.current = null
+        assistantTaskIdRef.current = null
+        assistantTurnIdRef.current = null
+        setAssistantRunning(false)
+      }
+    }
+  }
+
   async function submitAssistant(event, quickMessage = '') {
     event?.preventDefault()
     const message = String(quickMessage || assistantInput).trim()
@@ -3125,6 +3228,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           if (!event.startsWith('turn/') || !payload?.turn) return
           latestTurn = payload.turn
           if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)
+          if (latestTurn.task?.status === 'waiting_input') controller.abort()
         },
       })
     } catch (error) {
@@ -3489,7 +3593,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   run={message}
                   elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs}
                   onApply={applyAssistantRevision}
-                  onChoose={(reply) => submitAssistant(null, reply)}
+                  onChoose={(reply) => submitAssistantAnswer(message, reply)}
                   choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
                 />)}
             </div>

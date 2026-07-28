@@ -34,6 +34,21 @@ export function normalizeAgentThreads(db) {
 export function taskResultText(task) {
   const result = task?.result?.result || {}
   const proposal = result.edit_proposal
+  if (result.question && typeof result.question === 'object') {
+    const questions = Array.isArray(result.question.questions) ? result.question.questions : [result.question]
+    const lines = questions.slice(0, 3).flatMap((item, questionIndex) => {
+      const question = text(item?.question)
+      const options = Array.isArray(item?.options)
+        ? item.options.slice(0, 6).map((option, index) => {
+          const label = text(option?.label || option?.value)
+          const value = text(option?.value || label)
+          return label ? `${String.fromCharCode(65 + index)}：${label}${value && value !== label ? `（${value}）` : ''}` : ''
+        }).filter(Boolean)
+        : []
+      return question ? [`问题 ${questionIndex + 1}：${question}`, ...options] : []
+    })
+    if (lines.length) return lines.join('\n')
+  }
   for (const value of [proposal?.summary, result.output, result.summary, result.message]) {
     if (text(value)) return text(value)
   }
@@ -119,6 +134,7 @@ export function taskSource(task) {
 
 function itemStatus(status) {
   if (status === 'running' || status === 'queued') return 'inProgress'
+  if (status === 'waiting_input') return 'inProgress'
   if (status === 'cancelled' || status === 'interrupted') return 'interrupted'
   if (status === 'failed') return 'failed'
   return 'completed'
@@ -162,6 +178,15 @@ export function agentTurnItems(turn, task) {
       meta: event.meta || {},
       createdAt: event.startedAt || task.createdAt || null,
       completedAt: event.completedAt || null,
+    })
+  }
+  const inputRequest = task?.result?.status === 'needs_input' ? task.result?.result?.question : null
+  if (inputRequest && typeof inputRequest === 'object') {
+    items.push({
+      id: `${turn.id}:request-user-input`,
+      type: 'requestUserInput',
+      status: 'inProgress',
+      questions: Array.isArray(inputRequest.questions) ? inputRequest.questions : [inputRequest],
     })
   }
   if (TERMINAL_TASK_STATUSES.has(task?.status)) {

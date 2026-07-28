@@ -32,6 +32,36 @@ REFERENCE_LIMIT = 6
 CHOICE_REQUEST_PATTERN = re.compile(r'<choice_request>\s*(\{.*?\})\s*</choice_request>', re.DOTALL)
 
 
+def _single_question(value: str) -> str:
+    """选择协议每轮只允许一个问题，避免前端无法确定选项归属。"""
+    question = str(value or '').strip()
+    marks = [index for index in (question.find('？'), question.find('?')) if index >= 0]
+    if marks:
+        return question[:min(marks) + 1].strip()
+    return question
+
+
+def _conversation_context(payload: dict[str, Any], limit: int = 24_000) -> tuple[str, bool]:
+    """读取服务端维护的最近对话，并标记是否是选择题的后续轮次。"""
+    raw = payload.get('conversation')
+    if not isinstance(raw, list):
+        return '', False
+    lines: list[str] = []
+    for item in raw[-12:]:
+        if not isinstance(item, dict):
+            continue
+        role = '用户' if item.get('role') == 'user' else '助手'
+        content = str(item.get('text') or '').strip()
+        if content:
+            lines.append(f'{role}：{content[:4_000]}')
+    transcript = '\n'.join(lines)[-limit:]
+    roles = [item.get('role') for item in raw if isinstance(item, dict)]
+    followup = len(roles) >= 2 and any(
+        marker in transcript for marker in ('请选择', '哪一种', '哪个', '还是', '确认', 'A：', 'A.')
+    ) and (roles[-1] == 'assistant' or (roles[-1] == 'user' and roles[-2] == 'assistant'))
+    return transcript, followup
+
+
 def _reference_task_context(invocation: SkillInvocation) -> str:
     payload = {
         key: value
@@ -49,28 +79,38 @@ def extract_choice_request(output: str) -> dict[str, Any] | None:
         value = json.loads(match.group(1))
     except (json.JSONDecodeError, TypeError):
         return None
-    question = str(value.get('question') or '').strip()[:1000]
-    raw_options = value.get('options')
-    if not question or not isinstance(raw_options, list):
-        return None
-    options: list[dict[str, str]] = []
-    for index, option in enumerate(raw_options[:6]):
-        if not isinstance(option, dict):
+    raw_questions = value.get('questions')
+    if not isinstance(raw_questions, list):
+        raw_questions = [value]
+    questions: list[dict[str, Any]] = []
+    for index, raw_question in enumerate(raw_questions[:3]):
+        if not isinstance(raw_question, dict):
             continue
-        label = str(option.get('label') or option.get('value') or '').strip()[:160]
-        choice_value = str(option.get('value') or label).strip()[:240]
-        description = str(option.get('description') or '').strip()[:500]
-        if not label or not choice_value:
+        question = _single_question(str(raw_question.get('question') or '').strip()[:1000])
+        raw_options = raw_question.get('options')
+        if not question or not isinstance(raw_options, list):
             continue
-        options.append({
-            'key': chr(65 + index),
-            'label': label,
-            'value': choice_value,
-            'description': description,
-        })
-    if len(options) < 2:
+        options: list[dict[str, str]] = []
+        for option_index, option in enumerate(raw_options[:6]):
+            if not isinstance(option, dict):
+                continue
+            label = str(option.get('label') or option.get('value') or '').strip()[:160]
+            choice_value = str(option.get('value') or label).strip()[:240]
+            description = str(option.get('description') or '').strip()[:500]
+            if label and choice_value:
+                options.append({'key': chr(65 + option_index), 'label': label, 'value': choice_value, 'description': description})
+        if len(options) >= 2:
+            questions.append({
+                'id': str(raw_question.get('id') or f'question_{index + 1}')[:80],
+                'header': str(raw_question.get('header') or '').strip()[:80],
+                'question': question,
+                'isOther': bool(raw_question.get('isOther', raw_question.get('is_other', True))),
+                'options': options,
+            })
+    if not questions:
         return None
-    return {'question': question, 'options': options}
+    first = questions[0]
+    return {'question': first['question'], 'options': first['options'], 'questions': questions}
 
 
 def _stream_chunk_parts(content: Any) -> tuple[str, str]:
@@ -156,13 +196,14 @@ def execute_prompt_skill(
             'message': '该 Skill 已按需加载契约；引用资料会在模型执行时根据任务渐进加载。请先配置 API Key。',
         }
 
-    # 只有选定 Skill 且模型确实要执行时，才按本轮任务加载少量相关 references。
+    conversation, choice_followup = _conversation_context(invocation.payload)
+    # 选择题续答只需要契约的关键部分和最近对话，不重复注入整套引用资料。
     ref_result = load_referenced(
         invocation.skill_name,
         package.instructions,
-        REFERENCE_BUDGET_BYTES,
+        0 if choice_followup else REFERENCE_BUDGET_BYTES,
         task_context=_reference_task_context(invocation),
-        max_references=REFERENCE_LIMIT,
+        max_references=0 if choice_followup else REFERENCE_LIMIT,
     )
     references_loaded = sorted(ref_result.references.keys())
     references_block = format_references_block(ref_result.references)
@@ -179,7 +220,7 @@ def execute_prompt_skill(
         f'\n\n{EXECUTION_BOUNDARY_POLICY}',
         f'\n\n{DATA_BOUNDARY_POLICY}',
         '\n\n当前运行模式：执行项目内的 Story Skill。遵守下面的 Skill 契约并完成用户请求。当前适配范围是 prompt-only；需要宿主执行写入或其他工具调用时，只返回明确的建议操作或可应用结果，不把计划描述成已执行。',
-        f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 120_000)}',
+        f'\n\nSKILL CONTRACT:\n{truncate_for_context(package.instructions, context_window, override.max_tokens if override else None, 36_000 if choice_followup else 120_000)}',
     ]
     if collaboration_mode == 'plan':
         system_parts.append(
@@ -187,20 +228,24 @@ def execute_prompt_skill(
 当前是独立的计划协作模式，不是普通执行中的进度清单。
 - 只允许读取、分析当前作品和附件，禁止改写正文、续写章节、创建作品、应用修改或声称已经执行任何写入。
 - 先从已有上下文发现事实；只有无法从上下文得到、且会实质改变方案的作者偏好才追问。
-- 需要追问时遵守 choice_request 协议，每轮只问一个最高影响的问题。
+- 需要追问时遵守 choice_request 协议，一次最多提出 3 个相互独立的问题；客户端会逐题展示并汇总答案。
 - 信息充分时输出一份决策完整、可交给后续 Build 模式直接执行的中文计划，包含目标、关键设定/剧情决策、分阶段步骤、连续性约束与验收标准。
 - 计划内容必须针对当前作品，不能用“分析需求、开始创作、检查结果”这类空泛占位步骤。
 - 不调用或伪造 update_plan；它是执行阶段的进度清单，与本模式不同。'''
+        )
+    if choice_followup:
+        system_parts.append(
+            '''\n\nCHOICE CONTINUATION:\n这是上一轮阻塞选择的后续输入。把用户本轮内容视为对上一轮问题的回答，禁止原样重复已经回答的问题或换一种说法再次询问同一决定。若回答足够明确，直接继续执行；只有出现新的、实质不同且无法推断的阻塞决定时，才继续请求问题。'''
         )
     if not reviewable_edit:
         system_parts.append(
             '''\n\nBLOCKING QUESTION GATE:
 执行前判断是否缺少一个会让故事类型、核心机制、主角目标、关键分支或目标输出发生明显分叉的决定。
 - 信息可从作品上下文可靠推断时直接执行，不追问偏好细节。
-- 新书、空白章节或用户只给出宽泛题材，而至少存在两个本质不同的创作方向时，先问 1 个最关键的阻塞问题，不能把多个问题塞进一轮。
-- 需要追问时不要输出分析报告、Markdown 列表或表格，只输出下面的机器可读块；选项 2-6 个，label 简短，description 说明差异：
+- 新书、空白章节或用户只给出宽泛题材，而存在本质不同的创作方向时，先问最多 3 个互相独立的阻塞问题，不要重复已回答的问题。
+- 需要追问时不要输出分析报告、Markdown 列表或表格，只输出下面的机器可读块；每题选项 2-6 个，label 简短，description 说明差异；允许自定义答案时设置 isOther=true：
 <choice_request>
-{"question":"一个明确的问题","options":[{"label":"方向名称","value":"用户选择后回传的值","description":"这个方向的关键差异"}]}
+{"questions":[{"id":"direction","header":"方向","question":"一个明确的问题","isOther":true,"options":[{"label":"方向名称","value":"用户选择后回传的值","description":"这个方向的关键差异"}]}]}
 </choice_request>
 - 不需要追问时不得输出 choice_request，直接完成 Skill。'''
         )
@@ -235,7 +280,7 @@ def execute_prompt_skill(
     try:
         messages = [
             ('system', system_prompt),
-            ('human', f'''用户指令：{invocation.instruction}\n\n结构化输入：\n{json.dumps(invocation.payload, ensure_ascii=False, default=str)[:120_000]}'''),
+            ('human', f'''用户指令：{invocation.instruction}\n\n最近对话（服务端连续性记录）：\n{conversation or '无'}\n\n结构化输入：\n{json.dumps({key: value for key, value in invocation.payload.items() if key != 'conversation'}, ensure_ascii=False, default=str)[:80_000]}'''),
         ]
         if reviewable_edit:
             proposal = model.with_structured_output(EditProposal).invoke(messages)
