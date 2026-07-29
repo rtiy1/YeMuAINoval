@@ -3,8 +3,17 @@ name: Windows client
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/windows-client.yml"
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
   pull_request:
     paths:
       - ".github/workflows/windows-client.yml"
