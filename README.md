@@ -13,7 +13,7 @@
 
 **面向网文作者的 AI 创作工作台 · 让「夜雨」陪你把一个想法写成一本小说**
 
-[特性](#-特性) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [项目结构](#-项目结构)
+[特性](#-特性) • [快速开始](#-快速开始) • [Windows 客户端](docs/windows-client.md) • [配置说明](#️-配置说明) • [终端 Agent](terminal/README.md) • [项目结构](#-项目结构) • [致谢](#-致谢)
 
 </div>
 
@@ -21,14 +21,18 @@
 
 ## ✨ 特性
 
-- 🤖 **统一创作入口** — 左侧「夜雨」是对话式助手：先听你的想法，再确认篇幅、题材、流派和故事核心，自动生成可编辑建书方案
-- 📝 **章节化写作** — 章节大纲、正文、编辑历史与写作统计独立保存，支持自动保存、撤销重做、智能分章、导入导出
+- 🤖 **沉浸式写作工作台** — 章节目录、正文编辑器与右侧「夜雨」Agent 同屏，自动带入当前作品和章节上下文
+- 📝 **章节化写作** — 章节大纲、正文、编辑历史与写作统计独立保存，支持自动保存、撤销重做、章节拆分、TXT 导入与整书导出
 - 🧠 **持续作品记忆** — 六类长期事实（角色状态 / 已发生事件 / 世界规则 / 章节摘要 / 不可违背事实 / 语言习惯）自动进入写作上下文，防止长篇写崩设定
 - ✏️ **可审阅 AI 修改** — AI 改写先变成逐段 diff，按段接受或拒绝、显示修改原因；应用前自动建立快照，可一键恢复
 - 🪝 **伏笔生命周期** — 登记伏笔的分类、重要性、埋入章节、计划回收与实际回收章节，未回收伏笔自动进入上下文
-- 🔍 **可选联网搜索** — 夜雨对话框旁的「联网搜索」开关打开后，先检索再回答，跟主流 AI 助手一致；Tavily 优先，零配置回退 DuckDuckGo
+- 🔍 **可选联网搜索** — 工作台 Agent 开启「联网」后先检索再回答；Tavily 优先，零配置回退 DuckDuckGo
+- 👥 **多智能体协作** — 可按任务切换模型、思考强度与单 / 多智能体模式，由多个审阅 Agent 并行分析后统一汇总
 - 🔐 **双格式模型** — 支持 OpenAI 兼容与 Anthropic（Claude）两种格式，均可填自定义 Base URL 走代理
-- 💾 **Redis 聊天记忆** — 夜雨会话持久化到 Redis（AOF），刷新或重启后可恢复；不可用时自动回退数据库
+- 💾 **可恢复 Agent 会话** — 每个作品章节拥有独立的 Thread / Turn / Item，刷新页面或切换章节后仍可恢复执行状态与结果
+- 🧩 **安全 Skill 市场** — 社区 Skill 经过文件规则与专用模型双重审查后发布，导入后以受限的 prompt-only 模式运行
+- ⌨️ **小说终端 Agent** — 与 Web 端共享账号、作品和记忆，在终端完成写作、审稿、检索、应用与历史恢复
+- 🪟 **Windows 原生客户端** — Tauri 2 复用 Agent 协议与业务内核，并在桌面端增强结构化选择、运行时间线、Diff 键盘审阅、后台通知、原生 TXT 导入与另存为
 - 🐳 **Docker 一键部署** — Compose 编排 PostgreSQL + Redis + AI 服务 + Web API，开箱即用
 
 
@@ -42,7 +46,8 @@
 | **Python** | 3.12+ | AI 服务（FastAPI + LangGraph） |
 | **PostgreSQL** | 16（可选） | 生产存储；本地开发可用 JSON 文件回退 |
 | **Redis** | 7（可选） | 聊天记忆持久化；未配置则回退数据库 |
-| **AI API Key** | 必需 | OpenAI 兼容或 Anthropic，至少一个 |
+| **AI API Key** | 使用 AI 时必需 | 可由用户在设置中保存，也可配置服务端共享 Key |
+| **Rust stable** | 仅客户端开发 / 构建 | Tauri 2 Windows 客户端；普通 Web 开发不需要 |
 
 > **📌 说明**：本项目依赖外部 AI API，不需要本地 GPU。本地开发不配置 `DATABASE_URL` 和 `REDIS_URL` 时，全部回退到 `server/data/db.json`，零依赖即可跑通。
 
@@ -51,7 +56,7 @@
 ### 前置要求
 
 - Node.js 22+、Python 3.12+
-- 至少一个 AI 服务的 API Key（OpenAI 兼容或 Anthropic）
+- 使用 AI 功能时，需要一个 OpenAI 兼容或 Anthropic API Key
 
 ### 本地开发
 
@@ -62,14 +67,14 @@ cd YeMuAINoval
 
 # 2. 准备 AI 服务依赖
 python3 -m venv .venv
-.venv/bin/pip install -r ai-service/requirements.txt
+.venv/bin/pip install -r ai-service/requirements.lock
 
 # 3. 安装前端依赖
-npm install
+npm ci
 
 # 4. 配置环境变量
 cp .env.example .env
-# 至少为 AUTH_SECRET 设置一个随机值
+# 至少将 AUTH_SECRET 替换为不少于 32 字符的随机值
 ```
 
 分别启动 API、AI 和前端：
@@ -80,6 +85,16 @@ npm run dev:ai    # AI 服务  http://127.0.0.1:8890
 npm run dev       # 前端     http://127.0.0.1:5173
 ```
 
+启动后可分别访问 API 健康检查 `http://127.0.0.1:8787/api/health` 和 AI 健康检查 `http://127.0.0.1:8890/health`。默认采用 BYOK，注册登录后在「设置」中保存模型 Key 即可；若要使用 `.env` 中的服务端默认 Key，还需设置 `ALLOW_SHARED_MODEL_KEY=true`。
+
+如果同时配置了 `DATABASE_URL`、`REDIS_URL` 且未关闭 `AI_TASK_QUEUE_ENABLED`，还要单独启动任务 worker：
+
+```bash
+npm run dev:worker
+```
+
+只想让 Redis 保存聊天记忆、仍使用本地 JSON 数据时，请设置 `AI_TASK_QUEUE_ENABLED=false`，此时 AI 任务继续由 API 进程执行，不要启动 worker。
+
 也可以使用只面向小说创作的终端 Agent。它复用同一账号、模型设置、作品、章节和长期记忆：
 
 ```bash
@@ -89,6 +104,22 @@ npm run novel
 终端提供作品/章节上下文切换、写作、审稿、去 AI 味、长短篇分析与扫描、联网资料搜索，以及写入前确认和历史恢复。完整命令见 [`terminal/README.md`](terminal/README.md)。
 
 > Vite 会把 `/api` 请求代理到本地 API。本地不配置 `DATABASE_URL` 时，数据写入 `server/data/db.json`，无需单独安装 PostgreSQL。
+
+### Windows 客户端
+
+客户端保留 Web 端，二者复用账号、服务端数据、Agent 协议与基础 React 组件；Web 保持稳定基础形态，客户端通过 Desktop 能力层继续增加键盘交互、系统通知和原生能力，不需要复制整套前端。Windows 开发环境准备好 Rust、Visual Studio C++ 工具链和 WebView2 后运行：
+
+```bash
+npm run desktop
+```
+
+生成 NSIS 安装包：
+
+```bash
+npm run desktop:build -- --bundles nsis
+```
+
+客户端默认连接 `http://127.0.0.1:8787/api`，也可在登录页或设置中切换到自建 HTTPS 服务；TXT 导入和章节 / 全书导出会使用 Windows 原生文件对话框。工作台 Agent 在客户端可用数字键和方向键完成选项卡、查看明确的等待输入状态、逐项或批量审阅 Diff，并在窗口退到后台后接收完成或待确认通知。架构、环境与分发说明见 [`docs/windows-client.md`](docs/windows-client.md)。
 
 ### 生产运行
 
@@ -120,7 +151,7 @@ sudo sysctl -w vm.overcommit_memory=1
 # 并在 /etc/sysctl.conf 中持久化：vm.overcommit_memory = 1
 ```
 
-Web API 默认只绑定宿主机 `127.0.0.1:8787`。Android 客户端只调用这个 HTTP API，不直接连接 PostgreSQL。Redis 同时持久化夜雨聊天记忆（AOF）和 AI Stream 任务，独立 worker 负责执行任务。
+Web API 默认只绑定宿主机 `127.0.0.1:8787`。Redis 使用 AOF 持久化终端创作会话和 AI Stream 任务，独立 worker 负责执行任务。
 
 生产环境应在 app 前配置 HTTPS 反向代理，并把 `WEB_ORIGIN` 与 `APP_PUBLIC_URL` 设置为实际站点地址。刷新令牌 Cookie 默认按请求协议自动设置 `Secure`：HTTPS 会启用，直接 HTTP 部署也能恢复会话，但不应把明文 HTTP 端口暴露到公网。Compose 默认按一层代理设置 `TRUST_PROXY=1`；若确实需要改变监听地址，可设置 `APP_BIND`。
 
@@ -210,6 +241,9 @@ npm run test:postgres
 | `AI_SERVICE_URL` | — | AI 服务地址，默认 `http://127.0.0.1:8890` |
 | `DATABASE_URL` | — | PostgreSQL 连接串；留空用 JSON 文件 |
 | `REDIS_URL` | — | Redis 连接串；留空回退数据库 |
+| `AI_TASK_QUEUE_ENABLED` | — | 配置 Redis 时是否启用独立任务队列；默认 `true`，启用时还需要 PostgreSQL 和 worker |
+| `AI_TASK_CLAIM_IDLE_MS` | — | worker 接管失联任务前的等待时间，最小且默认 180000 ms |
+| `AI_TASK_CLAIM_INTERVAL_MS` | — | worker 扫描失联任务的间隔，最小 10000 ms、默认 30000 ms |
 | `ALLOW_SHARED_MODEL_KEY` | — | 是否允许用户回退服务端模型 Key；BYOK 部署保持 `false` |
 | `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed` |
 | `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |
@@ -233,22 +267,21 @@ npm run test:postgres
 
 `SKILL_REVIEW_API_URL` 应填写完整接口地址，例如 Responses 兼容接口的 `https://api.example.com/v1/responses`。如果供应商只支持 Chat Completions，则将地址填为对应的 `/v1/chat/completions`，并设置 `SKILL_REVIEW_API_STYLE=chat-completions`。审查 Key 不会写入数据库、返回浏览器或记录在 Skill 元数据中。
 
-市场采用“上传 → 模型审查 → 上架 → 用户导入 → 账号内调用”的闭环。待审查内容只有上传者可见；其他用户只能看到已通过专用模型审查的上架版本。导入记录绑定当前账号，导入后会出现在写作助手和编辑器的 Skill 选择器中，并以 `community-prompt-only` 模式运行。社区包中的脚本和二进制不会执行；Skill 未导入、被下架或文件完整性校验失败时，服务端会拒绝调用。
+市场采用“上传 → 模型审查 → 上架 → 用户导入 → 账号内调用”的闭环。待审查内容只有上传者可见；其他用户只能看到已通过专用模型审查的上架版本。导入记录绑定当前账号，导入后会出现在工作台 Agent 的 Skill 列表中，并以 `community-prompt-only` 模式运行。社区包中的脚本和二进制不会执行；Skill 未导入、被下架或文件完整性校验失败时，服务端会拒绝调用。
 
-## 🧠 聊天记忆与联网搜索
+## 🧠 工作台 Agent 与联网搜索
 
-- **Redis 持久化聊天记忆**：设置 `REDIS_URL` 后，夜雨会话（消息、需求、问题、阶段、建书方案）持久化到 Redis（AOF），刷新或重启 Node 后可恢复；Redis 不可用时自动回退到 JSON / Postgres。建书确认与项目创建仍走数据库事务。
-- **Agent 生命周期**：每个作品章节拥有独立的持久化 `Thread → Turn → Item`；刷新、切换章节或 Turn 仍在 worker 中运行时，重新进入章节会恢复用户消息、执行计划、执行项和可审阅结果。浏览器优先通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated`、`item/*` 事件，不支持流式响应时自动回退低频轮询。
+- **Agent 生命周期**：每个作品章节拥有独立的持久化 `Thread → Turn → Item`；刷新、切换章节或 Turn 仍在 worker 中运行时，重新进入章节会恢复用户消息、执行计划、执行项和可审阅结果。浏览器优先通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated`、`item/*` 事件，不支持流式响应时自动回退轮询。
+- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔与作品记忆；输入区可切换模型、思考强度、单 / 多智能体和联网搜索。
 - **共享 Agent 指令层**：写作、审稿、记忆和搜索工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
-- **联网搜索**：夜雨对话框输入区有「联网搜索」开关，打开后每轮先联网检索再用结果回答（带来源），与主流 AI 助手一致；不进入建书流程。配置 `TAVILY_API_KEY` 走 Tavily；留空则零配置回退 DuckDuckGo。只有真正发起过搜索才标记为已联网，网络失败时如实返回失败，不伪造结果。
+- **联网搜索**：打开工作台输入区的「联网」开关后，每轮先检索再结合来源回答。配置 `TAVILY_API_KEY` 时使用 Tavily，留空则回退 DuckDuckGo；网络失败时会直接报告错误。
 
-左侧「创作助手」是 Chat 式独立页面：空态只欢迎用户表达想法，不会直接抛出题材选项。用户发出第一条消息后，夜雨再逐步收集篇幅、题材、流派和故事核心，调用 `story-long-write` 或 `story-short-write` 生成可编辑建书方案；确认后复用智能创建事务创建作品并进入编辑器。扫榜、去 AI 味、章节审稿放在「高级工具」，拆文台单独保留为低频学习入口。
-
+Web 端当前以「工作台」为创作入口：新建空白作品或导入本地 TXT 后，在章节右侧直接完成续写、审稿、自然化润色、资料检索和指定 Story Skill 调用。终端 Agent 仍支持从普通对话生成建书方案。
 
 ## 📚 API
 
 <details>
-<summary>🔧 展开完整 API 列表</summary>
+<summary>🔧 展开主要 API 列表</summary>
 
 **认证**
 - `POST /api/auth/register/code` — 发送注册邮箱验证码
@@ -263,14 +296,14 @@ npm run test:postgres
 
 **AI 调用**
 - `POST /api/ai/agent/runs` — 通用 Story Agent 入口
-- `GET / POST /api/ai/threads` · `GET / DELETE /api/ai/threads/:threadId` · `POST /api/ai/threads/:threadId/resume` — Agent Thread 列表、创建、读取、恢复与归档
-- `POST /api/ai/threads/:threadId/turns` · `GET /api/ai/threads/:threadId/turns/:turnId` · `GET .../stream` · `POST .../interrupt` — Codex 风格 Turn 生命周期与 `turn/*`、`item/*` SSE 事件
+- `GET / POST /api/ai/threads` · `GET / PATCH / DELETE /api/ai/threads/:threadId` · `POST /api/ai/threads/:threadId/resume` — Agent Thread 列表、创建、读取、重命名、恢复与归档
+- `POST /api/ai/threads/:threadId/turns` · `GET /api/ai/threads/:threadId/turns/:turnId` · `GET .../stream` · `POST .../input` · `POST .../regenerate` · `POST .../steer` · `POST .../interrupt` — Turn 生命周期与 `turn/*`、`item/*` SSE 事件
 - `POST /api/ai/tasks` · `GET /api/ai/tasks/:taskId` · `GET /api/ai/tasks/:taskId/stream` · `POST /api/ai/tasks/:taskId/cancel` · `POST /api/ai/tasks/:taskId/retry` — worker Task 兼容层与重试接口
 - `POST /api/ai/reviews/chapter` — 章节诊断
 
-**创作助手**
-- `GET / POST / DELETE /api/writing-assistant/session` — 持久化会话（Redis 优先）
-- `POST /api/writing-assistant/confirm` — 确认建书方案
+**终端兼容创作会话**
+- `GET / DELETE /api/writing-assistant/session` · `POST /api/writing-assistant/messages` — 读取、清空或继续持久化建书会话
+- `POST /api/writing-assistant/confirm` — 确认终端生成的建书方案
 
 **作品与章节**
 - `GET / POST /api/projects` · `POST /api/projects/smart` · `POST /api/projects/import` · `GET / PATCH / DELETE /api/projects/:projectId`
@@ -281,8 +314,8 @@ npm run test:postgres
 
 **素材与连续性**
 - `GET / POST /api/ideas` · `PATCH / DELETE /api/ideas/:ideaId`
-- `GET / POST / PATCH / DELETE /api/foreshadows` — 伏笔生命周期
-- `GET / POST / PATCH / DELETE /api/story-memories` — 六类作品长期记忆
+- `GET / POST /api/foreshadows` · `PATCH / DELETE /api/foreshadows/:foreshadowId` — 伏笔生命周期
+- `GET / POST /api/story-memories` · `POST /api/story-memories/batch` · `PATCH / DELETE /api/story-memories/:memoryId` — 六类作品长期记忆
 - `POST /api/projects/:projectId/chapters/:chapterId/memory-candidates` — 夜雨整理本章记忆候选项
 
 **统计**
@@ -309,6 +342,10 @@ npm run test:postgres
 
 ```bash
 npm test
+
+# Windows 客户端前端与 Rust 端
+npm run build
+npm run desktop:build -- --bundles nsis
 ```
 
 冒烟测试在临时目录启动独立 API，覆盖输入校验与核心 CRUD，结束后自动删除测试数据。`test:unit` 还覆盖编辑建议 diff 与聊天记忆序列化的纯函数。
@@ -333,14 +370,21 @@ GitHub Actions 会在推送与 Pull Request 中自动执行完整测试、生产
 YeMuAINoval/
 ├── src/                # React + Vite 前端
 ├── server/             # Node.js Express API 网关（状态拥有者）
-│   ├── index.mjs       # 路由、领域模型、上下文构建、任务
+│   ├── index.mjs       # HTTP 路由、认证与服务编排
 │   ├── store.mjs       # JSON / PostgreSQL 聚合存储
-│   └── chat-memory.mjs # Redis 聊天记忆
+│   ├── agent-thread.mjs # 持久化 Thread / Turn / Item 生命周期
+│   ├── ai-worker.mjs   # Redis Stream 独立任务 worker
+│   ├── chat-memory.mjs # Redis 聊天记忆
+│   └── migrations/     # PostgreSQL 迁移
 ├── ai-service/         # Python FastAPI AI 服务（无状态）
 │   └── app/
 │       ├── workflows/  # 助手、写作、记忆、审稿
 │       └── skills/     # 能力注册、prompt-only、搜索、deslop
 ├── skills/             # vendored Story Skill 契约
+├── terminal/           # 小说专用终端 Agent
+├── src-tauri/          # Tauri 2 Windows 客户端、权限与安装包配置
+├── docs/               # Windows 客户端等专题文档
+├── scripts/            # PostgreSQL 备份、恢复与 Compose 验证
 └── docker-compose.yml  # PostgreSQL + Redis + AI + Web
 ```
 
@@ -353,3 +397,9 @@ YeMuAINoval/
 如果这个项目对你有帮助，欢迎 ⭐ Star 支持
 
 </div>
+
+## 🙏 致谢
+
+- [OpenCode](https://github.com/anomalyco/opencode) — 感谢其开源 Agent 在交互设计与工程实践上的启发。
+- [oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode) — 感谢其提供完整的网文创作 Skills 与工作流，本项目的 Story Skills 基于该项目集成。
+- [Codex](https://github.com/openai/codex) — 感谢其 Agent 工作流与协作体验为本项目的设计和持续迭代提供参考。

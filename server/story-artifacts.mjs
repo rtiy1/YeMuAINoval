@@ -8,6 +8,21 @@ function list(value, limit) {
   return Array.isArray(value) ? value.slice(0, limit) : []
 }
 
+function artifactDocument(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const rawPath = String(item.path || item.file || '').replaceAll('\\', '/').trim().slice(0, 240)
+  if (rawPath.startsWith('/') || /^[A-Za-z]:\//.test(rawPath)) return null
+  const parts = rawPath.split('/').filter(Boolean)
+  if (!parts.length || parts.some((part) => part === '.' || part === '..' || part.includes('\0'))) return null
+  const path = parts.join('/')
+  const content = String(item.content || item.body || item.text || '').replace(/\r\n?/g, '\n').trim().slice(0, 50_000)
+  const fallbackTitle = parts.at(-1).replace(/\.[^.]+$/, '')
+  const title = text(item.title || fallbackTitle, 160)
+  const category = text(item.category || parts[0] || '资料', 40)
+  if (!path || !title || !content) return null
+  return { path, title, category, content }
+}
+
 function nextChapterId(chapters) {
   return chapters.reduce((maximum, chapter) => Math.max(maximum, Number(chapter.id) || 0), 0) + 1
 }
@@ -25,16 +40,19 @@ export function summarizeStoryArtifacts(artifacts) {
   const characters = list(artifacts.characters, 24).filter((item) => item && typeof item === 'object' && text(item.name || item.title, 1) && text(item.description || item.body || item.summary, 1))
   const worldbuilding = list(artifacts.worldbuilding, 40).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.content || item.body || item.description, 1))
   const chapters = list(artifacts.chapters, 100).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.outline || item.content || item.summary, 1))
+  const documents = list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)
   const preview = {
     projectUpdated,
     characters: characters.length,
     worldbuilding: worldbuilding.length,
     chapters: chapters.length,
+    documents: documents.length,
     targets: [
       ...(projectUpdated ? [{ kind: '作品', title: '基础设定' }] : []),
       ...characters.map((item) => ({ kind: '人物卡', title: text(item.name || item.title, 80) })),
       ...worldbuilding.map((item) => ({ kind: '世界观', title: text(item.title || item.name, 120) })),
       ...chapters.map((item) => ({ kind: '章节大纲', title: text(item.title || item.name, 100) })),
+      ...documents.map((item) => ({ kind: item.category || '资料文件', title: item.title })),
     ].slice(0, 24),
   }
   const parts = [
@@ -42,6 +60,7 @@ export function summarizeStoryArtifacts(artifacts) {
     preview.characters ? `${preview.characters} 张人物卡` : '',
     preview.worldbuilding ? `${preview.worldbuilding} 条世界观` : '',
     preview.chapters ? `${preview.chapters} 章大纲` : '',
+    preview.documents ? `${preview.documents} 份资料文件` : '',
   ].filter(Boolean)
   if (!parts.length) return null
   return { ...preview, summary: `准备写入${parts.join('、')}` }
@@ -56,17 +75,24 @@ function upsertIdea(db, {
   folder,
   tags,
   color,
+  sourcePath = '',
   timestamp,
 }) {
   const normalizedTitle = title.toLocaleLowerCase('zh-CN')
+  const pathTag = sourcePath ? `文件:${sourcePath}` : ''
   const existing = db.ideas.find((idea) => idea.userId === userId
     && idea.projectId === projectId
-    && text(idea.title, 160).toLocaleLowerCase('zh-CN') === normalizedTitle
-    && idea.folder === folder)
+    && (pathTag
+      ? (Array.isArray(idea.tags) && idea.tags.includes(pathTag))
+        || (!(idea.tags || []).some((tag) => String(tag).startsWith('文件:'))
+          && text(idea.title, 160).toLocaleLowerCase('zh-CN') === normalizedTitle
+          && idea.folder === folder)
+      : text(idea.title, 160).toLocaleLowerCase('zh-CN') === normalizedTitle && idea.folder === folder))
   if (existing) {
     existing.label = label
     existing.body = body
     existing.tags = tags
+    existing.folder = folder
     existing.updatedAt = timestamp
     return { record: existing, created: false }
   }
@@ -96,7 +122,7 @@ export function applyStoryArtifacts(db, {
 } = {}) {
   const project = db?.projects?.find((item) => item.id === projectId && item.userId === userId)
   if (!project || !artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)) {
-    return { applied: false, summary: '', characters: 0, worldbuilding: 0, chapters: 0, projectUpdated: false }
+    return { applied: false, summary: '', characters: 0, worldbuilding: 0, chapters: 0, documents: 0, projectUpdated: false }
   }
   db.ideas ||= []
   db.chapters ||= {}
@@ -189,10 +215,40 @@ export function applyStoryArtifacts(db, {
     }
     chapter.outline = outline
     chapter.updatedAt = timestamp
+    upsertIdea(db, {
+      userId,
+      projectId,
+      label: '章节大纲',
+      title,
+      body: outline,
+      folder: '大纲',
+      tags: ['Agent产物', '章节大纲'],
+      color: 'yellow',
+      timestamp,
+    })
     chapterCount += 1
   }
 
-  const applied = projectUpdated || characterCount > 0 || worldbuildingCount > 0 || chapterCount > 0
+  let documentCount = 0
+  for (const item of list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)) {
+    const folder = text(item.category || item.path.split('/')[0] || '资料', 40)
+    const label = text(folder === '大纲' ? '大纲文档' : `${folder}文档`, 20)
+    upsertIdea(db, {
+      userId,
+      projectId,
+      label,
+      title: item.title,
+      body: item.content,
+      folder,
+      tags: ['Skill产物', `文件:${item.path}`],
+      color: folder === '大纲' ? 'yellow' : folder === '人物' ? 'coral' : 'teal',
+      sourcePath: item.path,
+      timestamp,
+    })
+    documentCount += 1
+  }
+
+  const applied = projectUpdated || characterCount > 0 || worldbuildingCount > 0 || chapterCount > 0 || documentCount > 0
   if (applied) {
     project.chapters = chapters.length
     project.updated = '刚刚'
@@ -203,6 +259,7 @@ export function applyStoryArtifacts(db, {
     characterCount ? `${characterCount} 张人物卡` : '',
     worldbuildingCount ? `${worldbuildingCount} 条世界观` : '',
     chapterCount ? `${chapterCount} 章大纲` : '',
+    documentCount ? `${documentCount} 份资料文件` : '',
   ].filter(Boolean)
   return {
     applied,
@@ -210,6 +267,7 @@ export function applyStoryArtifacts(db, {
     characters: characterCount,
     worldbuilding: worldbuildingCount,
     chapters: chapterCount,
+    documents: documentCount,
     projectUpdated,
   }
 }

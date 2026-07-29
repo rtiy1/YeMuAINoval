@@ -12,7 +12,7 @@
     "novel": "node --env-file-if-exists=.env terminal/novel-agent.mjs",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "npm run test:unit && npm run test:api && npm run test:ai && npm run test:integration",
-    "test:unit": "node --test server/auth-cookie-test.mjs server/story-artifacts-test.mjs server/writing-context-test.mjs server/edit-proposal-test.mjs server/editor-agent-test.mjs server/agent-thread-test.mjs server/sse-test.mjs server/chat-memory-test.mjs server/skill-review-test.mjs server/model-icons-test.mjs terminal/*.test.mjs",
+    "test:unit": "node --test server/auth-cookie-test.mjs server/story-artifacts-test.mjs server/writing-context-test.mjs server/edit-proposal-test.mjs server/editor-agent-test.mjs server/agent-thread-test.mjs server/sse-test.mjs server/chat-memory-test.mjs server/skill-review-test.mjs server/model-icons-test.mjs src/*.test.mjs terminal/*.test.mjs",
     "test:api": "node server/smoke-test.mjs && node server/registration-mode-test.mjs && node server/task-queue-config-test.mjs",
     "test:ai": "node server/ai-task.mjs test",
     "test:integration": "node server/ai-gateway-test.mjs",
@@ -23,9 +23,18 @@
     "db:backup": "bash scripts/postgres-backup.sh",
     "db:restore": "bash scripts/postgres-restore.sh",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:icon": "tauri icon"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "@vitejs/plugin-react": "latest",
     "cookie-parser": "latest",
     "cors": "latest",
@@ -40,5 +49,8 @@
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
   }
 }

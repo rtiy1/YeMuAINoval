@@ -102,7 +102,7 @@ class AssistantProtocolTests(unittest.TestCase):
         self.assertNotIn('内部判断', ''.join(deltas))
 
     def test_story_artifacts_are_extracted_but_never_streamed_to_the_answer(self):
-        artifact_block = '<story_artifacts>{"version":1,"characters":[{"name":"枫羽","role":"主角","description":"普通人，被轮回系统选中。"}],"chapters":[{"title":"第一章 被选中的人","outline":"枫羽在便利店夜班时被拉入副本。"}]}</story_artifacts>'
+        artifact_block = '<story_artifacts>{"version":2,"characters":[{"name":"枫羽","role":"主角","description":"普通人，被轮回系统选中。"}],"chapters":[{"title":"第一章 被选中的人","outline":"枫羽在便利店夜班时被拉入副本。"}],"documents":[{"path":"大纲/大纲.md","title":"全书大纲","category":"大纲","content":"# 大纲\\n\\n枫羽通过副本追查轮回系统。"},{"path":"../越界.md","title":"越界","content":"拒绝"},{"path":"C:/绝对路径.md","title":"绝对路径","content":"拒绝"}]}</story_artifacts>'
 
         class FakeStreamingModel:
             def stream(self, messages, **kwargs):
@@ -120,6 +120,9 @@ class AssistantProtocolTests(unittest.TestCase):
         artifacts = extract_story_artifacts(output, response)
         self.assertEqual(artifacts['characters'][0]['name'], '枫羽')
         self.assertEqual(artifacts['chapters'][0]['title'], '第一章 被选中的人')
+        self.assertEqual(artifacts['documents'][0]['path'], '大纲/大纲.md')
+        self.assertEqual(len(artifacts['documents']), 1)
+        self.assertIn('\n', artifacts['documents'][0]['content'])
         self.assertEqual(strip_story_artifact_blocks(f'可见内容\n{artifact_block}'), '可见内容')
 
     def test_stream_withholds_internal_contract_refusal(self):
@@ -309,6 +312,19 @@ class AssistantProtocolTests(unittest.TestCase):
         )
         self.assertNotIn('references/workflow-daily.md', new_book)
         self.assertNotIn('references/workflow-revision.md', new_book)
+
+    def test_new_book_loads_the_skill_artifact_file_contract(self):
+        instructions = '''# 写作 Skill
+开书完成核心设定后加载 `references/artifact-protocols.md` 中的文件模板。
+日更续写时加载 `references/workflow-daily.md`。
+'''
+        selected = select_reference_requests(
+            instructions,
+            '帮我开书，先完成设定和大纲',
+            max_references=2,
+        )
+        self.assertIn('references/artifact-protocols.md', selected)
+        self.assertNotIn('references/workflow-daily.md', selected)
 
     def test_skill_discovery_catalog_contains_metadata_only_and_is_budgeted(self):
         catalog = get_story_skill_capability().discovery_catalog(context_window=100_000)

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="120" y1="80" x2="900" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#292e29"/>
+      <stop offset="1" stop-color="#151815"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="300" y1="260" x2="760" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e0ac8d"/>
+      <stop offset="1" stop-color="#b8644c"/>
+    </linearGradient>
+    <mask id="crescent">
+      <rect width="1024" height="1024" fill="black"/>
+      <circle cx="466" cy="430" r="244" fill="white"/>
+      <circle cx="572" cy="330" r="235" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="44" y="44" width="936" height="936" rx="226" fill="url(#background)"/>
+  <rect x="68" y="68" width="888" height="888" rx="204" fill="none" stroke="#3f463f" stroke-width="8"/>
+  <rect width="1024" height="1024" fill="url(#accent)" mask="url(#crescent)"/>
+  <path d="M362 693c101-42 210-60 329-53" fill="none" stroke="#ebe1d2" stroke-width="38" stroke-linecap="round"/>
+  <path d="M367 769c104-34 211-45 321-32" fill="none" stroke="#777f76" stroke-width="24" stroke-linecap="round"/>
+  <path d="M690 250l18 48 48 18-48 18-18 48-18-48-48-18 48-18 18-48z" fill="#ebe1d2"/>
+</svg>

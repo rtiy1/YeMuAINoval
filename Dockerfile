@@ -23,7 +23,9 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/skills ./skills
-COPY --from=build /app/src/sse.mjs ./src/sse.mjs
+# The server shares protocol helpers with the frontend. Keep the runtime image
+# in sync when a new server-side import is added under src/.
+COPY --from=build /app/src ./src
 
 EXPOSE 8787
 CMD ["node", "server/index.mjs"]

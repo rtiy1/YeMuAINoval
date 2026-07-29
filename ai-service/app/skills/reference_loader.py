@@ -61,6 +61,7 @@ _COMMON_BIGRAMS = {
 _CONDITIONAL_REFERENCE_TRIGGERS = {
     'workflow-daily.md': re.compile(r'日更|续写|继续写|接着写'),
     'workflow-revision.md': re.compile(r'大修|回炉|重写|改写|修改第'),
+    'artifact-protocols.md': re.compile(r'开书|大纲|卷纲|细纲|设定|世界观|人物|关系|追踪|伏笔|时间线'),
     'short-deslop.md': re.compile(r'去\s*ai|去味|自然化|模板腔', re.IGNORECASE),
     'opening-design.md': re.compile(r'开篇|开头|黄金三章|前\s*3\s*章|前三章'),
     'cross-book-recall.md': re.compile(r'对标|参考书|跨书|多本'),
@@ -122,9 +123,12 @@ def select_reference_requests(
             (pattern for suffix, pattern in _CONDITIONAL_REFERENCE_TRIGGERS.items() if path.endswith(suffix)),
             None,
         )
-        if trigger and not trigger.search(task_context):
-            score = 0
-            mandatory = False
+        if trigger:
+            if trigger.search(task_context):
+                score += 40
+            else:
+                score = 0
+                mandatory = False
         ranked.append((score, -order, mandatory, path))
 
     selected: list[str] = []

@@ -48,7 +48,7 @@ function userModelConfig(user) {
 
 async function preparedStoryAgentBody(user, input) {
   const db = await loadDb()
-  const payload = enrichStoryAgentPayload(db, user.id, input.payload || {})
+  const payload = enrichStoryAgentPayload(db, user.id, input.payload || {}, input.message)
   const prepared = await decorateInstalledMarketSkill(user.id, { ...input, payload })
   const body = { message: prepared.message, skill: prepared.skill || null, payload: prepared.payload }
   const modelConfig = userModelConfig(user)

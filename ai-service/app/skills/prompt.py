@@ -242,6 +242,9 @@ def normalize_story_artifacts(value: Any) -> dict[str, Any] | None:
     def clean(item: Any, limit: int) -> str:
         return re.sub(r'\s+', ' ', str(item or '')).strip()[:limit]
 
+    def clean_document(item: Any, limit: int) -> str:
+        return re.sub(r'\r\n?', '\n', str(item or '')).strip()[:limit]
+
     project_source = value.get('project') if isinstance(value.get('project'), dict) else {}
     project = {
         key: clean(project_source.get(key), limit)
@@ -282,12 +285,41 @@ def normalize_story_artifacts(value: Any) -> dict[str, Any] | None:
             chapters.append({'title': title, 'outline': outline})
         if len(chapters) >= 100:
             break
+    documents = []
+    raw_documents = value.get('documents')
+    if not isinstance(raw_documents, list):
+        raw_documents = value.get('files') if isinstance(value.get('files'), list) else []
+    for item in raw_documents:
+        if not isinstance(item, dict):
+            continue
+        path = clean_document(item.get('path') or item.get('file'), 240).replace('\\', '/')
+        if path.startswith('/') or re.match(r'^[A-Za-z]:/', path):
+            continue
+        parts = [part for part in path.split('/') if part]
+        if not parts or any(part in {'.', '..'} or '\0' in part for part in parts):
+            continue
+        path = '/'.join(parts)
+        if '.' not in parts[-1]:
+            path = f'{path}.md'
+        content = clean_document(item.get('content') or item.get('body') or item.get('text'), 50_000)
+        title = clean(item.get('title'), 160) or re.sub(r'\.[^.]+$', '', parts[-1])[:160]
+        category = clean(item.get('category'), 40) or clean(parts[0], 40) or '资料'
+        if path and title and content:
+            documents.append({
+                'path': path,
+                'title': title,
+                'category': category,
+                'content': content,
+            })
+        if len(documents) >= 80:
+            break
     normalized = {
-        'version': 1,
+        'version': 2 if documents else 1,
         **({'project': project} if project else {}),
         **({'characters': characters} if characters else {}),
         **({'worldbuilding': worldbuilding} if worldbuilding else {}),
         **({'chapters': chapters} if chapters else {}),
+        **({'documents': documents} if documents else {}),
     }
     return normalized if len(normalized) > 1 else None
 

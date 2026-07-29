@@ -105,9 +105,10 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20))
     task = (await loadDb()).writingTasks.find((item) => item.id === 'recovery-task')
-    if (task?.status === 'running') break
+    if (task?.status === 'running' && received.some((body) => body.message === '停机恢复')) break
   }
   assert.equal(task?.status, 'running')
+  assert.equal(received.filter((body) => body.message === '停机恢复').length, 1)
   await stopWorker(worker)
   assert.equal((await loadDb()).writingTasks.find((item) => item.id === 'recovery-task')?.status, 'queued')
 

@@ -8,6 +8,67 @@ function contextExcerpt(value, maxLength = 1600) {
   return `${text.slice(0, Math.floor(maxLength * 0.35))}\n…\n${text.slice(-Math.floor(maxLength * 0.65))}`
 }
 
+function storyFilePath(idea) {
+  const tag = Array.isArray(idea?.tags)
+    ? idea.tags.find((item) => String(item).startsWith('文件:'))
+    : null
+  return tag ? String(tag).slice(3).trim() : ''
+}
+
+function buildStoryFiles(db, project, chapter, instruction = '') {
+  const cue = String(instruction || '')
+  const chapterNumber = Number(chapter?.id)
+  const chapterToken = Number.isFinite(chapterNumber) ? `第${String(chapterNumber).padStart(3, '0')}章` : ''
+  const writingIntent = /续写|日更|继续写|接着写|正文|写第\s*[一二三四五六七八九十百千万两\d]+\s*章/.test(cue)
+  const records = (db.ideas || [])
+    .filter((idea) => idea.userId === project.userId && idea.projectId === project.id && storyFilePath(idea))
+    .map((idea) => {
+      const path = storyFilePath(idea)
+      let relevance = 0
+      if (path === '大纲/大纲.md') relevance += 320
+      if (path === '设定/题材定位.md') relevance += 270
+      if (path === '设定/题材正文提示卡.md') relevance += 280
+      if (writingIntent && path === '追踪/角色状态.md') relevance += 310
+      if (writingIntent && path === '追踪/伏笔.md') relevance += 300
+      if (writingIntent && path === '追踪/时间线.md') relevance += 290
+      if (writingIntent && path === '追踪/上下文.md') relevance += 285
+      if (/^大纲\/卷纲_/.test(path)) {
+        relevance += 180
+        const range = String(idea.body || '').match(/章节范围[：:]\s*第?\s*(\d+)\s*[-—~～至到]\s*第?\s*(\d+)\s*章/)
+        if (chapterNumber && range && chapterNumber >= Number(range[1]) && chapterNumber <= Number(range[2])) relevance += 260
+      }
+      if (chapterToken && path.includes(`细纲_${chapterToken}`)) relevance += 500
+      if (!writingIntent && /开书|大纲|卷纲|细纲|剧情/.test(cue) && path.startsWith('大纲/')) relevance += 100
+      if (/设定|世界观|人物|角色|势力|关系/.test(cue) && path.startsWith('设定/')) relevance += 100
+      if (/追踪|伏笔|时间线|状态/.test(cue) && path.startsWith('追踪/')) relevance += 100
+      return { idea, path, relevance }
+    })
+    .sort((left, right) => right.relevance - left.relevance
+      || String(right.idea.updatedAt || '').localeCompare(String(left.idea.updatedAt || '')))
+
+  const inventory = records.slice(0, 80).map(({ idea, path }) => ({
+    path,
+    title: idea.title,
+    category: idea.folder || idea.label || path.split('/')[0] || '资料',
+    updatedAt: idea.updatedAt || idea.createdAt || '',
+  }))
+  const loaded = []
+  let remaining = 48_000
+  for (const { idea, path } of records) {
+    if (loaded.length >= 10 || remaining <= 0) break
+    const content = contextExcerpt(idea.body, Math.min(10_000, remaining))
+    if (!content) continue
+    loaded.push({
+      path,
+      title: idea.title,
+      category: idea.folder || idea.label || path.split('/')[0] || '资料',
+      content,
+    })
+    remaining -= content.length
+  }
+  return { inventory, loaded }
+}
+
 function draftMapFor(db, projectId) {
   const current = db.drafts[projectId]
   return current && typeof current === 'object' && !Array.isArray(current) ? current : {}
@@ -108,7 +169,7 @@ export function resolveStoryAttachments(db, project, userId, attachments) {
   }).filter((item) => item.name && item.content)
 }
 
-export function buildWritingContext(db, project, chapter) {
+export function buildWritingContext(db, project, chapter, instruction = '') {
   const chapters = db.chapters[project.id] || []
   const chapterIndex = chapters.findIndex((item) => String(item.id) === String(chapter.id))
   const drafts = draftMapFor(db, project.id)
@@ -120,8 +181,11 @@ export function buildWritingContext(db, project, chapter) {
       outline: contextExcerpt(item.outline, 900),
       ending: contextExcerpt(drafts[String(item.id)], 1200).slice(-1200),
     }))
+  const storyFiles = buildStoryFiles(db, project, chapter, instruction)
   const materials = db.ideas
-    .filter((idea) => idea.userId === project.userId && (!idea.projectId || idea.projectId === project.id))
+    .filter((idea) => idea.userId === project.userId
+      && (!idea.projectId || idea.projectId === project.id)
+      && !storyFilePath(idea))
     .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
     .slice(0, 20)
     .map((idea) => ({ label: idea.label, title: idea.title, body: contextExcerpt(idea.body, 500), tags: idea.tags || [] }))
@@ -166,9 +230,10 @@ export function buildWritingContext(db, project, chapter) {
       tags: item.tags || [],
     }))
   return {
-    version: 3,
+    version: 4,
     project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
     chapter: { id: chapter.id, title: chapter.title, outline: contextExcerpt(chapter.outline, 2400), state: chapter.state },
+    storyFiles,
     previousChapters,
     layers: {
       near: { strategy: 'outline_and_ending', chapters: nearChapters },
@@ -182,7 +247,7 @@ export function buildWritingContext(db, project, chapter) {
   }
 }
 
-export function enrichStoryAgentPayload(db, userId, payload) {
+export function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
   const projectId = payload.project_id || payload.projectId
   const chapterId = payload.chapter_id || payload.chapterId
   if (!projectId) return payload
@@ -193,8 +258,12 @@ export function enrichStoryAgentPayload(db, userId, payload) {
     : null
   if (chapterId && !chapter) throw Object.assign(new Error('章节不存在'), { status: 404 })
   const writingContext = chapter
-    ? buildWritingContext(db, project, chapter)
-    : { version: 1, project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' } }
+    ? buildWritingContext(db, project, chapter, instruction)
+    : {
+      version: 2,
+      project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
+      storyFiles: buildStoryFiles(db, project, null, instruction),
+    }
   const attachedFiles = resolveStoryAttachments(db, project, userId, payload.attached_files)
   const requestedPolicy = payload.tool_policy && typeof payload.tool_policy === 'object' ? payload.tool_policy : {}
   const toolPolicy = {

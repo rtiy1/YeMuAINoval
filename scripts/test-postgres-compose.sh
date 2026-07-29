@@ -21,6 +21,7 @@ docker compose up -d --wait postgres redis
 docker compose build app
 docker compose run --rm --no-deps \
   -e DATABASE_URL= \
+  -e AI_TASK_QUEUE_ENABLED=false \
   -e REDIS_URL=redis://redis:6379/15 \
   -e REDIS_TEST_URL=redis://redis:6379/15 \
   app node --test server/chat-memory-test.mjs

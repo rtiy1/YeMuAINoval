@@ -1,6 +1,6 @@
 import { consumeSseStream } from './sse.mjs'
+import { appFetch, getApiBase } from './platform.mjs'
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api'
 let accessToken = null
 let refreshPromise = null
 
@@ -28,10 +28,11 @@ function responseErrorMessage(payload, status) {
 async function rawRequest(path, options = {}) {
   const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) }
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
-  const response = await fetch(`${API_BASE}${path}`, {
+  const { headers: _optionHeaders, ...requestOptions } = options
+  const response = await appFetch(`${getApiBase()}${path}`, {
     credentials: 'include',
     headers,
-    ...options,
+    ...requestOptions,
   })
 
   let payload = null
@@ -78,7 +79,7 @@ async function request(path, options = {}, retry = true) {
 async function streamRequest(path, { signal, onEvent } = {}, retry = true) {
   const headers = { Accept: 'text/event-stream' }
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await appFetch(`${getApiBase()}${path}`, {
     credentials: 'include',
     headers,
     signal,
@@ -106,7 +107,7 @@ async function streamRequest(path, { signal, onEvent } = {}, retry = true) {
 async function downloadRequest(path, retry = true) {
   const headers = {}
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
-  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include', headers })
+  const response = await appFetch(`${getApiBase()}${path}`, { credentials: 'include', headers })
   if (response.status === 401 && retry && !path.startsWith('/auth/')) {
     const session = await refreshSession()
     if (session) return downloadRequest(path, false)

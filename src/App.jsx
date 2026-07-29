@@ -86,13 +86,11 @@ import { api } from './api'
 import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
 import { NOVEL_COMMANDS, parseSlashCommand, resolveSelection } from '../terminal/commands.mjs'
 import {
-  agentEventDuration,
   agentResponseText,
   agentTaskDurationMs,
   agentTurnEvents,
   agentThreadMessages,
   compactAgentEvents,
-  formatAgentDuration,
   isEditorAgentEdit,
   normalizeStructuredAgentQuestion,
   parseAgentChoicePrompt,
@@ -100,8 +98,23 @@ import {
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from './editor-agent.mjs'
+import {
+  AgentChoicePrompt,
+  AgentDiffReview,
+  AgentRunTimeline,
+} from './agent-interactions.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
 import { resolveModelIcon } from './model-icons.mjs'
+import {
+  getApiBase,
+  isDesktopApp,
+  openExternalUrl,
+  openTextDocument,
+  saveTextDocument,
+  sendAgentNotification,
+  setDesktopApiBase,
+  testApiBase,
+} from './platform.mjs'
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
@@ -225,17 +238,6 @@ function agentRunTokenUsage(run) {
     estimated: usage.estimated === true || !hasUsage,
   }
 }
-
-function AgentEventIcon({ event }) {
-  if (event.status === 'running') return <LoaderCircle size={13} className="spin" />
-  if (['failed', 'cancelled', 'interrupted'].includes(event.status)) return <X size={13} />
-  if (event.type === 'subagent') return <UsersRound size={13} />
-  if (event.type === 'context') return <SearchCode size={13} />
-  if (event.type === 'skill') return <Code2 size={13} />
-  if (event.type === 'result') return <FileText size={13} />
-  return <Check size={13} />
-}
-
 
 function formatRelativeTime(value, fallback = '刚刚') {
   if (!value) return fallback
@@ -398,6 +400,26 @@ function App() {
   const saveQueueRef = useRef(Promise.resolve())
   const skillSubmissionRef = useRef(null)
   const profileMenuRef = useRef(null)
+
+  useEffect(() => {
+    if (!isDesktopApp()) return undefined
+    function handleExternalLink(event) {
+      if (event.defaultPrevented) return
+      const anchor = event.target.closest?.('a[href]')
+      if (!anchor) return
+      let url
+      try {
+        url = new URL(anchor.href, window.location.href)
+      } catch {
+        return
+      }
+      if (!['http:', 'https:', 'mailto:', 'tel:'].includes(url.protocol)) return
+      event.preventDefault()
+      void openExternalUrl(url.toString()).catch(() => setToast('无法使用系统浏览器打开链接'))
+    }
+    document.addEventListener('click', handleExternalLink)
+    return () => document.removeEventListener('click', handleExternalLink)
+  }, [])
 
   useEffect(() => {
     if (passwordResetToken) {
@@ -1238,7 +1260,7 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <div className={`app-shell ${isDesktopApp() ? 'desktop-surface' : 'web-surface'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className={`sidebar ${showMobileMenu ? 'is-open' : ''}`}>
         <div className="brand-lockup">
           <div className="brand-mark"><span>叙</span></div>
@@ -1496,6 +1518,71 @@ function ProfileCenter({ user, stats, projects, onNavigate, onOpenSettings, onOp
   </div>
 }
 
+function DesktopServerControl({ compact = false }) {
+  const [server, setServer] = useState(() => getApiBase())
+  const [status, setStatus] = useState('idle')
+  const [message, setMessage] = useState('')
+
+  async function testConnection() {
+    setStatus('testing')
+    setMessage('')
+    try {
+      const result = await testApiBase(server)
+      setServer(result.base)
+      setStatus('connected')
+      setMessage('连接正常，可以登录并同步作品。')
+    } catch (error) {
+      setStatus('error')
+      setMessage(error.message || '无法连接到服务器')
+    }
+  }
+
+  function applyServer() {
+    setMessage('')
+    try {
+      const current = getApiBase()
+      const normalized = setDesktopApiBase(server)
+      setServer(normalized)
+      if (normalized === current) {
+        setStatus('connected')
+        setMessage('当前已经在使用这个服务器。')
+        return
+      }
+      setStatus('saved')
+      setMessage('服务器已保存，正在重新载入客户端…')
+      window.setTimeout(() => window.location.reload(), 450)
+    } catch (error) {
+      setStatus('error')
+      setMessage(error.message || '服务器地址格式不正确')
+    }
+  }
+
+  const content = <>
+    <label className="desktop-server-field">
+      <span>应用服务器</span>
+      <div><Globe size={15} /><input type="text" value={server} onChange={(event) => { setServer(event.target.value); setStatus('idle'); setMessage('') }} spellCheck="false" placeholder="https://story.example.com/api" /></div>
+      <small>本地服务默认使用 http://127.0.0.1:8787/api；公网服务请使用 HTTPS。</small>
+    </label>
+    <div className="desktop-server-actions">
+      <button type="button" className="secondary-button" disabled={status === 'testing'} onClick={testConnection}>{status === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Zap size={14} />}测试连接</button>
+      <button type="button" className="dark-button" disabled={status === 'testing'} onClick={applyServer}><Check size={14} />保存并切换</button>
+    </div>
+    {message && <p className={`desktop-server-message ${status}`} role="status">{message}</p>}
+  </>
+
+  if (compact) {
+    return <details className="desktop-server-control compact">
+      <summary><span><Globe size={14} />Windows 客户端</span><small>{getApiBase()}</small><ChevronDown size={14} /></summary>
+      <div className="desktop-server-content">{content}</div>
+    </details>
+  }
+
+  return <section className="desktop-server-control">
+    <div className="settings-section-heading"><div><h3>客户端服务器</h3><p>选择这台 Windows 客户端连接的夜幕 Web 服务，作品和账号会保持同步。</p></div></div>
+    <div className="desktop-server-content">{content}</div>
+  </section>
+}
+
 function AuthScreen({ mode, error, onModeChange, onSubmit }) {
   const [submitting, setSubmitting] = useState(false)
   const [localError, setLocalError] = useState('')
@@ -1616,6 +1703,7 @@ function AuthScreen({ mode, error, onModeChange, onSubmit }) {
 
       <section className="auth-form-panel">
         <div className="auth-form-wrap">
+          {isDesktopApp() && <DesktopServerControl compact />}
           <div className="auth-mode" aria-label="认证方式">
             <button type="button" className={isLogin ? 'active' : ''} onClick={() => changeMode('login')}>登录</button>
             <button type="button" className={isRegister ? 'active' : ''} onClick={() => changeMode('register')}>注册</button>
@@ -1939,93 +2027,21 @@ function ProjectCard({ project, onOpen }) {
   return <button className="project-card" onClick={() => onOpen(project)}><div className={`card-cover ${project.cover}`}><span>{project.title.slice(0, 1)}</span></div><div className="card-content"><div className="card-topline"><span>{project.type}</span><MoreHorizontal size={15} /></div><h3>{project.title}</h3><p>{project.genre}</p><div className="card-footer"><span>{project.words} 字</span><span>{project.progress}%</span></div><div className="mini-progress"><span style={{ width: `${project.progress}%` }} /></div></div></button>
 }
 
-function AgentChoicePrompt({ prompt, disabled, onChoose }) {
-  const questions = Array.isArray(prompt.questions) && prompt.questions.length
-    ? prompt.questions
-    : [{ id: 'question_1', header: '', question: prompt.question, options: prompt.options, isOther: true }]
-  const [questionIndex, setQuestionIndex] = useState(0)
-  const [answers, setAnswers] = useState({})
-  const [selected, setSelected] = useState('')
-  const [customValue, setCustomValue] = useState('')
-  const currentQuestion = questions[Math.min(questionIndex, questions.length - 1)]
-  const modelOptions = (Array.isArray(currentQuestion.options) ? currentQuestion.options : []).map((option) => ({
-    ...option,
-    isOther: /^(其他|自定义|other)$/i.test(String(option.label || '').trim()),
-  }))
-  const allowOther = currentQuestion.isOther !== false || modelOptions.some((option) => option.isOther)
-  const hasOther = modelOptions.some((option) => option.isOther)
-  const options = hasOther || !allowOther
-    ? modelOptions
-    : [...modelOptions, { key: 'OTHER', label: '其他', description: '自定义输入你的想法', reply: '', isOther: true }]
+function agentRunEffectiveStatus(run) {
+  const result = run?.response?.result || {}
+  if (result.status === 'needs_input' || normalizeStructuredAgentQuestion(result.question) || parseAgentChoiceResponse(run?.text)) return 'needs_input'
+  return run?.status || 'completed'
+}
 
-  function completeAnswer(value) {
-    const nextAnswers = { ...answers, [currentQuestion.id]: value }
-    if (questionIndex < questions.length - 1) {
-      setAnswers(nextAnswers)
-      setQuestionIndex((current) => current + 1)
-      setSelected('')
-      setCustomValue('')
-      return
-    }
-    const reply = questions.map((question) => `${question.header || question.question}：${nextAnswers[question.id] || ''}`).join('\n')
-    onChoose({ answers: nextAnswers, text: reply })
-  }
-
-  function choose(option) {
-    if (disabled) return
-    setSelected(option.key)
-    if (option.isOther) {
-      setCustomValue('')
-      return
-    }
-  }
-
-  function submitSelected() {
-    const option = options.find((item) => item.key === selected)
-    if (disabled || !option || option.isOther) return
-    completeAnswer(option.reply)
-  }
-
-  function submitCustom(event) {
-    event?.preventDefault()
-    const value = customValue.trim()
-    if (disabled || !options.find((option) => option.key === selected)?.isOther || !value) return
-    completeAnswer(`其他：${value}`)
-  }
-
-  return <div className="agent-choice-response">
-    {prompt.intro && <p className="agent-choice-intro">{prompt.intro}</p>}
-    <section className="agent-choice-card" aria-label="请选择一个方向">
-      <header><span>{currentQuestion.header || '需要你确认'}</span><small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length} · 选择后继续` : '选择一项继续'}</small></header>
-      <p>{currentQuestion.question}</p>
-      <div className="agent-choice-options">
-        {options.map((option) => <button
-          type="button"
-          key={option.key}
-          className={selected === option.key ? 'selected' : ''}
-          disabled={disabled}
-          onClick={() => choose(option)}
-        >
-          <strong>{option.key}</strong>
-          <span className="agent-choice-copy"><span>{option.label}</span>{option.description && <small>{option.description}</small>}</span>
-          {selected === option.key ? <Check size={13} /> : <ChevronRight size={13} />}
-        </button>)}
-      </div>
-      {selected && options.find((option) => option.key === selected)?.isOther && <form className="agent-choice-custom" onSubmit={submitCustom}>
-        <input
-          autoFocus
-          value={customValue}
-          maxLength={1000}
-          onChange={(event) => setCustomValue(event.target.value)}
-          placeholder="输入你的自定义答案…"
-          aria-label="自定义答案"
-        />
-        <button type="submit" disabled={!customValue.trim()}>继续</button>
-      </form>}
-      {selected && !options.find((option) => option.key === selected)?.isOther && <button type="button" className="agent-choice-confirm" disabled={disabled} onClick={submitSelected}>继续</button>}
-      {prompt.hint && <small className="agent-choice-hint">{prompt.hint}</small>}
-    </section>
-  </div>
+function agentRunNotificationKey(run) {
+  const status = agentRunEffectiveStatus(run)
+  if (status !== 'needs_input') return `${run.id}:${status}`
+  const prompt = normalizeStructuredAgentQuestion(run?.response?.result?.question) || parseAgentChoiceResponse(run?.text)?.prompt
+  const questionKey = `${run?.inputHistory?.length || 0}:`
+    + (prompt?.questions?.map((question) => `${question.id}:${question.question}`).join('|')
+    || prompt?.question
+    || 'question')
+  return `${run.id}:${status}:${questionKey}`
 }
 
 function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoose, onRegenerate, choiceDisabled = false, regenerateDisabled = false }) {
@@ -2046,8 +2062,6 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
 
   const changedHunks = hunks.filter((hunk) => hunk.type !== 'equal')
   const acceptedText = changedHunks.length ? composeAcceptedText(hunks) : outputText
-  const addedCharacters = changedHunks.reduce((sum, hunk) => sum + (hunk.accepted ? hunk.replacement.length : 0), 0)
-  const removedCharacters = changedHunks.reduce((sum, hunk) => sum + (hunk.accepted ? hunk.original.length : 0), 0)
   const references = Array.isArray(result.references_loaded) ? result.references_loaded : []
   const checks = Array.isArray(result.checks) ? result.checks : []
   const findings = Array.isArray(result.findings) ? result.findings : []
@@ -2084,9 +2098,10 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
   const traceSummary = String(proposal?.summary || result.summary || '').trim()
   const isPlanMode = run.mode === 'plan' || run.source?.mode === 'plan'
   const compatibilityChoice = parseAgentChoiceResponse(run.text)
+  const structuredChoice = normalizeStructuredAgentQuestion(result.question)
   const effectiveReasoningSummary = run.reasoningSummary || compatibilityChoice?.reasoning || ''
-  const effectiveStatus = result.status === 'needs_input' || compatibilityChoice ? 'needs_input' : run.status
-  const choicePrompt = normalizeStructuredAgentQuestion(result.question)
+  const effectiveStatus = structuredChoice || result.status === 'needs_input' || compatibilityChoice ? 'needs_input' : run.status
+  const choicePrompt = structuredChoice
     || compatibilityChoice?.prompt
     || (effectiveStatus === 'needs_input' ? parseAgentChoicePrompt(run.text) : null)
   const hasInputRequest = effectiveStatus === 'needs_input' && Boolean(choicePrompt)
@@ -2094,10 +2109,6 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
     completed: '已完成', needs_model: '需要配置模型', needs_input: '需要补充输入',
     waiting_input: '等待你的回答', needs_adapter: '能力待接入', failed: '运行失败', cancelled: '已停止',
   }[effectiveStatus] || '运行中'
-
-  function toggleHunk(id, accepted) {
-    setHunks((current) => current.map((hunk) => hunk.id === id ? { ...hunk, accepted } : hunk))
-  }
 
   async function copyResult() {
     const text = outputText || run.text
@@ -2164,57 +2175,29 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
       <Check size={12} />
     </div>}
 
-    <details className="agent-reasoning" open={run.status === 'running'}>
-      <summary>{run.status === 'running' ? <LoaderCircle size={14} className="spin" /> : <BrainCircuit size={14} />}<strong>执行过程</strong><span>{run.status === 'running' ? formatAgentDuration(elapsedMs) : formatAgentDuration(run.durationMs)} · {statusLabel}</span><ChevronRight size={13} className="agent-trace-chevron" /></summary>
-      <div className="agent-reasoning-body">
-        {plan.length > 0 && <div className="agent-plan" aria-label="执行计划">
-          <div className="agent-plan-heading"><List size={13} /><strong>执行计划</strong><span>{plan.filter((item) => item.status === 'completed').length}/{plan.length}</span></div>
-          <ol>{plan.map((item, index) => <li className={item.status} key={`${item.step}-${index}`}>
-            {item.status === 'completed' ? <Check size={11} /> : item.status === 'inProgress' ? <LoaderCircle size={11} className="spin" /> : <span className="agent-plan-dot" />}
-            <span>{item.step}</span>
-          </li>)}</ol>
-        </div>}
-        <div className="agent-tool-stack">
-          {(events.length ? events : [{ id: `${run.id}:local`, type: 'lifecycle', label: run.statusMessage || '正在创建任务', status: 'running' }]).map((event) => <div className={`agent-tool-row ${event.status === 'completed' ? 'done' : event.status}`} key={event.id}>
-            <AgentEventIcon event={event} />
-            <span>{event.label}</span>
-            {event.count > 1 ? <small>{event.count} 轮</small> : agentEventDuration(event) && <small>{agentEventDuration(event)}</small>}
-          </div>)}
-        </div>
-        {subagentEvents.filter((event) => event.meta?.reportSummary).map((event) => <div className="agent-reasoning-summary" key={`${event.id}:report`}>
-          <UsersRound size={12} />
-          <div>
-            <strong>{event.label}</strong>
-            <AgentMarkdown value={event.meta.reportSummary} />
-          </div>
-        </div>)}
-        {interactionTrace.map(({ kind, entry, ordinal }) => kind === 'input'
-          ? <div className="agent-reasoning-summary" key={entry.requestId || `${run.id}:input:${ordinal}`}>
-            <CheckSquare2 size={12} />
-            <div>
-              <strong>已确认的补充信息 {inputHistory.length > 1 ? `${ordinal}/${inputHistory.length}` : ''}</strong>
-              <AgentMarkdown value={`问题：${entry.response?.questionText || '补充信息'}\n\n回答：${entry.response?.answerText || '已回答'}`} />
-            </div>
-          </div>
-          : <div className="agent-reasoning-summary" key={entry.id || `${run.id}:reasoning-history:${ordinal}`}>
-            <BrainCircuit size={12} />
-            <div>
-              <strong>模型推理摘要 {reasoningHistory.length > 1 || effectiveReasoningSummary ? `${ordinal}/${reasoningHistory.length + (effectiveReasoningSummary ? 1 : 0)}` : ''}</strong>
-              <AgentMarkdown value={entry.summary} />
-            </div>
-          </div>)}
-        {effectiveReasoningSummary && <div className="agent-reasoning-summary"><BrainCircuit size={12} /><div><strong>模型推理摘要 {reasoningHistory.length ? `${reasoningHistory.length + 1}/${reasoningHistory.length + 1}` : ''}</strong><AgentMarkdown value={effectiveReasoningSummary} streaming={run.status === 'running'} /></div></div>}
-        {checks.length > 0 && <div className="agent-tool-row done"><CheckSquare2 size={13} /><span>完成 {checks.length} 项确定性检查</span></div>}
-        {run.response?.route && <code>{run.response.route}</code>}
-      </div>
-    </details>
+    <AgentRunTimeline
+      run={run}
+      elapsedMs={elapsedMs}
+      effectiveStatus={effectiveStatus}
+      statusLabel={statusLabel}
+      hasInputRequest={hasInputRequest}
+      plan={plan}
+      events={events}
+      subagentEvents={subagentEvents}
+      interactionTrace={interactionTrace}
+      inputHistory={inputHistory}
+      reasoningHistory={reasoningHistory}
+      effectiveReasoningSummary={effectiveReasoningSummary}
+      checks={checks}
+      desktop={isDesktopApp()}
+    />
 
     {(run.status !== 'running' || run.text || hasInputRequest) && <div className={`agent-answer ${run.status === 'running' ? 'streaming' : ''} ${['failed', 'cancelled', 'needs_model', 'needs_adapter'].includes(run.status) ? 'notice' : ''}`} aria-live="polite">
       <div className="agent-answer-heading"><Bot size={15} /><strong>{isPlanMode ? '计划' : ASSISTANT_NAME}</strong></div>
       {run.status === 'running'
         ? <AgentMarkdown value={run.text} streaming />
         : choicePrompt
-        ? <AgentChoicePrompt prompt={choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
+        ? <AgentChoicePrompt prompt={choicePrompt} disabled={choiceDisabled} onChoose={onChoose} desktop={isDesktopApp()} />
         : <AgentMarkdown value={run.text} />}
       {run.status !== 'running' && !choicePrompt && Boolean(outputText || run.text) && <div className="agent-answer-actions">
         <button type="button" onClick={copyResult} title="复制回复" aria-label="复制回复">
@@ -2235,6 +2218,7 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
         {run.artifactPreview.characters > 0 && <span>{run.artifactPreview.characters} 张人物卡</span>}
         {run.artifactPreview.worldbuilding > 0 && <span>{run.artifactPreview.worldbuilding} 条世界观</span>}
         {run.artifactPreview.chapters > 0 && <span>{run.artifactPreview.chapters} 章大纲</span>}
+        {run.artifactPreview.documents > 0 && <span>{run.artifactPreview.documents} 份 Skill 资料</span>}
       </div>
       {Array.isArray(run.artifactPreview.targets) && <div className="agent-mutation-targets">{run.artifactPreview.targets.map((target, index) => <div key={`${target.kind}:${target.title}:${index}`}><span>{target.kind}</span><strong>{target.title}</strong></div>)}</div>}
       <button type="button" disabled={applyingArtifacts} onClick={async () => {
@@ -2247,23 +2231,15 @@ function EditorAgentTurn({ run, elapsedMs = 0, onApply, onApplyArtifacts, onChoo
 
     {findings.length > 0 && <div className="agent-finding-list">{findings.slice(0, 6).map((finding, index) => <div key={`${finding.issue || index}-${index}`}><span>{finding.severity || `${index + 1}`}</span><p><strong>{finding.issue || finding.title}</strong>{finding.fix && <small>{finding.fix}</small>}</p></div>)}</div>}
 
-    {showDiff && changedHunks.length > 0 && <details className="agent-write-stage" open>
-      <summary className="agent-trace-row">
-        <PenLine size={14} />
-        <strong>写入章节</strong>
-        <span>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</span>
-        <ChevronRight size={13} className="agent-trace-chevron" />
-      </summary>
-      <section className="agent-diff">
-        <header><div><FileText size={14} /><strong>{run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}</strong></div><span className="diff-add">+{addedCharacters}</span><span className="diff-remove">-{removedCharacters}</span></header>
-        <div className="agent-diff-list">{changedHunks.map((hunk, index) => <article className={`agent-diff-hunk ${hunk.accepted ? '' : 'rejected'}`} key={hunk.id}>
-          <div className="agent-diff-hunk-heading"><span>修改 {index + 1}</span><small>{hunk.reason}</small><div><button type="button" className={hunk.accepted ? 'active' : ''} title="接受修改" onClick={() => toggleHunk(hunk.id, true)}><Check size={12} /></button><button type="button" className={!hunk.accepted ? 'active reject' : ''} title="拒绝修改" onClick={() => toggleHunk(hunk.id, false)}><X size={12} /></button></div></div>
-          {hunk.original && <pre className="diff-line removed"><span>-</span>{hunk.original}</pre>}
-          {hunk.replacement && <pre className="diff-line added"><span>+</span>{hunk.replacement}</pre>}
-        </article>)}</div>
-        <footer><span>{changedHunks.filter((hunk) => hunk.accepted).length} / {changedHunks.length} 项已接受</span><button type="button" disabled={run.applied || !changedHunks.some((hunk) => hunk.accepted)} onClick={() => onApply(run, acceptedText)}>{run.applied ? <Check size={13} /> : <PenLine size={13} />}{run.applied ? '已应用' : '应用到正文'}</button></footer>
-      </section>
-    </details>}
+    {showDiff && changedHunks.length > 0 && <AgentDiffReview
+      run={run}
+      title={run.source?.selectedText ? '当前选区' : run.source?.chapterTitle}
+      hunks={hunks}
+      acceptedText={acceptedText}
+      onChange={setHunks}
+      onApply={onApply}
+      desktop={isDesktopApp()}
+    />}
   </article>
 }
 
@@ -2393,6 +2369,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [ideaPickerOpen, setIdeaPickerOpen] = useState(false)
+  const [materialViewing, setMaterialViewing] = useState(null)
   const [foreshadowOpen, setForeshadowOpen] = useState(false)
   const [foreshadowTarget, setForeshadowTarget] = useState(null)
   const [railTab, setRailTab] = useState('目录')
@@ -2473,6 +2450,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const assistantFileInputRef = useRef(null)
   const requestedAssistantThreadRef = useRef(null)
   const artifactSyncRef = useRef(new Set())
+  const assistantNotificationRef = useRef({ ready: false, seen: new Set() })
   const agentControlsRef = useRef(null)
   const editorLayoutRef = useRef(null)
   const workspaceResizeRef = useRef(null)
@@ -2713,6 +2691,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setSearchQuery('')
     setAssistantMessages([])
     setAssistantThread(null)
+    assistantNotificationRef.current = { ready: false, seen: new Set() }
     setAssistantLoading(true)
     setAssistantRunning(false)
     setAssistantElapsedMs(0)
@@ -2863,6 +2842,32 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       })
     return () => controller.abort()
   }, [displayChapter.id, project.id])
+
+  useEffect(() => {
+    if (assistantLoading || !assistantThread) return
+    const tracker = assistantNotificationRef.current
+    const agentRuns = assistantMessages.filter((message) => message.role === 'agent')
+    if (!tracker.ready) {
+      agentRuns.forEach((run) => tracker.seen.add(agentRunNotificationKey(run)))
+      tracker.ready = true
+      return
+    }
+    const latestRun = agentRuns.at(-1)
+    if (!latestRun) return
+    const status = agentRunEffectiveStatus(latestRun)
+    if (!['needs_input', 'completed', 'failed'].includes(status)) return
+    const key = agentRunNotificationKey(latestRun)
+    if (tracker.seen.has(key)) return
+    tracker.seen.add(key)
+    const notification = status === 'needs_input'
+      ? { title: `${ASSISTANT_NAME} 正在等你`, body: `${displayChapter.title} · 请选择一个方向后继续` }
+      : status === 'failed'
+        ? { title: `${ASSISTANT_NAME} 运行失败`, body: `${displayChapter.title} · 返回客户端查看详情` }
+        : latestRun.editRequested
+          ? { title: `${ASSISTANT_NAME} 已生成修改`, body: `${displayChapter.title} · 修改已准备好，等待你审阅` }
+          : { title: `${ASSISTANT_NAME} 已完成`, body: `${displayChapter.title} · Agent 回复已生成` }
+    void sendAgentNotification(notification).catch(() => undefined)
+  }, [assistantLoading, assistantMessages, assistantThread, displayChapter.title])
 
   useEffect(() => {
     if (historyLoading) return
@@ -3677,6 +3682,10 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     event?.preventDefault()
     const message = String(quickMessage || assistantInput).trim()
     if (!message || assistantLoading || draftLoading) return
+    if (desktopAwaitingInput && !assistantRunning) {
+      onNotify('请先完成 Agent 上方的选项，再开始新的任务')
+      return
+    }
     if (assistantRunning) {
       await submitAssistantSteer(message)
       return
@@ -4011,16 +4020,14 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }
   }
 
-  function exportChapter() {
+  async function exportChapter() {
     const filename = `${project?.title || '章节'} - ${displayChapter.title || '未命名'}.txt`
-    const blob = new Blob([draft], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = filename
-    anchor.click()
-    URL.revokeObjectURL(url)
-    onNotify('章节已导出为 TXT')
+    try {
+      const result = await saveTextDocument({ fileName: filename, content: draft })
+      if (result.saved) onNotify(isDesktopApp() ? '章节已保存为 TXT' : '章节已导出为 TXT')
+    } catch (error) {
+      onNotify(error.message || '章节导出失败')
+    }
   }
 
   async function exportProject() {
@@ -4031,14 +4038,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       if (draftStatus !== 'saved') await onSave({ silent: true })
       const drafts = await Promise.all(chapters.map((chapter) => api.getChapterDraft(project.id, chapter.id)))
       const content = chapters.map((chapter, index) => `${chapter.title}\n\n${drafts[index]?.content || ''}`.trimEnd()).join('\n\n\n')
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = `${project.title || '未命名作品'} - 全书.txt`
-      anchor.click()
-      URL.revokeObjectURL(url)
-      onNotify(`已导出全书 · ${chapters.length} 章`)
+      const result = await saveTextDocument({ fileName: `${project.title || '未命名作品'} - 全书.txt`, content })
+      if (result.saved) onNotify(`已导出全书 · ${chapters.length} 章`)
     } catch (error) {
       onNotify(error.message || '全书导出失败')
     } finally {
@@ -4050,8 +4051,41 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const saveBusy = draftStatus === 'saving'
   const matchedIdeas = ideas.filter((idea) => idea.projectId === project?.id || !idea.projectId)
   const projectForeshadows = foreshadows.filter((item) => item.projectId === project?.id)
-  const characterIdeas = matchedIdeas.filter((idea) => /人物|角色|主角|配角/.test(`${idea.label}${idea.title}`))
-  const termIdeas = matchedIdeas.filter((idea) => /词条|设定|世界|地点|规则/.test(`${idea.label}${idea.title}`))
+  const outlineIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '大纲' || /大纲/.test(`${idea.label}`)))
+  const characterIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '人物' || /人物|角色|主角|配角/.test(`${idea.label}`)))
+  const termIdeas = sortIdeas(matchedIdeas.filter((idea) => !outlineIdeas.some((outline) => outline.id === idea.id)
+    && !characterIdeas.some((character) => character.id === idea.id)
+    && (['世界观', '设定', '追踪'].includes(idea.folder) || /词条|设定|世界|地点|规则|关系|追踪|时间线/.test(`${idea.label}${idea.title}`))))
+  const outlineEntries = [
+    ...outlineIdeas,
+    ...chapters
+      .filter((chapter) => String(chapter.outline || '').trim()
+        && !outlineIdeas.some((idea) => idea.title === chapter.title && idea.label === '章节大纲'))
+      .map((chapter) => ({
+        id: `chapter-outline:${chapter.id}`,
+        title: chapter.title,
+        body: chapter.outline,
+        label: '章节大纲',
+        folder: '大纲',
+        tags: ['章节大纲'],
+        color: 'yellow',
+        chapterId: chapter.id,
+        updatedAt: chapter.updatedAt,
+      })),
+  ]
+  const railTitle = railTab === '目录'
+    ? `章节目录 · ${chapters.length}`
+    : railTab === '大纲'
+      ? `大纲 · ${outlineEntries.length}`
+      : railTab === '人物'
+        ? `人物 · ${characterIdeas.length}`
+        : railTab === '词条'
+          ? `词条 · ${termIdeas.length}`
+          : railTab === '伏笔'
+            ? `伏笔 · ${projectForeshadows.length}`
+            : railTab === '记忆'
+              ? `作品记忆 · ${storyMemories.filter((item) => item.status !== 'archived').length}`
+              : railTab
   const availableAgentModels = [...new Set([...(agentModel ? [agentModel] : []), ...agentModels])]
   const agentModelOptions = [
     { value: '', label: '默认模型', description: '使用连接设置中的默认模型', badge: '默认' },
@@ -4070,6 +4104,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, estimated: false })
   const latestAgentRun = [...assistantMessages].reverse().find((message) => message.role === 'agent')
   const latestAgentRunId = latestAgentRun?.id || null
+  const assistantAwaitingInput = Boolean(latestAgentRun && agentRunEffectiveStatus(latestAgentRun) === 'needs_input')
+  const desktopAwaitingInput = isDesktopApp() && assistantAwaitingInput
   const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
   const agentContextUsed = Math.max(0, latestAgentUsage
     ? latestAgentUsage.inputTokens + latestAgentUsage.outputTokens
@@ -4226,7 +4262,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               { label: '伏笔', icon: Pin },
             ].map(({ label, icon: Icon }) => <button key={label} role="tab" aria-selected={railTab === label} className={railTab === label ? 'active' : ''} onClick={() => setRailTab(label)}><Icon size={13} /><span>{label}</span></button>)}
           </div>
-          <div className="rail-header"><strong>{railTab === '目录' ? `章节目录 · ${chapters.length}` : railTab === '伏笔' ? `伏笔 · ${projectForeshadows.length}` : railTab === '记忆' ? `作品记忆 · ${storyMemories.filter((item) => item.status !== 'archived').length}` : railTab}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className="icon-button small" aria-label="打开章节大纲" title="打开章节大纲" onClick={() => setOutlineOpen(true)}><BookOpen size={15} /></button><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : railTab === '记忆' ? extractMemories() : setIdeaPickerOpen(true)}>{railTab === '记忆' && memoryLoading ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}</button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
+          <div className="rail-header"><strong>{railTitle}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className="icon-button small" aria-label="打开章节大纲" title="打开章节大纲" onClick={() => setOutlineOpen(true)}><BookOpen size={15} /></button><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : railTab === '记忆' ? extractMemories() : setIdeaPickerOpen(true)}>{railTab === '记忆' && memoryLoading ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}</button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
           {railTab === '目录' && <div className="chapter-list">
             {visibleChapters.map((chapter) => {
               const current = String(chapter.id) === String(displayChapter.id)
@@ -4241,9 +4277,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               </div>
             })}
           </div>}
-          {railTab === '大纲' && <div className="rail-outline-list">{chapters.length ? chapters.map((chapter) => <button key={chapter.id} onClick={() => selectEditorChapter(chapter)}><span>{String(chapter.id).padStart(2, '0')}</span><strong>{chapter.title}</strong><small>{chapter.words} 字</small></button>) : <p className="rail-empty">还没有章节大纲。</p>}</div>}
-          {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
-          {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => insertMaterial(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
+          {railTab === '大纲' && <div className="rail-outline-list">{outlineEntries.length ? outlineEntries.map((item, index) => <button key={item.id} onClick={() => setMaterialViewing(item)}><span>{String(index + 1).padStart(2, '0')}</span><strong>{item.title}</strong><small>{item.label || '大纲'}</small></button>) : <div className="rail-empty-block"><BookMarked size={22} /><p>还没有已落库的大纲</p><small>让 Agent 生成大纲并确认写入后会显示在这里。</small></div>}</div>}
+          {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
+          {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
           {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={() => void extractMemories()} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
           {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}
@@ -4379,18 +4415,19 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
             </div>
             <div className="agent-composer-wrap">
               <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
-              <form className="assistant-form agent-composer" onSubmit={submitAssistant}>
+              {desktopAwaitingInput && <div className="agent-composer-blocked"><CircleHelp size={13} /><span>当前任务正在等待选择，请先回答上方问题</span></div>}
+              <form className={`assistant-form agent-composer ${desktopAwaitingInput ? 'waiting-input' : ''}`} onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
                 {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
                 <textarea
                   ref={assistantInputRef}
                   value={assistantInput}
-                  disabled={assistantLoading}
+                  disabled={assistantLoading || desktopAwaitingInput}
                   onChange={handleAssistantInputChange}
                   onClick={(event) => refreshAssistantSuggestion(event.currentTarget.value, event.currentTarget.selectionStart)}
                   onKeyDown={handleAssistantComposerKeyDown}
                   rows={3}
-                  placeholder={assistantRunning ? '追加指令到当前轮次…' : '让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令'}
+                  placeholder={desktopAwaitingInput ? '请先完成上方选择…' : assistantRunning ? '追加指令到当前轮次…' : '让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令'}
                   aria-label="输入问题或需求"
                   aria-autocomplete="list"
                   aria-expanded={Boolean(assistantSuggestion)}
@@ -4462,7 +4499,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   </div>
                   <div className="agent-composer-actions">
                     {assistantRunning && <button type="submit" className="assistant-send steer" disabled={!assistantInput.trim()} aria-label="追加指令" title="追加到当前轮次"><Send size={15} /></button>}
-                    {assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}
+                    {assistantRunning ? <button type="button" className="assistant-send stop" onClick={stopAssistant} aria-label="停止" title="停止"><X size={15} /></button> : <button type="submit" className="assistant-send" disabled={assistantLoading || desktopAwaitingInput || !assistantInput.trim()} aria-label="发送" title="发送"><Send size={15} /></button>}
                   </div>
                 </div>
               </form>
@@ -4483,6 +4520,19 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     {memoryReviewOpen && <MemoryReviewModal candidates={memoryCandidates} loading={memoryLoading} onChange={updateMemoryCandidate} onClose={() => setMemoryReviewOpen(false)} onSave={saveMemoryCandidates} />}
     {memoryEditing && <MemoryEditModal memory={memoryEditing} onClose={() => setMemoryEditing(null)} onSave={async (updates) => { const saved = await onUpdateStoryMemory?.(memoryEditing, updates); if (saved) setMemoryEditing(null) }} onDelete={async () => { const deleted = await onDeleteStoryMemory?.(memoryEditing); if (deleted) setMemoryEditing(null) }} />}
     {foreshadowOpen && <ForeshadowModal project={project} chapters={chapters} target={foreshadowTarget} onClose={() => { setForeshadowOpen(false); setForeshadowTarget(null) }} onCreate={onCreateForeshadow} onUpdate={onUpdateForeshadow} onDelete={onDeleteForeshadow} />}
+    {materialViewing && <MaterialDetailModal
+      item={materialViewing}
+      onClose={() => setMaterialViewing(null)}
+      onInsert={(item) => {
+        insertMaterial(item)
+        setMaterialViewing(null)
+      }}
+      onOpenChapter={materialViewing.chapterId ? async () => {
+        const chapter = chapters.find((item) => String(item.id) === String(materialViewing.chapterId))
+        if (chapter) await selectEditorChapter(chapter)
+        setMaterialViewing(null)
+      } : null}
+    />}
     {ideaPickerOpen && <MaterialPicker ideas={ideas} projectId={project?.id} onClose={() => setIdeaPickerOpen(false)} onInsert={insertMaterial} />}
   </>
 }
@@ -4653,6 +4703,30 @@ function IdeaModal({ idea, projects, onClose, onSubmit, onDelete }) {
     onSubmit({ label, title: title.trim(), body: body.trim() || '记录下此刻的想法。', projectId: projectId || null, folder: folder.trim() || '未分类', tags: tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean), pinned })
   }
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal material-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">{idea ? '编辑创作素材' : '收集创作素材'}</span><h2>{idea ? '编辑素材卡' : '新素材卡'}</h2></div><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label>类型<div className="idea-label-row">{labels.map((item) => <button type="button" key={item} className={label === item ? 'selected' : ''} onClick={() => setLabel(item)}>{item}</button>)}</div></label><label>标题<input name="title" autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="一句话概括这条素材" maxLength={160} /></label><label>内容<textarea name="body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="人物小传、世界观规则、剧情片段或灵感正文…" rows={7} maxLength={10000} /></label><div className="form-row"><label>目录<input value={folder} onChange={(event) => setFolder(event.target.value)} placeholder="例如：核心人物" maxLength={40} /></label><label>关联作品<select value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">全局素材</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label></div><label>标签<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="逗号分隔，例如：女主，秘密，第一卷" /></label><label className="material-pin-toggle"><input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} /><span><Pin size={14} />置顶这条素材</span></label><div className="modal-actions">{idea && <button type="button" className="secondary-button danger-button" onClick={onDelete}>删除</button>}<button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="dark-button">{idea ? '保存' : '创建'}</button></div></form></div></div>
+}
+
+function MaterialDetailModal({ item, onClose, onInsert, onOpenChapter }) {
+  const sourcePath = (item.tags || []).find((tag) => String(tag).startsWith('文件:'))?.slice(3)
+  return <div className="modal-backdrop material-detail-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="modal material-detail-modal" role="dialog" aria-modal="true" aria-labelledby="material-detail-title">
+      <div className="modal-heading">
+        <div>
+          <span className="section-overline">{item.label || '资料'} · {item.folder || '未分类'}</span>
+          <h2 id="material-detail-title">{item.title}</h2>
+          {sourcePath && <p className="material-detail-path"><FileText size={13} />{sourcePath}</p>}
+        </div>
+        <button type="button" className="icon-button" aria-label="关闭资料查看器" onClick={onClose}><X size={18} /></button>
+      </div>
+      <div className="material-detail-body">
+        <AgentMarkdown value={item.body || '（暂无内容）'} />
+      </div>
+      <div className="modal-actions">
+        <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+        {onOpenChapter && <button type="button" className="secondary-button" onClick={onOpenChapter}><BookOpen size={15} />打开章节</button>}
+        <button type="button" className="dark-button" onClick={() => onInsert(item)}><PenLine size={15} />插入正文</button>
+      </div>
+    </div>
+  </div>
 }
 
 function MaterialPicker({ ideas, projectId, onClose, onInsert }) {
@@ -5051,6 +5125,19 @@ function ImportProjectModal({ loading, onClose, onImport }) {
     }
   }
 
+  async function chooseDesktopFile() {
+    setError('')
+    try {
+      const file = await openTextDocument()
+      if (!file) return
+      setContent(file.content)
+      setFileName(file.name)
+      setTitle((current) => current || file.name.replace(/\.[^.]+$/, '').slice(0, 80))
+    } catch (fileError) {
+      setError(fileError.message || '文件读取失败，请换一个 TXT 文件重试')
+    }
+  }
+
   function submit(event) {
     event.preventDefault()
     if (!title.trim()) {
@@ -5073,7 +5160,7 @@ function ImportProjectModal({ loading, onClose, onImport }) {
     onImport({ title: title.trim(), type, genre: genre.trim() || '未分类', chapters })
   }
 
-  return <div className="modal-backdrop import-project-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal import-project-modal" role="dialog" aria-modal="true" aria-labelledby="import-project-title"><div className="modal-heading"><div><span className="section-overline">本地 TXT</span><h2 id="import-project-title">导入本地文稿</h2><p className="modal-subtitle">浏览器会在本地读取 TXT，并按“第X章、序章、番外、Chapter X”等标题规则拆分章节；此流程不调用 AI 或 story-import Skill。</p></div><button className="icon-button" aria-label="关闭导入" disabled={loading} onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}><label className="import-file-picker"><input type="file" accept=".txt,text/plain" disabled={loading} onChange={chooseFile} /><span><FolderOpen size={18} /><strong>{fileName || '选择 TXT 文件'}</strong><small>也可以在下方直接粘贴全文</small></span></label><div className="form-row"><label>作品名<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="作品名称" /></label><label>篇幅<select value={type} onChange={(event) => setType(event.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label></div><label>题材<input value={genre} onChange={(event) => setGenre(event.target.value)} maxLength={30} placeholder="例如：东方玄幻" /></label><label>全文<textarea value={content} onChange={(event) => { setContent(event.target.value); setFileName(''); setError('') }} rows={8} maxLength={10000000} placeholder="粘贴小说全文，章节标题单独占一行…" /></label>{content && <div className="import-detection"><div><BookOpen size={16} /><span>识别到 <strong>{chapters.length}</strong> 章</span></div><div><FileText size={16} /><span>约 <strong>{formatNumber(totalWords)}</strong> 字</span></div></div>}{chapters.length > 0 && <div className="import-preview">{chapters.slice(0, 6).map((chapter, index) => <span key={`${chapter.title}-${index}`}><b>{String(index + 1).padStart(2, '0')}</b>{chapter.title}<small>{formatNumber(chapter.content.replace(/\s/g, '').length)} 字</small></span>)}{chapters.length > 6 && <em>还有 {chapters.length - 6} 章…</em>}</div>}{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button><button type="submit" className="dark-button" disabled={loading || !content.trim()}>{loading ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}{loading ? '导入中' : '开始导入'}</button></div></form></div></div>
+  return <div className="modal-backdrop import-project-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !loading && onClose()}><div className="modal import-project-modal" role="dialog" aria-modal="true" aria-labelledby="import-project-title"><div className="modal-heading"><div><span className="section-overline">本地 TXT</span><h2 id="import-project-title">导入本地文稿</h2><p className="modal-subtitle">{isDesktopApp() ? '客户端通过 Windows 文件选择器读取 TXT' : '浏览器会在本地读取 TXT'}，并按“第X章、序章、番外、Chapter X”等标题规则拆分章节；此流程不调用 AI 或 story-import Skill。</p></div><button className="icon-button" aria-label="关闭导入" disabled={loading} onClick={onClose}><X size={18} /></button></div><form onSubmit={submit}>{isDesktopApp() ? <button type="button" className="import-file-picker desktop-file-picker" disabled={loading} onClick={chooseDesktopFile}><span><FolderOpen size={18} /><strong>{fileName || '从电脑选择 TXT 文件'}</strong><small>使用 Windows 原生文件选择器，也可以在下方直接粘贴全文</small></span></button> : <label className="import-file-picker"><input type="file" accept=".txt,text/plain" disabled={loading} onChange={chooseFile} /><span><FolderOpen size={18} /><strong>{fileName || '选择 TXT 文件'}</strong><small>也可以在下方直接粘贴全文</small></span></label>}<div className="form-row"><label>作品名<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="作品名称" /></label><label>篇幅<select value={type} onChange={(event) => setType(event.target.value)}><option>长篇</option><option>短篇</option><option>参考书</option></select></label></div><label>题材<input value={genre} onChange={(event) => setGenre(event.target.value)} maxLength={30} placeholder="例如：东方玄幻" /></label><label>全文<textarea value={content} onChange={(event) => { setContent(event.target.value); setFileName(''); setError('') }} rows={8} maxLength={10000000} placeholder="粘贴小说全文，章节标题单独占一行…" /></label>{content && <div className="import-detection"><div><BookOpen size={16} /><span>识别到 <strong>{chapters.length}</strong> 章</span></div><div><FileText size={16} /><span>约 <strong>{formatNumber(totalWords)}</strong> 字</span></div></div>}{chapters.length > 0 && <div className="import-preview">{chapters.slice(0, 6).map((chapter, index) => <span key={`${chapter.title}-${index}`}><b>{String(index + 1).padStart(2, '0')}</b>{chapter.title}<small>{formatNumber(chapter.content.replace(/\s/g, '').length)} 字</small></span>)}{chapters.length > 6 && <em>还有 {chapters.length - 6} 章…</em>}</div>}{error && <div className="skill-runner-validation" role="alert">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" disabled={loading} onClick={onClose}>取消</button><button type="submit" className="dark-button" disabled={loading || !content.trim()}>{loading ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}{loading ? '导入中' : '开始导入'}</button></div></form></div></div>
 }
 
 function SmartCreateModal({ proposal, loading, onClose, onCreate }) {
@@ -5441,6 +5528,7 @@ function SettingsModal({ onClose, onNotify }) {
             <nav className="settings-nav" aria-label="设置分类">
               <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>连接与模型</strong><small>服务商、地址和密钥</small></span></button>
               <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>思考强度与上下文</small></span></button>
+              {isDesktopApp() && <button type="button" className={activePane === 'client' ? 'active' : ''} onClick={() => setActivePane('client')}><Settings2 size={16} /><span><strong>Windows 客户端</strong><small>应用服务器与同步</small></span></button>}
               <div className={`settings-connection-state ${connectionStatus}`}>
                 <span />
                 <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
@@ -5483,7 +5571,7 @@ function SettingsModal({ onClose, onNotify }) {
                   </div>
                   {modelList.length > 0 && <datalist id="model-list">{modelList.map((model) => <option key={model} value={model} />)}</datalist>}
                 </section>
-              </> : <>
+              </> : activePane === 'generation' ? <>
                 <section className="settings-section">
                   <div className="settings-section-heading"><div><h3>推理与输出</h3><p>模型不支持某项参数时，服务端会自动忽略。</p></div></div>
                   <label className="settings-field">
@@ -5523,18 +5611,18 @@ function SettingsModal({ onClose, onNotify }) {
                     </label>
                   </div>
                 </section>
-              </>}
+              </> : <DesktopServerControl />}
             </div>
           </div>
 
-          <div className="settings-actions">
+          {activePane !== 'client' && <div className="settings-actions">
             <div className="settings-save-note"><LockKeyhole size={14} /><span>更改会应用到所有 Story Skills</span></div>
             <button type="button" className="secondary-button" onClick={onClose}>取消</button>
             <button type="submit" className="dark-button" disabled={saving}>
               {saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}
               <span>{saving ? '保存中' : '保存并应用'}</span>
             </button>
-          </div>
+          </div>}
         </form>
       )}
     </div>
