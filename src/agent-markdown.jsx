@@ -1,5 +1,90 @@
 import React from 'react'
 
+/*
+ * ── Client-side model output normalizer ──────────────────────────────
+ * Models frequently ignore formatting rules and produce outputs like:
+ *   核心设定-书名：《xxx》-题材/类型：xxx-目标平台：xxx
+ *   ##核心设定表###基本信息-书名：xxx
+ *
+ * This pass cleans up the most common formatting errors BEFORE the
+ * markdown block parser runs.  It does NOT try to be a full markdown
+ * renderer — it only fixes patterns that would otherwise render as
+ * unreadable walls of text.
+ */
+
+/** Split a line that crams field–value pairs with `-` separators. */
+function splitCrammedFieldLine(line) {
+  // Only act when a line has ≥2 `-`-separated `字段名：值` pairs.
+  const fieldCount = (line.match(/[^\s-—]{1,20}[：:]/g) || []).length
+  if (fieldCount < 2) return [line]
+  // Don't touch headings, table rows, code fences, or list items.
+  if (/^\s*(?:#{1,6}\s|[|`]|[-*+]\s|\d+[.)、]\s)/.test(line)) return [line]
+
+  // Split on `-` where the next 1-20 non-whitespace chars include `：` or `:`.
+  const parts = line.split(/-(?=[^\s-—]{1,25}[：:])/)
+  if (parts.length < 2) return [line]
+
+  return parts.map((part) => {
+    const m = part.match(/^([^：:]{1,30})[：:](.+)$/)
+    if (!m) return part.trim()
+    const key = m[1].trim()
+    const val = m[2].trim()
+    // Use bold key in list item.
+    return `- **${key}**：${val}`
+  })
+}
+
+/** Detect a line that looks like a section label without `##` prefix. */
+const SECTION_LABEL_RE = /^(核心设定|一句话梗概|主角设定|世界观骨架|后宫配置|核心冲突|副本世界规划|副本设计|卷纲|细纲|基本信息|力量体系|剧情单元|章节定位)(.*)$/
+
+function normalizeModelOutput(text) {
+  let s = String(text || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\r\n?/g, '\n')
+
+  // ── 1. Fix headings: `##标题` → `## 标题` ──────────────────────────
+  s = s.replace(/^(#{1,6})([^\s#])/gm, '$1 $2')
+
+  // ── 2. Ensure blank lines before headings ───────────────────────────
+  s = s.replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
+
+  // ── 3. Promote section labels to `##` headings, splitting trailing
+  //      crammed fields into the next line so step 4 can process them. ──
+  s = s.split('\n').flatMap((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return ['']
+    const m = trimmed.match(SECTION_LABEL_RE)
+    if (!m) return [line]
+
+    const label = m[1]
+    let after = m[2].trim()
+
+    // If the label is immediately followed by `-字段：` patterns, split
+    // the heading onto its own line and let step 4 handle the fields.
+    if (/^-[^\s-—]{1,25}[：:]/.test(after)) {
+      const headingLine = `## ${label}`
+      const fieldLine = after.replace(/^-/, '') // strip leading dash
+      return [headingLine, fieldLine]
+    }
+
+    if (!after) return [`## ${label}`]
+    // "一句话梗概" followed by actual sentence text → heading + paragraph.
+    return [`## ${label}`, after]
+  }).join('\n')
+
+  // ── 4. Split crammed field–value lines into markdown lists ──────────
+  s = s.split('\n').flatMap((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return ['']
+    return splitCrammedFieldLine(trimmed)
+  }).join('\n')
+
+  // ── 5. Collapse ≥3 consecutive blank lines ─────────────────────────
+  s = s.replace(/\n{4,}/g, '\n\n\n')
+
+  return s
+}
+
 function inlineMarkdown(value, keyPrefix) {
   const source = String(value || '')
   // Handle bold, inline code, and italic.  Also strip stray <br> tags.
@@ -22,21 +107,19 @@ function inlineMarkdown(value, keyPrefix) {
 
 /*
  * Split a single line that crams multiple `##Heading` / `###Heading` markers
- * into individual heading lines so the block parser can give each its own <hN>.
- * Only fires when the whole line is composed of heading patterns (no tables,
- * code fences, lists, or blockquotes).
+ * (with or without a space after `#`) into individual heading lines so the
+ * block parser can give each its own <hN>.
  */
 function expandCrowdedHeadings(line) {
   const trimmed = line.trim()
-  // Count heading-like markers: 1-6 # immediately followed by non-space/non-# text.
-  const headingPattern = /#{1,6}[^\s#]/g
+  // Count heading-like markers: 1-6 # followed by space+text OR directly by text.
+  const headingPattern = /#{1,6}(?:\s+|[^\s#])/g
   const markers = [...trimmed.matchAll(headingPattern)]
   if (markers.length < 2) return [line]
   // Bail out if the line has table pipes, code fences, list bullets, or blockquotes.
   if (/[|`]/.test(trimmed) || /^\s*[-*+>]/.test(trimmed)) return [line]
-  // Split on heading boundaries, but avoid splitting inside a # sequence
-  // by requiring the position NOT be preceded by another #.
-  const parts = trimmed.split(/(?<!#)(?=#{1,6}[^\s#])/g).filter(Boolean)
+  // Split before each heading marker, but not inside a # run.
+  const parts = trimmed.split(/(?<!#)(?=#{1,6}(?:\s+|[^\s#]))/g).filter(Boolean)
   return parts.length > 1 ? parts : [line]
 }
 
@@ -53,17 +136,18 @@ function isTableDelimiter(line) {
 }
 
 export default function AgentMarkdown({ value, streaming = false }) {
-  const source = String(value || '')
+  const source = normalizeModelOutput(String(value || ''))
     .replace(/^\s*<\/?proposed_plan>\s*$/gm, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/\r\n?/g, '\n')
   if (!source.trim()) return null
-  // Expand lines that pack multiple `##Heading` markers onto one line.
+  // Expand lines that pack multiple `##Heading` markers onto one line,
+  // then re-fix any headings that became new line-starts.
   const rawLines = source.split('\n')
   const lines = []
   for (const raw of rawLines) {
     if (!raw.trim()) { lines.push(''); continue }
-    for (const part of expandCrowdedHeadings(raw)) lines.push(part)
+    for (const part of expandCrowdedHeadings(raw)) {
+      lines.push(part.replace(/^(#{1,6})([^\s#])/, '$1 $2'))
+    }
   }
   const blocks = []
   let index = 0
