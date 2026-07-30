@@ -881,20 +881,25 @@ def _stream_model_response(
     choice_block = False
     marker = '<choice_request>'
     reasoning_filter = _InlineReasoningFilter()
-    response_gate = ''
-    response_gate_released = False
-    response_suppressed = False
+    contract_refusal_triggered = False
     visible_started = False
     stream_usage: dict[str, Any] = {}
     provider_stream_usage: dict[str, dict[str, Any]] = {}
     response = None
     stream = model.stream(messages, **(model_kwargs or {}))
     stream_finished = threading.Event()
+    # Accumulate the first REFUSAL_CHECK_CHARS to validate after streaming,
+    # without blocking live deltas (the full output is still emitted to the user).
+    refusal_check_buffer = ''
+    REFUSAL_CHECK_CHARS = 800
 
     def emit_visible(value: str) -> None:
-        nonlocal prefix_buffer, choice_block, visible_started
+        nonlocal prefix_buffer, choice_block, visible_started, refusal_check_buffer
         if not value or choice_block:
             return
+        # Collect first N chars for post-stream refusal validation.
+        if len(refusal_check_buffer) < REFUSAL_CHECK_CHARS:
+            refusal_check_buffer += value
         if prefix_buffer or not visible_started:
             prefix_buffer += value
             stripped = prefix_buffer.lstrip()
@@ -910,23 +915,11 @@ def _stream_model_response(
             return
         on_delta(value)
 
-    def gate_visible(value: str, final: bool = False) -> None:
-        nonlocal response_gate, response_gate_released, response_suppressed
-        if response_suppressed:
-            return
-        if response_gate_released:
-            emit_visible(value)
-            return
-        response_gate += value
-        if _looks_like_internal_contract_refusal(response_gate):
-            response_suppressed = True
-            response_gate = ''
-            return
-        if final or len(response_gate) >= 800:
-            response_gate_released = True
-            buffered = response_gate
-            response_gate = ''
-            emit_visible(buffered)
+    def check_contract_refusal() -> bool:
+        """Post-stream check: did the model refuse the contract? Returns True if suppressed."""
+        if _looks_like_internal_contract_refusal(refusal_check_buffer):
+            return True
+        return False
 
     if cancel_event is not None:
         def close_when_cancelled() -> None:
@@ -967,7 +960,7 @@ def _stream_model_response(
             if not visible_delta:
                 continue
             output_parts.append(visible_delta)
-            gate_visible(visible_delta)
+            emit_visible(visible_delta)
     finally:
         stream_finished.set()
         close = getattr(stream, 'close', None)
@@ -979,11 +972,13 @@ def _stream_model_response(
     trailing = reasoning_filter.feed('', final=True)
     if trailing:
         output_parts.append(trailing)
-        gate_visible(trailing)
-    gate_visible('', final=True)
-    if prefix_buffer and not choice_block and not response_suppressed:
+        emit_visible(trailing)
+    if prefix_buffer and not choice_block:
         on_delta(prefix_buffer)
-    return ''.join(output_parts), _restore_stream_usage(response, stream_usage, provider_stream_usage)
+    contract_refusal_triggered = check_contract_refusal()
+    if contract_refusal_triggered:
+        output_parts.clear()
+    return ''.join(output_parts), _restore_stream_usage(response, stream_usage, provider_stream_usage), contract_refusal_triggered
 
 
 def _bind_request_user_input_tool(model) -> tuple[Any, bool]:
@@ -1282,7 +1277,7 @@ def execute_prompt_skill(
                     cancel_event,
                 )
             active_response = active_model.invoke(active_messages, **(model_kwargs or {}))
-            return strip_story_artifact_blocks(model_content_text(active_response.content)), active_response
+            return strip_story_artifact_blocks(model_content_text(active_response.content)), active_response, False
 
         active_messages = messages
         active_model_kwargs: dict[str, Any] = {}
@@ -1310,7 +1305,7 @@ def execute_prompt_skill(
 
         try:
             try:
-                output, response = invoke_model(question_model, active_messages, active_model_kwargs)
+                output, response, stream_refusal = invoke_model(question_model, active_messages, active_model_kwargs)
             except Exception as error:
                 if native_continuation and not streamed_model_output and _is_response_continuation_error(error):
                     logger.warning(
@@ -1319,7 +1314,7 @@ def execute_prompt_skill(
                     )
                     native_continuation_used = False
                     continuation_fallback = True
-                    output, response = invoke_model(question_model, messages)
+                    output, response, _refusal = invoke_model(question_model, messages)
                 elif message_continuation and not streamed_model_output and _is_message_tool_continuation_error(error):
                     logger.warning(
                         'Message tool continuation is unavailable; retrying from the structured transcript: %s',
@@ -1327,7 +1322,7 @@ def execute_prompt_skill(
                     )
                     message_continuation_used = False
                     continuation_fallback = True
-                    output, response = invoke_model(question_model, transcript_messages)
+                    output, response, _refusal = invoke_model(question_model, transcript_messages)
                 else:
                     raise
         except Exception as error:
@@ -1337,13 +1332,13 @@ def execute_prompt_skill(
             native_continuation_used = False
             message_continuation_used = False
             continuation_fallback = continuation_fallback or native_continuation is not None or message_continuation is not None
-            output, response = invoke_model(model, transcript_messages)
-        if _looks_like_internal_contract_refusal(output):
+            output, response, _refusal = invoke_model(model, transcript_messages)
+        if stream_refusal or _looks_like_internal_contract_refusal(output):
             logger.warning('model returned an internal contract refusal; retrying with the compact recovery prompt')
             native_continuation_used = False
             message_continuation_used = False
             continuation_fallback = True
-            output, response = invoke_model(question_model, fallback_messages(conversation))
+            output, response, _refusal = invoke_model(question_model, fallback_messages(conversation))
             if _looks_like_internal_contract_refusal(output):
                 output = '这次生成偏离了创作任务，请点击下方“重新生成”再试一次。'
                 emit_delta(output)

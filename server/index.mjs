@@ -1735,7 +1735,7 @@ async function requestWritingAssistantTurn(user, session, message, skill = null,
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   })
   const result = await response.json().catch(() => null)
   if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, '写作助手处理失败')), { status: response.status >= 500 ? 502 : response.status })
@@ -1753,7 +1753,7 @@ async function requestWritingProposal(user, session) {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(payload?.detail, '写作助手生成方案失败')), { status: response.status >= 500 ? 502 : response.status })
@@ -2577,7 +2577,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         res.write(': keep-alive\n\n')
         lastHeartbeat = Date.now()
       }
-      if (!(await streamDelay(req, 500))) break
+      if (!(await streamDelay(req, 150))) break
     }
   } catch (error) {
     if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '轮次事件流读取失败' })}\n\n`)
@@ -2694,7 +2694,7 @@ app.get('/api/ai/tasks/:taskId/stream', async (req, res) => {
         res.write(': keep-alive\n\n')
         lastHeartbeat = Date.now()
       }
-      if (!(await streamDelay(req, 500))) break
+      if (!(await streamDelay(req, 150))) break
     }
   } catch (error) {
     if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '任务流读取失败' })}\n\n`)
@@ -3356,7 +3356,7 @@ app.post('/api/projects/:projectId/chapters/:chapterId/memory-candidates', async
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-service-token': aiServiceToken },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(300_000),
       })
       const result = await response.json().catch(() => null)
       if (!response.ok) throw Object.assign(new Error(serviceErrorMessage(result?.detail, '作品记忆整理失败')), { status: response.status >= 500 ? 502 : response.status })

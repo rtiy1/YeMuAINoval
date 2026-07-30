@@ -227,7 +227,7 @@ export async function executeWritingTask(taskId, {
         task.updatedAt = new Date().toISOString()
       }
     })
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)])
     let partialOutput = ''
     let reasoningSummary = ''
     let lastPartialFlush = 0
@@ -237,7 +237,7 @@ export async function executeWritingTask(taskId, {
     const flushReasoningSummary = async (delta) => {
       reasoningSummary += delta
       const now = Date.now()
-      if (now - lastReasoningFlush < 60 && reasoningSummary.length - lastReasoningLength < 96) return
+      if (now - lastReasoningFlush < 30 && reasoningSummary.length - lastReasoningLength < 16) return
       lastReasoningFlush = now
       lastReasoningLength = reasoningSummary.length
       const snapshot = reasoningSummary.slice(0, 12_000)
@@ -299,7 +299,7 @@ export async function executeWritingTask(taskId, {
     const result = await invokeStoryAgent(prepared.user, executionInput, signal, async (delta) => {
       partialOutput += delta
       const now = Date.now()
-      if (now - lastPartialFlush < 60 && partialOutput.length - lastPartialLength < 96) return
+      if (now - lastPartialFlush < 30 && partialOutput.length - lastPartialLength < 16) return
       lastPartialFlush = now
       lastPartialLength = partialOutput.length
       const snapshot = partialOutput

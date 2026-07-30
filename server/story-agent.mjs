@@ -56,7 +56,7 @@ async function preparedStoryAgentBody(user, input) {
   return body
 }
 
-export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(120_000), onDelta = null, onReasoningDelta = null) {
+export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null) {
   const body = await preparedStoryAgentBody(user, input)
   const response = await fetch(`${aiServiceUrl}${onDelta ? '/v1/agents/story/stream' : '/v1/agents/story'}`, {
     method: 'POST',
@@ -94,7 +94,7 @@ function delegateRoles(input) {
   return ['continuity_guard', 'scene_planner']
 }
 
-export async function invokeStoryAgentDelegates(user, input, signal = AbortSignal.timeout(120_000), onEvent = null) {
+export async function invokeStoryAgentDelegates(user, input, signal = AbortSignal.timeout(300_000), onEvent = null) {
   const roles = delegateRoles(input)
   if (!roles.length) return []
   const body = await preparedStoryAgentBody(user, input)
@@ -169,7 +169,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
   return Promise.all(runs)
 }
 
-export async function invokeContextCompaction(user, input, signal = AbortSignal.timeout(120_000)) {
+export async function invokeContextCompaction(user, input, signal = AbortSignal.timeout(300_000)) {
   const body = {
     existing_summary: typeof input?.existingSummary === 'string' ? input.existingSummary : '',
     messages: Array.isArray(input?.messages) ? input.messages : [],

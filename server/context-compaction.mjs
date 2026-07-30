@@ -23,7 +23,7 @@ export async function maybeCompactAgentThread(taskId) {
     const result = await invokeContextCompaction(user, {
       existingSummary: previousSummary,
       messages: plan.messages,
-    }, AbortSignal.timeout(120_000))
+    }, AbortSignal.timeout(300_000))
     if (result?.status !== 'completed' || !String(result.summary || '').trim()) return null
 
     return await updateDb((db) => {
