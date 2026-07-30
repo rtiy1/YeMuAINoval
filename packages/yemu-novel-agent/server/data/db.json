@@ -1,0 +1,1229 @@
+{
+  "users": [
+    {
+      "id": "3cb4f668-29bd-470a-aec0-c8ff0fccf46f",
+      "name": "验收作者",
+      "email": "acceptance-1784783058594@example.com",
+      "passwordHash": "scrypt$NJib3VyulzcP4lSho1ja5Q$tNzAMMj_LtTe0sM-RWJLW1nOARJMPV2ChxbVUbJKycUq5lpaTzWT1WwrLIg8ryXir2F4GoWVzzQhd4oTNRet8g",
+      "createdAt": "2026-07-23T05:04:20.596Z",
+      "settings": null
+    },
+    {
+      "id": "349928a2-d14f-42ce-bd15-52613117f33e",
+      "name": "验收作者",
+      "email": "diag-1784783363404@example.com",
+      "passwordHash": "scrypt$owp4f2lu2p-knfiETFKZ7Q$w_NscLOwnq-t9e6Ajm25dOmcXzZQIfa5-MzCoSIQTZF27X3Vp6DQZt5s2ZU5F_ytywgnWJ2C7QdB_UbSpRFH3g",
+      "createdAt": "2026-07-23T05:09:24.064Z",
+      "settings": null
+    },
+    {
+      "id": "fa33ff18-0f64-4d2f-8cc4-d0da4f240328",
+      "name": "验收作者",
+      "email": "acceptance-1784783390630@example.com",
+      "passwordHash": "scrypt$rpIRVP5Fqd0R5Dl1PRLs_Q$2fncUEtURlU2noj2zRu20mFcMpw9VQHMXd4HQZVa3fx0PEz1wW1C8Y3HzhIsIcogV4nvhuClzMvuue4wAMfPcg",
+      "createdAt": "2026-07-23T05:09:52.022Z",
+      "settings": null
+    },
+    {
+      "id": "09f597b9-9d8a-4d70-8fe9-3f718105222c",
+      "name": "验收作者",
+      "email": "acceptance-1784783495474@example.com",
+      "passwordHash": "scrypt$G_vmO6x3xZP9tMTxvBM9fw$5z0OKg_ZMLjtrEByUbKojdXtr9m8rDBHI9gWkwT9xsgWrUMxsb1OJUdiXJxS5ELOi4SWxYzSNvXiNMxOME71-g",
+      "createdAt": "2026-07-23T05:11:36.694Z",
+      "settings": null
+    },
+    {
+      "id": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "name": "验收作者",
+      "email": "acceptance-1784783531229@example.com",
+      "passwordHash": "scrypt$rqdCg3DbroDgSgJnz9qviA$eTDPA03L3qQOe-0OiThxlyTG4L2nb6t0kIaQGtRNAhU_GNi_XhQBs8rjeJ3LT-197jmxS2AodR4jUTYylBP5Vg",
+      "createdAt": "2026-07-23T05:12:12.672Z",
+      "settings": null
+    },
+    {
+      "id": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "name": "验收作者",
+      "email": "acceptance-1784783726915@example.com",
+      "passwordHash": "scrypt$NU4rVEgEJUYGIR7O_b2WWg$Iq45HMuul-RPTJzyoRayYOPUMfy3ZFScsZNj3tcmdDGXAdnc-plS7S2lH6Zaui3fb2tWT0k2zOWygSU0JmMlhw",
+      "createdAt": "2026-07-23T05:15:28.378Z",
+      "settings": null
+    },
+    {
+      "id": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "name": "验收作者",
+      "email": "acceptance-1784783979356@example.com",
+      "passwordHash": "scrypt$cIc1eyad0deSoCfGuDme5g$5PxkIOLIIUjOFvuO1ew5p2nw9Dkko2RXdfjqNGIy2urcttXKsFJQgbq3RCZa0M4HgTvGJwW--k_IS5ca3a0QdQ",
+      "createdAt": "2026-07-23T05:19:40.983Z",
+      "settings": null
+    },
+    {
+      "id": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "name": "验收作者",
+      "email": "acceptance-1784784226317@example.com",
+      "passwordHash": "scrypt$lArhmC5sAE8UM387xpz-lg$bZjQ99wKQ0-V9W-IwKA5FDJzZg2BwVWCm-utJgpQDNARthwziBHGN9AzIibPl8vpTAEMli85Cn_-yWoPSw5eFQ",
+      "createdAt": "2026-07-23T05:23:47.495Z",
+      "settings": null
+    },
+    {
+      "id": "009d919e-88dc-453a-9379-831dc434689a",
+      "name": "验收作者",
+      "email": "acceptance-1784784278797@example.com",
+      "passwordHash": "scrypt$DLxh--pomV39I50-jtbjDw$Em3v9i8d-t77ZqsB_mzFL4T2nZMML-TOALOPkuLojre8595dBRMGoTcal0W08enIf9uRP-nrlq1NR6jpjvEr3Q",
+      "createdAt": "2026-07-23T05:24:40.023Z",
+      "settings": null
+    }
+  ],
+  "sessions": [
+    {
+      "id": "0707a06c-df7a-4999-a755-f927791aeae9",
+      "userId": "3cb4f668-29bd-470a-aec0-c8ff0fccf46f",
+      "tokenHash": "b83745bc091f08b66ac5ee5fd17ab59b1e99fa9d441fa7e7c8917158bc146b99",
+      "createdAt": "2026-07-23T05:04:20.621Z",
+      "expiresAt": "2026-08-22T05:04:20.621Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "0c6789c8-5bb1-4dd3-b8d5-41e1fdf5a1a4",
+      "userId": "349928a2-d14f-42ce-bd15-52613117f33e",
+      "tokenHash": "0227c7efb28ffb3703c8031ab053cf799ae68617751edc282114c5458ab7048d",
+      "createdAt": "2026-07-23T05:09:24.072Z",
+      "expiresAt": "2026-08-22T05:09:24.072Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "cd3a11f7-df5d-4480-aac2-54f3a0d5ef4b",
+      "userId": "fa33ff18-0f64-4d2f-8cc4-d0da4f240328",
+      "tokenHash": "5ea72507d7434ba5d2ad7de9942c29f8d9bb2ac20fb4275dd85bb0d0425d834a",
+      "createdAt": "2026-07-23T05:09:55.632Z",
+      "expiresAt": "2026-08-22T05:09:55.632Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "3db70969-4f6a-4280-8110-18866309087b",
+      "userId": "09f597b9-9d8a-4d70-8fe9-3f718105222c",
+      "tokenHash": "32cecd36c896793f29d206743109e7a3e4207f5165cb99f2a533dd08c37a92fc",
+      "createdAt": "2026-07-23T05:11:40.412Z",
+      "expiresAt": "2026-08-22T05:11:40.412Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "5b04c43f-b4c8-4870-b738-3b34832eed9e",
+      "userId": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "tokenHash": "731b8b01780bc3bca632b9223a1133cfe11173ddd44093726cad909f5b96453c",
+      "createdAt": "2026-07-23T05:12:16.348Z",
+      "expiresAt": "2026-08-22T05:12:16.348Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "a8d676c2-9d32-440b-8218-8457d7964976",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "tokenHash": "372660f4ee892048bcb4514848f452337445be2d2af4288fdcf2c3404b62f0ce",
+      "createdAt": "2026-07-23T05:15:32.245Z",
+      "expiresAt": "2026-08-22T05:15:32.245Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "b42f5cd2-e503-459c-9b32-fd6a1a492ce7",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "tokenHash": "59e6a1450b9d3cf2f970a57f7ff2c29a4c3d4f0cd431ac99cbd02e04ef984184",
+      "createdAt": "2026-07-23T05:19:44.703Z",
+      "expiresAt": "2026-08-22T05:19:44.703Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "05e5c087-1f23-4417-91e0-b97e45e29bd8",
+      "userId": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "tokenHash": "5fdc6c5df262af3e04a87b5032753d833a314764159d85885ee5ee9141b5becc",
+      "createdAt": "2026-07-23T05:23:51.067Z",
+      "expiresAt": "2026-08-22T05:23:51.067Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    },
+    {
+      "id": "4676f4b3-9ec5-405b-8344-3a09b4d4680f",
+      "userId": "009d919e-88dc-453a-9379-831dc434689a",
+      "tokenHash": "a10fdcac7d2ac009f4af158d0cffade65f2071c4ef479b035bf1901c871d5f38",
+      "createdAt": "2026-07-23T05:24:43.642Z",
+      "expiresAt": "2026-08-22T05:24:43.642Z",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36"
+    }
+  ],
+  "projects": [
+    {
+      "id": "7073e1c2-071c-4b29-86ea-12f4e949e51a",
+      "userId": "009d919e-88dc-453a-9379-831dc434689a",
+      "title": "潮汐来信",
+      "type": "长篇",
+      "genre": "悬疑推理",
+      "status": "构思中",
+      "progress": 1,
+      "words": "66",
+      "updated": "刚刚",
+      "chapters": 3,
+      "tone": "记者追查一封来自未来的信，逐步发现港城被掩埋的旧案。",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:24:45.542Z",
+      "updatedAt": "2026-07-23T05:24:45.542Z",
+      "style": ""
+    },
+    {
+      "id": "a6973d6a-95f6-4402-b7fb-d2ae70a03a69",
+      "userId": "009d919e-88dc-453a-9379-831dc434689a",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:24:40.507Z",
+      "updatedAt": "2026-07-23T05:24:43.209Z",
+      "style": ""
+    },
+    {
+      "id": "766012a5-1aff-4c2d-b7e0-30c5517706e9",
+      "userId": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "title": "潮汐来信",
+      "type": "长篇",
+      "genre": "悬疑推理",
+      "status": "构思中",
+      "progress": 1,
+      "words": "66",
+      "updated": "刚刚",
+      "chapters": 3,
+      "tone": "记者追查一封来自未来的信，逐步发现港城被掩埋的旧案。",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:23:53.011Z",
+      "updatedAt": "2026-07-23T05:23:53.011Z",
+      "style": ""
+    },
+    {
+      "id": "6c846b05-7d9a-4ae1-89b5-5cd22f8b673d",
+      "userId": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:23:48.014Z",
+      "updatedAt": "2026-07-23T05:23:50.608Z",
+      "style": ""
+    },
+    {
+      "id": "a0f01a8d-a162-460e-b155-6079b9207624",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "title": "潮汐来信",
+      "type": "长篇",
+      "genre": "悬疑推理",
+      "status": "构思中",
+      "progress": 1,
+      "words": "66",
+      "updated": "刚刚",
+      "chapters": 3,
+      "tone": "记者追查一封来自未来的信，逐步发现港城被掩埋的旧案。",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:19:46.511Z",
+      "updatedAt": "2026-07-23T05:19:46.511Z",
+      "style": ""
+    },
+    {
+      "id": "e199925e-e57e-4f41-850a-1495141cb587",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "title": "浏览器导入作品",
+      "type": "长篇",
+      "genre": "未分类",
+      "status": "构思中",
+      "progress": 1,
+      "words": "15",
+      "updated": "刚刚",
+      "chapters": 2,
+      "tone": "由本地文稿导入，可继续补充设定与创作基调",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:19:45.992Z",
+      "updatedAt": "2026-07-23T05:19:45.992Z",
+      "style": ""
+    },
+    {
+      "id": "8bf63ec6-977a-414f-84bc-5465f7d5d007",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:19:41.549Z",
+      "updatedAt": "2026-07-23T05:19:44.173Z",
+      "style": ""
+    },
+    {
+      "id": "7bdc17a0-a11d-46b0-b12a-dbb5f4e8f70d",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "title": "潮汐来信",
+      "type": "长篇",
+      "genre": "悬疑推理",
+      "status": "构思中",
+      "progress": 1,
+      "words": "66",
+      "updated": "刚刚",
+      "chapters": 3,
+      "tone": "记者追查一封来自未来的信，逐步发现港城被掩埋的旧案。",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:15:34.308Z",
+      "updatedAt": "2026-07-23T05:15:34.308Z",
+      "style": ""
+    },
+    {
+      "id": "e8068bc9-cad8-4c64-a27f-5325a65a8dbe",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "title": "浏览器导入作品",
+      "type": "长篇",
+      "genre": "未分类",
+      "status": "构思中",
+      "progress": 1,
+      "words": "15",
+      "updated": "刚刚",
+      "chapters": 2,
+      "tone": "由本地文稿导入，可继续补充设定与创作基调",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:15:33.667Z",
+      "updatedAt": "2026-07-23T05:15:33.667Z",
+      "style": ""
+    },
+    {
+      "id": "3bb21794-8a6c-440f-9f47-722dd8807ddc",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:15:29.089Z",
+      "updatedAt": "2026-07-23T05:15:31.764Z",
+      "style": ""
+    },
+    {
+      "id": "6322ff6e-f2b3-4b64-ba31-30212fd5eb87",
+      "userId": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "title": "浏览器导入作品",
+      "type": "长篇",
+      "genre": "未分类",
+      "status": "构思中",
+      "progress": 1,
+      "words": "15",
+      "updated": "刚刚",
+      "chapters": 2,
+      "tone": "由本地文稿导入，可继续补充设定与创作基调",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:12:17.624Z",
+      "updatedAt": "2026-07-23T05:12:17.624Z",
+      "style": ""
+    },
+    {
+      "id": "e2fb25ee-f1d6-4b21-9bac-c74d90967b08",
+      "userId": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:12:13.181Z",
+      "updatedAt": "2026-07-23T05:12:15.819Z",
+      "style": ""
+    },
+    {
+      "id": "408f70a8-764d-4800-8572-49a972dd202f",
+      "userId": "09f597b9-9d8a-4d70-8fe9-3f718105222c",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:11:37.266Z",
+      "updatedAt": "2026-07-23T05:11:39.944Z",
+      "style": ""
+    },
+    {
+      "id": "c85ebf37-af82-46a6-9a0d-cbb31431ba91",
+      "userId": "fa33ff18-0f64-4d2f-8cc4-d0da4f240328",
+      "title": "刷新历史测试",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 1,
+      "words": "14",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:09:52.460Z",
+      "updatedAt": "2026-07-23T05:09:55.108Z",
+      "style": ""
+    },
+    {
+      "id": "bfba5a11-1f2d-4f68-89e0-091942564735",
+      "userId": "3cb4f668-29bd-470a-aec0-c8ff0fccf46f",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:04:20.599Z",
+      "updatedAt": "2026-07-23T05:04:20.599Z",
+      "style": ""
+    },
+    {
+      "id": "b1de9577-ef2c-439a-a01a-5f796f0ca256",
+      "userId": "349928a2-d14f-42ce-bd15-52613117f33e",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": true,
+      "createdAt": "2026-07-23T05:09:24.066Z",
+      "updatedAt": "2026-07-23T05:09:24.066Z",
+      "style": ""
+    },
+    {
+      "id": "27323752-e4b9-4309-ab6f-39707fc5c69b",
+      "userId": "fa33ff18-0f64-4d2f-8cc4-d0da4f240328",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:09:52.023Z",
+      "updatedAt": "2026-07-23T05:09:52.023Z",
+      "style": ""
+    },
+    {
+      "id": "19bccd13-7b38-4764-86ac-771584588275",
+      "userId": "09f597b9-9d8a-4d70-8fe9-3f718105222c",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:11:36.694Z",
+      "updatedAt": "2026-07-23T05:11:36.694Z",
+      "style": ""
+    },
+    {
+      "id": "3b13053f-e8ef-4aaf-9bfc-4bda1306c1f2",
+      "userId": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:12:12.672Z",
+      "updatedAt": "2026-07-23T05:12:12.672Z",
+      "style": ""
+    },
+    {
+      "id": "d198a669-60d2-42be-acf9-7cfee81f7fb3",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:15:28.383Z",
+      "updatedAt": "2026-07-23T05:15:28.383Z",
+      "style": ""
+    },
+    {
+      "id": "26c450d7-2c8c-42ff-82d2-898c7d2cee6c",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:19:41.011Z",
+      "updatedAt": "2026-07-23T05:19:41.011Z",
+      "style": ""
+    },
+    {
+      "id": "f72762e7-01d0-46a3-a4b5-be764e92dd12",
+      "userId": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:23:47.496Z",
+      "updatedAt": "2026-07-23T05:23:47.496Z",
+      "style": ""
+    },
+    {
+      "id": "687849d9-3c3e-4d69-9161-8d17e77be63e",
+      "userId": "009d919e-88dc-453a-9379-831dc434689a",
+      "title": "我的第一本书",
+      "type": "长篇",
+      "genre": "现代言情",
+      "status": "构思中",
+      "progress": 0,
+      "words": "0",
+      "updated": "刚刚",
+      "chapters": 1,
+      "tone": "等待你的第一笔设定",
+      "cover": "cover-new",
+      "isActive": false,
+      "createdAt": "2026-07-23T05:24:40.024Z",
+      "updatedAt": "2026-07-23T05:24:40.024Z",
+      "style": ""
+    }
+  ],
+  "chapters": {
+    "bfba5a11-1f2d-4f68-89e0-091942564735": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:04:20.599Z",
+        "updatedAt": "2026-07-23T05:04:20.599Z",
+        "outline": ""
+      }
+    ],
+    "b1de9577-ef2c-439a-a01a-5f796f0ca256": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:09:24.066Z",
+        "updatedAt": "2026-07-23T05:09:24.066Z",
+        "outline": ""
+      }
+    ],
+    "27323752-e4b9-4309-ab6f-39707fc5c69b": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:09:52.023Z",
+        "updatedAt": "2026-07-23T05:09:52.023Z",
+        "outline": ""
+      }
+    ],
+    "c85ebf37-af82-46a6-9a0d-cbb31431ba91": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:09:52.461Z",
+        "updatedAt": "2026-07-23T05:09:55.108Z",
+        "outline": ""
+      }
+    ],
+    "19bccd13-7b38-4764-86ac-771584588275": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:11:36.694Z",
+        "updatedAt": "2026-07-23T05:11:36.694Z",
+        "outline": ""
+      }
+    ],
+    "408f70a8-764d-4800-8572-49a972dd202f": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:11:37.268Z",
+        "updatedAt": "2026-07-23T05:11:39.944Z",
+        "outline": ""
+      }
+    ],
+    "3b13053f-e8ef-4aaf-9bfc-4bda1306c1f2": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:12:12.672Z",
+        "updatedAt": "2026-07-23T05:12:12.672Z",
+        "outline": ""
+      }
+    ],
+    "e2fb25ee-f1d6-4b21-9bac-c74d90967b08": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:12:13.182Z",
+        "updatedAt": "2026-07-23T05:12:15.819Z",
+        "outline": ""
+      }
+    ],
+    "6322ff6e-f2b3-4b64-ba31-30212fd5eb87": [
+      {
+        "id": 1,
+        "title": "序章",
+        "words": "6",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:12:17.631Z",
+        "updatedAt": "2026-07-23T05:12:17.624Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第一章 归港",
+        "words": "9",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:12:17.631Z",
+        "updatedAt": "2026-07-23T05:12:17.624Z",
+        "outline": ""
+      }
+    ],
+    "d198a669-60d2-42be-acf9-7cfee81f7fb3": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:28.383Z",
+        "updatedAt": "2026-07-23T05:15:28.383Z",
+        "outline": ""
+      }
+    ],
+    "3bb21794-8a6c-440f-9f47-722dd8807ddc": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:29.091Z",
+        "updatedAt": "2026-07-23T05:15:31.764Z",
+        "outline": ""
+      }
+    ],
+    "e8068bc9-cad8-4c64-a27f-5325a65a8dbe": [
+      {
+        "id": 1,
+        "title": "序章",
+        "words": "6",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:33.667Z",
+        "updatedAt": "2026-07-23T05:15:33.667Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第一章 归港",
+        "words": "9",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:33.667Z",
+        "updatedAt": "2026-07-23T05:15:33.667Z",
+        "outline": ""
+      }
+    ],
+    "7bdc17a0-a11d-46b0-b12a-dbb5f4e8f70d": [
+      {
+        "id": 1,
+        "title": "第一章 未寄出的信",
+        "words": "25",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:34.309Z",
+        "updatedAt": "2026-07-23T05:15:34.308Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第二章 封港之夜",
+        "words": "22",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:34.309Z",
+        "updatedAt": "2026-07-23T05:15:34.308Z",
+        "outline": ""
+      },
+      {
+        "id": 3,
+        "title": "第三章 潮水之下",
+        "words": "19",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:15:34.309Z",
+        "updatedAt": "2026-07-23T05:15:34.308Z",
+        "outline": ""
+      }
+    ],
+    "26c450d7-2c8c-42ff-82d2-898c7d2cee6c": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:41.011Z",
+        "updatedAt": "2026-07-23T05:19:41.011Z",
+        "outline": ""
+      }
+    ],
+    "8bf63ec6-977a-414f-84bc-5465f7d5d007": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:41.550Z",
+        "updatedAt": "2026-07-23T05:19:44.173Z",
+        "outline": ""
+      }
+    ],
+    "e199925e-e57e-4f41-850a-1495141cb587": [
+      {
+        "id": 1,
+        "title": "序章",
+        "words": "6",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:45.993Z",
+        "updatedAt": "2026-07-23T05:19:45.992Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第一章 归港",
+        "words": "9",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:45.993Z",
+        "updatedAt": "2026-07-23T05:19:45.992Z",
+        "outline": ""
+      }
+    ],
+    "a0f01a8d-a162-460e-b155-6079b9207624": [
+      {
+        "id": 1,
+        "title": "第一章 未寄出的信",
+        "words": "25",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:46.512Z",
+        "updatedAt": "2026-07-23T05:19:46.511Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第二章 封港之夜",
+        "words": "22",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:46.512Z",
+        "updatedAt": "2026-07-23T05:19:46.511Z",
+        "outline": ""
+      },
+      {
+        "id": 3,
+        "title": "第三章 潮水之下",
+        "words": "19",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:19:46.512Z",
+        "updatedAt": "2026-07-23T05:19:46.511Z",
+        "outline": ""
+      }
+    ],
+    "f72762e7-01d0-46a3-a4b5-be764e92dd12": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:23:47.496Z",
+        "updatedAt": "2026-07-23T05:23:47.496Z",
+        "outline": ""
+      }
+    ],
+    "6c846b05-7d9a-4ae1-89b5-5cd22f8b673d": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:23:48.015Z",
+        "updatedAt": "2026-07-23T05:23:50.608Z",
+        "outline": ""
+      }
+    ],
+    "766012a5-1aff-4c2d-b7e0-30c5517706e9": [
+      {
+        "id": 1,
+        "title": "第一章 未寄出的信",
+        "words": "25",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:23:53.012Z",
+        "updatedAt": "2026-07-23T05:23:53.011Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第二章 封港之夜",
+        "words": "22",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:23:53.012Z",
+        "updatedAt": "2026-07-23T05:23:53.011Z",
+        "outline": ""
+      },
+      {
+        "id": 3,
+        "title": "第三章 潮水之下",
+        "words": "19",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:23:53.012Z",
+        "updatedAt": "2026-07-23T05:23:53.011Z",
+        "outline": ""
+      }
+    ],
+    "687849d9-3c3e-4d69-9161-8d17e77be63e": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "0",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:24:40.024Z",
+        "updatedAt": "2026-07-23T05:24:40.024Z",
+        "outline": ""
+      }
+    ],
+    "a6973d6a-95f6-4402-b7fb-d2ae70a03a69": [
+      {
+        "id": 1,
+        "title": "第一章",
+        "words": "14",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:24:40.507Z",
+        "updatedAt": "2026-07-23T05:24:43.209Z",
+        "outline": ""
+      }
+    ],
+    "7073e1c2-071c-4b29-86ea-12f4e949e51a": [
+      {
+        "id": 1,
+        "title": "第一章 未寄出的信",
+        "words": "25",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:24:45.545Z",
+        "updatedAt": "2026-07-23T05:24:45.542Z",
+        "outline": ""
+      },
+      {
+        "id": 2,
+        "title": "第二章 封港之夜",
+        "words": "22",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:24:45.545Z",
+        "updatedAt": "2026-07-23T05:24:45.542Z",
+        "outline": ""
+      },
+      {
+        "id": 3,
+        "title": "第三章 潮水之下",
+        "words": "19",
+        "state": "draft",
+        "createdAt": "2026-07-23T05:24:45.545Z",
+        "updatedAt": "2026-07-23T05:24:45.542Z",
+        "outline": ""
+      }
+    ]
+  },
+  "drafts": {
+    "bfba5a11-1f2d-4f68-89e0-091942564735": {
+      "1": ""
+    },
+    "b1de9577-ef2c-439a-a01a-5f796f0ca256": {
+      "1": ""
+    },
+    "27323752-e4b9-4309-ab6f-39707fc5c69b": {
+      "1": ""
+    },
+    "c85ebf37-af82-46a6-9a0d-cbb31431ba91": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "19bccd13-7b38-4764-86ac-771584588275": {
+      "1": ""
+    },
+    "408f70a8-764d-4800-8572-49a972dd202f": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "3b13053f-e8ef-4aaf-9bfc-4bda1306c1f2": {
+      "1": ""
+    },
+    "e2fb25ee-f1d6-4b21-9bac-c74d90967b08": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "6322ff6e-f2b3-4b64-ba31-30212fd5eb87": {
+      "1": "风从海上来。",
+      "2": "城市灯火重新亮起。"
+    },
+    "d198a669-60d2-42be-acf9-7cfee81f7fb3": {
+      "1": ""
+    },
+    "3bb21794-8a6c-440f-9f47-722dd8807ddc": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "e8068bc9-cad8-4c64-a27f-5325a65a8dbe": {
+      "1": "风从海上来。",
+      "2": "城市灯火重新亮起。"
+    },
+    "7bdc17a0-a11d-46b0-b12a-dbb5f4e8f70d": {
+      "1": "主角收到盖有明日邮戳的信，信中预告港口将发生事故。",
+      "2": "主角赶到旧港，发现事故与十年前的失踪案相连。",
+      "3": "退潮露出关键证据，幕后人开始阻止调查。"
+    },
+    "26c450d7-2c8c-42ff-82d2-898c7d2cee6c": {
+      "1": ""
+    },
+    "8bf63ec6-977a-414f-84bc-5465f7d5d007": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "e199925e-e57e-4f41-850a-1495141cb587": {
+      "1": "风从海上来。",
+      "2": "城市灯火重新亮起。"
+    },
+    "a0f01a8d-a162-460e-b155-6079b9207624": {
+      "1": "主角收到盖有明日邮戳的信，信中预告港口将发生事故。",
+      "2": "主角赶到旧港，发现事故与十年前的失踪案相连。",
+      "3": "退潮露出关键证据，幕后人开始阻止调查。"
+    },
+    "f72762e7-01d0-46a3-a4b5-be764e92dd12": {
+      "1": ""
+    },
+    "6c846b05-7d9a-4ae1-89b5-5cd22f8b673d": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "766012a5-1aff-4c2d-b7e0-30c5517706e9": {
+      "1": "主角收到盖有明日邮戳的信，信中预告港口将发生事故。",
+      "2": "主角赶到旧港，发现事故与十年前的失踪案相连。",
+      "3": "退潮露出关键证据，幕后人开始阻止调查。"
+    },
+    "687849d9-3c3e-4d69-9161-8d17e77be63e": {
+      "1": ""
+    },
+    "a6973d6a-95f6-4402-b7fb-d2ae70a03a69": {
+      "1": "第一版正文。\n\n第二版新增内容。"
+    },
+    "7073e1c2-071c-4b29-86ea-12f4e949e51a": {
+      "1": "主角收到盖有明日邮戳的信，信中预告港口将发生事故。",
+      "2": "主角赶到旧港，发现事故与十年前的失踪案相连。",
+      "3": "退潮露出关键证据，幕后人开始阻止调查。"
+    }
+  },
+  "ideas": [],
+  "editHistory": {
+    "bfba5a11-1f2d-4f68-89e0-091942564735": {
+      "1": []
+    },
+    "b1de9577-ef2c-439a-a01a-5f796f0ca256": {
+      "1": []
+    },
+    "27323752-e4b9-4309-ab6f-39707fc5c69b": {
+      "1": []
+    },
+    "c85ebf37-af82-46a6-9a0d-cbb31431ba91": {
+      "1": [
+        {
+          "id": "e5546b64-1675-449f-a958-75ea59054096",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:09:53.320Z"
+        },
+        {
+          "id": "48320d2c-7940-40d0-95bd-9eda1b04479e",
+          "content": "第一版正文。",
+          "words": 6,
+          "createdAt": "2026-07-23T05:09:54.760Z"
+        }
+      ]
+    },
+    "19bccd13-7b38-4764-86ac-771584588275": {
+      "1": []
+    },
+    "408f70a8-764d-4800-8572-49a972dd202f": {
+      "1": [
+        {
+          "id": "95eab53b-5d16-4af8-aeb3-0d47b3eff608",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:11:38.171Z"
+        }
+      ]
+    },
+    "3b13053f-e8ef-4aaf-9bfc-4bda1306c1f2": {
+      "1": []
+    },
+    "e2fb25ee-f1d6-4b21-9bac-c74d90967b08": {
+      "1": [
+        {
+          "id": "77de5dce-12e0-44ea-b199-cfd887e0a6f1",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:12:14.047Z"
+        },
+        {
+          "id": "6eb8aa11-b3f7-4dae-90d6-da3071264d95",
+          "content": "第一版正文。",
+          "words": 6,
+          "createdAt": "2026-07-23T05:12:15.470Z"
+        }
+      ]
+    },
+    "6322ff6e-f2b3-4b64-ba31-30212fd5eb87": {
+      "1": [],
+      "2": []
+    },
+    "d198a669-60d2-42be-acf9-7cfee81f7fb3": {
+      "1": []
+    },
+    "3bb21794-8a6c-440f-9f47-722dd8807ddc": {
+      "1": [
+        {
+          "id": "f7e15f2d-5488-4d04-9aa3-e9b1b6401099",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:15:29.941Z"
+        },
+        {
+          "id": "bcd19463-e7fb-4209-927b-6a5f3a5ab457",
+          "content": "第一版正文。",
+          "words": 6,
+          "createdAt": "2026-07-23T05:15:31.363Z"
+        }
+      ]
+    },
+    "e8068bc9-cad8-4c64-a27f-5325a65a8dbe": {
+      "1": [],
+      "2": []
+    },
+    "7bdc17a0-a11d-46b0-b12a-dbb5f4e8f70d": {
+      "1": [],
+      "2": [],
+      "3": []
+    },
+    "26c450d7-2c8c-42ff-82d2-898c7d2cee6c": {
+      "1": []
+    },
+    "8bf63ec6-977a-414f-84bc-5465f7d5d007": {
+      "1": [
+        {
+          "id": "3a09320a-f3a4-4725-878c-434b8fa1c1b8",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:19:42.378Z"
+        }
+      ]
+    },
+    "e199925e-e57e-4f41-850a-1495141cb587": {
+      "1": [],
+      "2": []
+    },
+    "a0f01a8d-a162-460e-b155-6079b9207624": {
+      "1": [],
+      "2": [],
+      "3": []
+    },
+    "f72762e7-01d0-46a3-a4b5-be764e92dd12": {
+      "1": []
+    },
+    "6c846b05-7d9a-4ae1-89b5-5cd22f8b673d": {
+      "1": [
+        {
+          "id": "2c19b844-f56d-4f56-bce7-1d060ca91235",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:23:50.238Z"
+        }
+      ]
+    },
+    "766012a5-1aff-4c2d-b7e0-30c5517706e9": {
+      "1": [],
+      "2": [],
+      "3": []
+    },
+    "687849d9-3c3e-4d69-9161-8d17e77be63e": {
+      "1": []
+    },
+    "a6973d6a-95f6-4402-b7fb-d2ae70a03a69": {
+      "1": [
+        {
+          "id": "b9591b1a-1ff9-4354-a98a-af51b8c81ada",
+          "content": "",
+          "words": 0,
+          "createdAt": "2026-07-23T05:24:41.380Z"
+        }
+      ]
+    },
+    "7073e1c2-071c-4b29-86ea-12f4e949e51a": {
+      "1": [],
+      "2": [],
+      "3": []
+    }
+  },
+  "writingLog": [
+    {
+      "id": "4cbf7d23-c97d-4d19-8f8c-27946961fb79",
+      "userId": "fa33ff18-0f64-4d2f-8cc4-d0da4f240328",
+      "projectId": "c85ebf37-af82-46a6-9a0d-cbb31431ba91",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:09:53.716Z",
+      "updatedAt": "2026-07-23T05:09:55.108Z"
+    },
+    {
+      "id": "71c1845b-887b-4a16-98b4-5e11064a6d83",
+      "userId": "09f597b9-9d8a-4d70-8fe9-3f718105222c",
+      "projectId": "408f70a8-764d-4800-8572-49a972dd202f",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:11:39.944Z",
+      "updatedAt": "2026-07-23T05:11:39.944Z"
+    },
+    {
+      "id": "50910211-69a5-475b-b4e6-8d39ed4de183",
+      "userId": "7701f6a4-24c3-457c-bfc1-b852505ecf63",
+      "projectId": "e2fb25ee-f1d6-4b21-9bac-c74d90967b08",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:12:14.402Z",
+      "updatedAt": "2026-07-23T05:12:15.819Z"
+    },
+    {
+      "id": "eff2f293-e1a4-444b-9520-8665f2d28b30",
+      "userId": "f1297863-610e-4002-bceb-62a5dcfdb9f6",
+      "projectId": "3bb21794-8a6c-440f-9f47-722dd8807ddc",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:15:30.295Z",
+      "updatedAt": "2026-07-23T05:15:31.764Z"
+    },
+    {
+      "id": "ba9dc127-0aa9-4b9f-820f-24722942ae8b",
+      "userId": "3b8d9c3e-969b-473d-95fb-1a91f1afc834",
+      "projectId": "8bf63ec6-977a-414f-84bc-5465f7d5d007",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:19:44.173Z",
+      "updatedAt": "2026-07-23T05:19:44.173Z"
+    },
+    {
+      "id": "bff72ced-3393-4e01-af85-50b5ef0354f8",
+      "userId": "f60f10c9-4a48-4b99-89a9-3ef0e0aaaa74",
+      "projectId": "6c846b05-7d9a-4ae1-89b5-5cd22f8b673d",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:23:50.608Z",
+      "updatedAt": "2026-07-23T05:23:50.608Z"
+    },
+    {
+      "id": "a48b640e-525b-40fa-8fa1-77da4a3e360f",
+      "userId": "009d919e-88dc-453a-9379-831dc434689a",
+      "projectId": "a6973d6a-95f6-4402-b7fb-d2ae70a03a69",
+      "chapterId": 1,
+      "date": "2026-07-23",
+      "words": 14,
+      "createdAt": "2026-07-23T05:24:43.209Z",
+      "updatedAt": "2026-07-23T05:24:43.209Z"
+    }
+  ],
+  "writingSessions": {},
+  "writingTasks": [],
+  "foreshadows": [],
+  "storyMemories": [],
+  "aiUsage": []
+}

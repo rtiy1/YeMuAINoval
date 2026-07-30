@@ -1,0 +1,9 @@
+{
+  "name": "hello-extension",
+  "version": "1.0.0",
+  "description": "Minimal yemu-agent extension example",
+  "homepage": "https://github.com/rtiy1/YeMuAINoval",
+  "yemu": {
+    "extensions": ["./index.ts"]
+  }
+}

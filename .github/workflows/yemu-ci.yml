@@ -1,0 +1,63 @@
+name: YeMu Agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/yemu-ci.yml"
+      - "packages/yemu-novel-agent/**"
+      - "packages/agent/**"
+      - "packages/ai/**"
+      - "packages/catalog/**"
+      - "packages/coding-agent/**"
+      - "packages/utils/**"
+      - "bun.lock"
+      - "package.json"
+  pull_request:
+    paths:
+      - ".github/workflows/yemu-ci.yml"
+      - "packages/yemu-novel-agent/**"
+      - "packages/agent/**"
+      - "packages/ai/**"
+      - "packages/catalog/**"
+      - "packages/coding-agent/**"
+      - "packages/utils/**"
+      - "bun.lock"
+      - "package.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yemu-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Agent, shell, and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type-check YeMu agent
+        run: bun --cwd=packages/yemu-novel-agent run check
+
+      - name: Run YeMu tests
+        run: bun --cwd=packages/yemu-novel-agent run test
+
+      - name: Build production frontend
+        run: bun --cwd=packages/yemu-novel-agent run build
+
+      - name: Check patch whitespace
+        run: git diff --check

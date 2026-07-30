@@ -1,0 +1,100 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { Agent } from "@yemu/agent-core";
+import { ModelRegistry } from "@yemu/agent-runtime/config/model-registry";
+import { Settings } from "@yemu/agent-runtime/config/settings";
+import { AgentSession } from "@yemu/agent-runtime/session/agent-session";
+import { AuthStorage } from "@yemu/agent-runtime/session/auth-storage";
+import { SessionManager } from "@yemu/agent-runtime/session/session-manager";
+import { getBundledModel } from "@yemu/model-catalog/models";
+import { Effort, type Model } from "@yemu/model-runtime";
+import { TempDir } from "@yemu/utils";
+
+describe("issue #775: per-model defaultLevel", () => {
+	let tempDir: TempDir;
+	let session: AgentSession;
+	const authStorages: AuthStorage[] = [];
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@yemu-issue-775-");
+	});
+
+	afterEach(async () => {
+		if (session) {
+			await session.dispose();
+		}
+		for (const authStorage of authStorages.splice(0)) {
+			authStorage.close();
+		}
+		tempDir.removeSync();
+	});
+
+	function getOpus() {
+		const model = getBundledModel("anthropic", "claude-opus-4-5");
+		if (!model) throw new Error("expected claude-opus-4-5");
+		return model;
+	}
+
+	function getSonnet() {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("expected claude-sonnet-4-5");
+		return model;
+	}
+
+	async function createSession(initialModel: Model, settings: Settings) {
+		const agent = new Agent({
+			initialState: {
+				model: initialModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+				thinkingLevel: Effort.Low,
+			},
+		});
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.setThinkingLevel(Effort.Low);
+	}
+
+	it("setModel adopts model.thinking.defaultLevel when present", async () => {
+		const sonnet = getSonnet();
+		const opus = getOpus();
+		const opusWithDefault: Model = {
+			...opus,
+			thinking: {
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				defaultLevel: Effort.XHigh,
+			},
+		};
+
+		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Medium });
+		await createSession(sonnet, settings);
+		expect(session.thinkingLevel).toBe(Effort.Low);
+
+		await session.setModel(opusWithDefault);
+
+		expect(session.thinkingLevel).toBe(Effort.XHigh);
+	});
+
+	it("setModel preserves current level when model has no defaultLevel", async () => {
+		const sonnet = getSonnet();
+		const opus = getOpus();
+
+		const settings = Settings.isolated({ defaultThinkingLevel: Effort.Medium });
+		await createSession(sonnet, settings);
+		expect(session.thinkingLevel).toBe(Effort.Low);
+
+		await session.setModel(opus);
+
+		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+});

@@ -1,17 +1,89 @@
-node_modules/
-.venv/
+# Dependencies
+node_modules
+.npm/
+
+# Build output
 dist/
-src-tauri/target/
-src-tauri/gen/schemas/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-server/data/db.json
-server/data/*.tmp
-server/data/skill-market/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+target/
+*.tsbuildinfo
+*.node
+*.b64.js
+
+# Environment
 .env
+
+# Editors
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+*.kate-swp
+*~
+
+# OS
+*.tmp
+# Bun compile temp artifacts, left in cwd if a `Bun.build({ compile })` run is killed mid-write
+*.bun-build
 .DS_Store
-.runtime-logs/
-.novel-agent/
-backups/
-.zcode/plans/
+
+# Logs & profiling
+*.log
+tui-debug.log
+*.cpuprofile
+
+# Test & coverage
+coverage/
+.nyc_output/
+packages/ai/test/.temp-images/
+
+# Project specific
+!.yemu/
+.yemu/plugins/
+.yemu_config/
+.opencode/
+.worktrees/
+.worktree/
+compaction-results/
+changes/
+__pycache__/
+
+# Scratch files
+syntax.jsonl
+out.jsonl
+out.html
+yemu-*.html
+.close_issue.sh
+
+# Generated files
+packages/coding-agent/src/export/html/tool-views.generated.js
+packages/natives/npm/
+packages/coding-agent/src/utils/mupdf-wasm.wasm
+/runs/
+python/yemu-rpc/src/yemu_rpc.egg-info/
+# parallel-agent worktrees
+.wt/
+CPU*.md
+packages/coding-agent/binaries/
+
+# yemu runtime state
+python/yemu/data/
+python/yemu/.cache/
+python/yemu/src/yemu/static/
+python/yemu/web/dist/
+python/yemu/web/verify-out/
+/verify-out/
+python/yemu/.env
+
+# Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
+packages/coding-agent/bench/boot-baseline.json
+
+# Bazel
+/bazel-bin
+/bazel-out
+/bazel-testlogs
+/bazel-yemu
+/.bazelrc.user

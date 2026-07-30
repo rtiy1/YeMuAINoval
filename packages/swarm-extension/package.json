@@ -1,0 +1,55 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "@yemu/swarm-extension",
+  "version": "17.2.0",
+  "description": "Swarm orchestration extension for the YeMu agent core",
+  "homepage": "https://github.com/rtiy1/YeMuAINoval",
+  "author": "Derek Rynd",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rtiy1/YeMuAINoval.git",
+    "directory": "packages/swarm-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/rtiy1/YeMuAINoval/issues"
+  },
+  "keywords": [
+    "swarm",
+    "orchestration",
+    "agent",
+    "extension"
+  ],
+  "bin": {
+    "yemu-swarm": "src/cli.ts"
+  },
+  "scripts": {
+    "check": "biome check . && bun run check:types",
+    "check:types": "tsgo -p tsconfig.json --noEmit",
+    "lint": "biome lint .",
+    "fix": "biome check --write --unsafe .",
+    "fmt": "biome format --write ."
+  },
+  "dependencies": {
+    "@yemu/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  },
+  "peerDependencies": {
+    "@yemu/agent-runtime": "workspace:*"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "yemu": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "CHANGELOG.md"
+  ]
+}
