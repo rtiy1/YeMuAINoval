@@ -604,12 +604,13 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .agent-markdown { min-width: 0; margin-top: 7px; color: #434a45; font-size: 11px; line-height: 1.72; overflow-wrap: anywhere; }
 .agent-markdown > :first-child { margin-top: 0; }
 .agent-markdown > :last-child { margin-bottom: 0; }
-.agent-markdown h1, .agent-markdown h2, .agent-markdown h3, .agent-markdown h4 { margin: 14px 0 6px; color: #2f3732; line-height: 1.35; }
-.agent-markdown h1 { font-size: 15px; }
-.agent-markdown h2 { font-size: 13px; }
-.agent-markdown h3, .agent-markdown h4 { font-size: 11px; }
-.agent-markdown p { margin: 7px 0; }
-.agent-markdown ul, .agent-markdown ol { margin: 7px 0; padding-left: 20px; }
+.agent-markdown h1, .agent-markdown h2, .agent-markdown h3, .agent-markdown h4 { margin: 16px 0 8px; color: #1e2b24; line-height: 1.4; font-weight: 650; }
+.agent-markdown h1 { font-size: 16px; padding-bottom: 5px; border-bottom: 1px solid #e5e7e4; }
+.agent-markdown h2 { font-size: 14px; }
+.agent-markdown h3 { font-size: 12px; }
+.agent-markdown h4 { font-size: 11px; }
+.agent-markdown p { margin: 8px 0; }
+.agent-markdown ul, .agent-markdown ol { margin: 8px 0; padding-left: 20px; }
 .agent-markdown li + li { margin-top: 3px; }
 .agent-markdown blockquote { margin: 8px 0; padding: 5px 9px; color: #69716c; background: #f6f6f4; border-left: 2px solid #bdc9c3; }
 .agent-markdown code { padding: 1px 4px; color: #38594f; background: #edf2ef; border-radius: 4px; font-family: 'DM Mono', monospace; font-size: .9em; }
