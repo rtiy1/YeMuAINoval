@@ -2,10 +2,10 @@
 
 ## Project layout
 
-- `packages/yemu-novel-agent` is the product: React, Tauri, Bun API, task queue, story data, and Story Skills.
+- The repository root is the Web product: `src` is the React app, while `server` and `skills` provide the product backend and Story Skills.
 - `packages/agent`, `packages/ai`, `packages/catalog`, `packages/coding-agent`, and related workspaces are the embedded agent runtime.
-- `packages/yemu-novel-agent/src/agent-runtime.ts` is the boundary between the product and the embedded runtime.
-- `packages/yemu-novel-agent/src/prompts` contains model-facing prompts. Keep prompts in static Markdown files.
+- `src/agent-runtime.ts` is the boundary between the product and the embedded runtime.
+- `src/prompts` contains model-facing prompts. Keep prompts in static Markdown files.
 
 ## Development rules
 
