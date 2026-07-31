@@ -281,7 +281,7 @@ GitHub Actions 会在推送与 Pull Request 中自动执行类型检查、完整
 
 ## 📄 许可证
 
-本项目源代码采用 [MIT License](LICENSE)。Story Skills 保留其上游 MIT 声明，详见 [`skills/LICENSE`](skills/LICENSE) 与 [`NOTICE.md`](NOTICE.md)。
+本项目源代码采用 [MIT License](LICENSE)。
 
 ## 📁 项目结构
 
@@ -314,6 +314,6 @@ YeMuAINoval/
 
 ## 🙏 致谢
 
-- [OpenCode](https://github.com/anomalyco/opencode) — 感谢其开源 Agent 在交互设计与工程实践上的启发。
 - [oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode) — 感谢其提供完整的网文创作 Skills 与工作流，本项目的 Story Skills 基于该项目集成。
 - [Codex](https://github.com/openai/codex) — 感谢其 Agent 工作流与协作体验为本项目的设计和持续迭代提供参考。
+- [oh-my-pi](https://github.com/can1357/oh-my-pi) - 感谢其开源的Agent核心代码在本项目中的实践
