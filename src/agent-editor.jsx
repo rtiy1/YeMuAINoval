@@ -190,6 +190,7 @@ export function AgentEditorTurn({
   onApply,
   onApplyArtifacts,
   onChoose,
+  onFollowup,
   onRegenerate,
   choiceDisabled = false,
   regenerateDisabled = false,
@@ -259,6 +260,14 @@ export function AgentEditorTurn({
         assistantName={assistantName}
         streaming={run.status === 'running'}
       />}
+      {view.suggestedChoicePrompt && onFollowup && <section className="agent-transcript-question agent-suggested-followup" data-item-type="suggestedFollowup">
+        <AgentChoicePrompt
+          prompt={view.suggestedChoicePrompt}
+          disabled={choiceDisabled}
+          onChoose={onFollowup}
+          variant="followup"
+        />
+      </section>}
     </div>
 
     {run.status !== 'running' && !view.choicePrompt && Boolean(view.outputText || view.answerText) && <div className="agent-answer-actions">

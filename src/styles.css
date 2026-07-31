@@ -6061,25 +6061,23 @@ details[open] > summary .agent-trace-chevron {
 /* -------------------------------------------------------------------------- */
 
 .tui-agent-shell {
-  --tui-bg: #111613;
-  --tui-panel: #151b18;
-  --tui-raised: #1a221e;
-  --tui-user: #1d2823;
-  --tui-line: #2b3530;
-  --tui-line-soft: #222b27;
-  --tui-text: #d8dfda;
-  --tui-muted: #89958e;
-  --tui-faint: #58645e;
-  --tui-accent: #7db79f;
-  --tui-cyan: #78adbf;
-  --tui-warm: #d0a16c;
-  --tui-danger: #d7796f;
+  --tui-bg: #f4f2ed;
+  --tui-panel: #f8f6f0;
+  --tui-raised: #e9e6de;
+  --tui-user: #e9eee9;
+  --tui-line: #d8d4ca;
+  --tui-line-soft: #e5e1d8;
+  --tui-text: #30352f;
+  --tui-muted: #777d74;
+  --tui-faint: #999d95;
+  --tui-accent: #3d746a;
+  --tui-cyan: #527583;
+  --tui-warm: #a16b55;
+  --tui-danger: #a65e55;
   color: var(--tui-text);
-  color-scheme: dark;
-  background:
-    radial-gradient(circle at 96% 0, rgba(83, 139, 115, .09), transparent 30%),
-    var(--tui-bg);
-  border-left-color: #252d29;
+  color-scheme: light;
+  background: var(--tui-bg);
+  border-left-color: #d5d1c8;
   font-family: 'DM Mono', 'Noto Sans SC', monospace;
 }
 
@@ -6087,7 +6085,7 @@ details[open] > summary .agent-trace-chevron {
   min-height: 52px;
   flex-basis: 52px;
   padding: 0 9px 0 13px;
-  background: rgba(18, 24, 21, .96);
+  background: rgba(248, 246, 240, .96);
   border-bottom: 1px solid var(--tui-line);
 }
 
@@ -6104,8 +6102,8 @@ details[open] > summary .agent-trace-chevron {
   display: grid;
   place-items: center;
   color: var(--tui-accent);
-  background: rgba(125, 183, 159, .09);
-  border: 1px solid rgba(125, 183, 159, .25);
+  background: rgba(61, 116, 106, .08);
+  border: 1px solid rgba(61, 116, 106, .24);
   border-radius: 3px;
   font-size: 9px;
 }
@@ -6137,7 +6135,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-panel-heading .icon-button {
-  color: #758078;
+  color: #858a83;
   background: transparent;
 }
 
@@ -6153,7 +6151,7 @@ details[open] > summary .agent-trace-chevron {
   gap: 10px;
   padding: 0 12px 0 14px;
   color: var(--tui-muted);
-  background: #131916;
+  background: #eeece5;
   border-bottom: 1px solid var(--tui-line-soft);
 }
 
@@ -6174,7 +6172,7 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-location strong {
   overflow: hidden;
-  color: #9da8a1;
+  color: #696f68;
   font-size: 8px;
   font-weight: 400;
   text-overflow: ellipsis;
@@ -6192,7 +6190,7 @@ details[open] > summary .agent-trace-chevron {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #718078;
+  color: #7d847c;
   font-size: 7px;
   letter-spacing: .08em;
 }
@@ -6202,7 +6200,7 @@ details[open] > summary .agent-trace-chevron {
   height: 5px;
   background: var(--tui-accent);
   border-radius: 50%;
-  box-shadow: 0 0 8px rgba(125, 183, 159, .45);
+  box-shadow: 0 0 6px rgba(61, 116, 106, .25);
 }
 
 .tui-agent-state.running {
@@ -6219,15 +6217,15 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-state.waiting i {
   background: var(--tui-warm);
-  box-shadow: 0 0 8px rgba(208, 161, 108, .4);
+  box-shadow: 0 0 6px rgba(161, 107, 85, .24);
 }
 
 .tui-agent-shell .agent-compaction-note {
   min-height: 27px;
   padding: 0 14px;
-  color: #819087;
-  background: rgba(55, 84, 70, .13);
-  border-bottom-color: #29362f;
+  color: #60776d;
+  background: #e9eee9;
+  border-bottom-color: #d5ded8;
 }
 
 .tui-agent-shell .agent-compaction-note svg {
@@ -6239,7 +6237,7 @@ details[open] > summary .agent-trace-chevron {
   padding: 17px 14px 32px;
   color: var(--tui-text);
   background: transparent;
-  scrollbar-color: #39443e transparent;
+  scrollbar-color: #c5c1b8 transparent;
   scrollbar-width: thin;
 }
 
@@ -6248,7 +6246,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-conversation::-webkit-scrollbar-thumb {
-  background: #354039;
+  background: #c5c1b8;
   border: 2px solid var(--tui-bg);
   border-radius: 10px;
 }
@@ -6267,8 +6265,8 @@ details[open] > summary .agent-trace-chevron {
   grid-template-columns: 1fr 1fr;
   margin: 0 0 19px 2px;
   color: var(--tui-accent);
-  border-top: 1px solid #466354;
-  border-bottom: 1px solid #466354;
+  border-top: 1px solid #9db7ab;
+  border-bottom: 1px solid #9db7ab;
   font-size: 19px;
   font-weight: 500;
   letter-spacing: -.08em;
@@ -6374,10 +6372,10 @@ details[open] > summary .agent-trace-chevron {
   max-width: none;
   margin: 0;
   padding: 9px 10px;
-  color: #e0e6e2;
+  color: #3f4741;
   background: var(--tui-user);
   border: 0;
-  border-left: 2px solid #476b59;
+  border-left: 2px solid #75998a;
   border-radius: 0;
   font-family: 'DM Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
@@ -6434,23 +6432,23 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .agent-transcript-input {
   grid-template-columns: 9px 13px minmax(0, 1fr) auto;
   gap: 5px;
-  color: #8d9992;
+  color: #737b75;
   font-size: 8px;
 }
 
 .tui-trace-branch {
-  color: #3f4d46;
+  color: #b1b5af;
   font-size: 10px;
   line-height: 1.25;
 }
 
 .tui-agent-shell .agent-transcript-tool > svg,
 .tui-agent-shell .agent-transcript-input > svg {
-  color: #71877c;
+  color: #648174;
 }
 
 .tui-agent-shell .agent-transcript-tool.running {
-  color: #b1bcb5;
+  color: #536159;
 }
 
 .tui-agent-shell .agent-transcript-tool.failed,
@@ -6474,7 +6472,7 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .agent-transcript-plan > summary {
   min-height: 21px;
   gap: 7px;
-  color: #8d9992;
+  color: #727a74;
   font-size: 8px;
 }
 
@@ -6484,29 +6482,29 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-trace-chevron {
-  color: #536059;
+  color: #9b9f99;
 }
 
 .tui-agent-shell .agent-transcript-reasoning > .agent-markdown,
 .tui-agent-shell .agent-transcript-plan > ol {
   margin-left: 4px;
   padding-left: 13px;
-  color: #7f8b84;
-  border-left-color: #344039;
+  color: #777e78;
+  border-left-color: #d2cec5;
 }
 
 .tui-agent-shell .agent-transcript-plan li {
-  color: #6e7a73;
+  color: #92968f;
   font-size: 8px;
 }
 
 .tui-agent-shell .agent-transcript-plan li.completed,
 .tui-agent-shell .agent-transcript-plan li.inProgress {
-  color: #a4b1aa;
+  color: #5d7067;
 }
 
 .tui-agent-shell .agent-transcript-plan li > span:first-child {
-  border-color: #52625a;
+  border-color: #aab0aa;
 }
 
 .tui-agent-shell .agent-transcript-output {
@@ -6519,7 +6517,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-transcript-output > header > strong {
-  color: #c7d0ca;
+  color: #4f5852;
   font-family: 'DM Mono', monospace;
   font-size: 9px;
   font-weight: 500;
@@ -6527,7 +6525,7 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-markdown {
   margin-top: 8px;
-  color: #cbd3ce;
+  color: #434a45;
   font-family: 'DM Mono', 'Noto Sans SC', monospace;
   font-size: 10px;
   line-height: 1.75;
@@ -6537,7 +6535,7 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .agent-markdown h2,
 .tui-agent-shell .agent-markdown h3,
 .tui-agent-shell .agent-markdown h4 {
-  color: #edf1ee;
+  color: #26302a;
   border-bottom-color: var(--tui-line);
 }
 
@@ -6559,8 +6557,8 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-markdown code {
-  color: #a7d5c1;
-  background: #202b26;
+  color: #38594f;
+  background: #e5ede9;
   border-radius: 2px;
 }
 
@@ -6572,9 +6570,9 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-markdown blockquote {
-  color: #9eaaa3;
-  background: #171e1a;
-  border-left-color: #526f61;
+  color: #68716b;
+  background: #ebece8;
+  border-left-color: #93aa9f;
 }
 
 .tui-agent-shell .agent-markdown-table-wrap {
@@ -6588,8 +6586,8 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-markdown th {
-  color: #d6ddd8;
-  background: #1b231f;
+  color: #404943;
+  background: #eceeea;
 }
 
 .tui-agent-shell .agent-answer-actions {
@@ -6597,7 +6595,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-answer-actions button {
-  color: #68766f;
+  color: #858b87;
   border-radius: 2px;
 }
 
@@ -6623,7 +6621,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-finding-list p {
-  color: #bfc8c2;
+  color: #545b56;
 }
 
 .tui-agent-shell .agent-finding-list small {
@@ -6631,14 +6629,14 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-choice-card {
-  background: #151c18;
-  border-color: #36433c;
+  background: #f8f6f0;
+  border-color: #d8d4ca;
   border-radius: 3px;
 }
 
 .tui-agent-shell .agent-choice-card > header span,
 .tui-agent-shell .agent-choice-card > p {
-  color: #d4dcd7;
+  color: #3d453f;
 }
 
 .tui-agent-shell .agent-choice-card > header small,
@@ -6653,7 +6651,7 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-choice-options button {
   min-height: 41px;
-  color: #aeb9b2;
+  color: #59615b;
   background: transparent;
   border-color: transparent;
   border-top-color: var(--tui-line-soft);
@@ -6662,80 +6660,80 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-choice-options button:hover:not(:disabled),
 .tui-agent-shell .agent-choice-options button.selected {
-  color: #e1e7e3;
-  background: #1e2a24;
-  border-color: #365446;
+  color: #2f6255;
+  background: #e9f1ed;
+  border-color: #a8c1b6;
 }
 
 .tui-agent-shell .agent-choice-options button strong {
   color: var(--tui-accent);
   background: transparent;
-  border: 1px solid #405148;
+  border: 1px solid #aebbb4;
   border-radius: 2px;
 }
 
 .tui-agent-shell .agent-choice-options button.selected strong {
-  color: #101613;
+  color: #fff;
   background: var(--tui-accent);
   border-color: var(--tui-accent);
 }
 
 .tui-agent-shell .agent-choice-options button .agent-choice-copy small {
-  color: #75827b;
+  color: #858c86;
 }
 
 .tui-agent-shell .agent-choice-options button:hover:not(:disabled) .agent-choice-copy small,
 .tui-agent-shell .agent-choice-options button.selected .agent-choice-copy small {
-  color: #8fa89c;
+  color: #648077;
 }
 
 .tui-agent-shell .agent-choice-custom input {
   color: var(--tui-text);
-  background: #101512;
-  border-color: #405148;
+  background: #fffefa;
+  border-color: #c6d1cb;
   border-radius: 2px;
 }
 
 .tui-agent-shell .agent-choice-custom button,
 .tui-agent-shell .agent-choice-confirm {
-  color: #101512;
+  color: #fff;
   background: var(--tui-accent);
   border-radius: 2px;
   font-weight: 600;
 }
 
 .tui-agent-shell .agent-mutation-preview {
-  color: #d0c3aa;
-  background: #211d15;
-  border-color: #51452d;
+  color: #765d43;
+  background: #f2eadb;
+  border-color: #d8c7a8;
   border-radius: 3px;
 }
 
 .tui-agent-shell .agent-mutation-preview header small {
-  color: #9f927a;
+  color: #9a876c;
 }
 
 .tui-agent-shell .agent-mutation-counts span {
-  color: #d6bc88;
-  background: #322917;
+  color: #8c6a3b;
+  background: #e9ddc5;
 }
 
 .tui-agent-shell .agent-mutation-preview > button {
-  color: #121713;
+  color: #fff;
   background: var(--tui-warm);
   border-radius: 2px;
 }
 
 .tui-agent-shell .agent-mutation-applied {
-  color: #a5c9b8;
-  background: #18261f;
-  border-color: #345142;
+  color: #477263;
+  background: #e4eee9;
+  border-color: #bfd2c9;
   border-radius: 3px;
 }
 
 .tui-agent-shell .agent-diff {
-  background: #111613;
-  border-color: #354039;
+  background: #fbfaf7;
+  border-color: #d8d4ca;
   border-radius: 3px;
 }
 
@@ -6747,29 +6745,29 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-diff > header > div,
 .tui-agent-shell .agent-diff > header strong {
-  color: #b8c2bc;
+  color: #555c57;
 }
 
 .tui-agent-shell .agent-diff-hunk-heading,
 .tui-agent-shell .agent-diff > footer {
-  background: #191f1c;
+  background: #eeece6;
 }
 
 .tui-agent-shell .agent-diff-hunk-heading > span {
-  color: #a7b1ab;
+  color: #747a75;
 }
 
 .tui-agent-shell .agent-diff-hunk-heading > small,
 .tui-agent-shell .agent-diff > footer span {
-  color: #6f7c75;
+  color: #929790;
 }
 
 .tui-agent-shell .agent-diff-hunk-heading button {
-  color: #7c8982;
+  color: #858b86;
 }
 
 .tui-agent-shell .agent-diff-hunk-heading button.active {
-  color: #111613;
+  color: #fff;
   background: var(--tui-accent);
 }
 
@@ -6778,30 +6776,30 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .diff-line.removed {
-  color: #d9a19b;
-  background: #261918;
+  color: #8f524c;
+  background: #f4e4e1;
 }
 
 .tui-agent-shell .diff-line.added {
-  color: #a9d4bc;
-  background: #15241c;
+  color: #39705a;
+  background: #e3eee7;
 }
 
 .tui-agent-shell .agent-diff > footer button {
-  color: #111613;
+  color: #fff;
   background: var(--tui-accent);
   border-radius: 2px;
 }
 
 .tui-agent-shell .agent-composer-wrap {
   padding: 8px 10px 0;
-  background: #101512;
+  background: var(--tui-bg);
   border-top-color: var(--tui-line);
 }
 
 .tui-agent-shell .agent-context-line {
   padding: 0 3px 7px;
-  color: #6f7b74;
+  color: #7d837e;
 }
 
 .tui-agent-shell .agent-context-line small,
@@ -6817,15 +6815,15 @@ details[open] > summary .agent-trace-chevron {
   min-height: 112px;
   padding: 0;
   overflow: visible;
-  background: #161c19;
-  border-color: #3a463f;
+  background: #fbfaf7;
+  border-color: #d5d1c8;
   border-radius: 3px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .16);
+  box-shadow: 0 8px 24px rgba(42, 47, 44, .06);
 }
 
 .tui-agent-shell .assistant-form.agent-composer:focus-within {
-  border-color: #60836f;
-  box-shadow: 0 0 0 1px rgba(125, 183, 159, .12), 0 10px 30px rgba(0, 0, 0, .16);
+  border-color: #7f9d90;
+  box-shadow: 0 0 0 1px rgba(61, 116, 106, .1), 0 8px 24px rgba(42, 47, 44, .06);
 }
 
 .tui-agent-shell .assistant-form.agent-composer > .tui-composer-input {
@@ -6849,7 +6847,7 @@ details[open] > summary .agent-trace-chevron {
   min-height: 54px;
   max-height: 156px;
   padding: 1px 0;
-  color: #dce3de;
+  color: #3d443f;
   background: transparent;
   caret-color: var(--tui-accent);
   font-family: 'DM Mono', 'Noto Sans SC', monospace;
@@ -6858,7 +6856,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .assistant-form.agent-composer textarea::placeholder {
-  color: #5f6a64;
+  color: #9a9f99;
 }
 
 .tui-agent-shell .assistant-form.agent-composer > .agent-attachment-list {
@@ -6866,9 +6864,9 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-attachment-chip {
-  color: #a2aea7;
-  background: #202a25;
-  border-color: #35443c;
+  color: #637069;
+  background: #e9eee9;
+  border-color: #ccd8d1;
   border-radius: 2px;
 }
 
@@ -6880,13 +6878,13 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-control-divider {
-  background: #364039;
+  background: #d7d3ca;
 }
 
 .tui-agent-shell .agent-composer-controls .agent-mode-trigger,
 .tui-agent-shell .agent-composer-controls .agent-tool-button,
 .tui-agent-shell .agent-composer-controls .agent-control-trigger {
-  color: #7e8a83;
+  color: #7b817a;
   background: transparent;
   border-color: transparent;
   border-radius: 2px;
@@ -6898,8 +6896,8 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .agent-composer-controls .agent-tool-button.active,
 .tui-agent-shell .agent-composer-controls .agent-control-trigger:hover:not(:disabled),
 .tui-agent-shell .agent-composer-controls .agent-control-trigger.open {
-  color: #d2dad5;
-  background: #222b27;
+  color: #3f4742;
+  background: #e9e6de;
 }
 
 .tui-agent-shell .agent-composer-controls .agent-mode-trigger.team.active,
@@ -6908,69 +6906,69 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-model-glyph {
-  color: #aab5ae;
-  filter: grayscale(.25) brightness(1.35);
+  color: #7b8580;
+  filter: grayscale(.25);
 }
 
 .tui-agent-shell .assistant-form.agent-composer .assistant-send {
-  color: #111613;
+  color: #fff;
   background: var(--tui-accent);
   border-radius: 2px;
 }
 
 .tui-agent-shell .assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
-  background: #9acbb5;
+  background: #315f57;
 }
 
 .tui-agent-shell .assistant-form.agent-composer .assistant-send:disabled {
-  color: #758078;
-  background: #303a35;
+  color: #9ca19c;
+  background: #e0ded8;
 }
 
 .tui-agent-shell .assistant-form.agent-composer .assistant-send.stop {
-  color: #160f0e;
+  color: #fff;
   background: var(--tui-danger);
 }
 
 .tui-agent-shell .assistant-form.agent-composer .assistant-send.steer {
-  color: #101613;
+  color: #fff;
   background: var(--tui-cyan);
 }
 
 .tui-agent-shell .agent-composer-blocked {
-  color: #d9bd89;
-  background: #241f16;
-  border-color: #4f4229;
+  color: #886943;
+  background: #f2eadb;
+  border-color: #ddceb1;
   border-radius: 2px;
 }
 
 .tui-agent-shell .assistant-form.agent-composer.waiting-input {
-  background: #171b17;
-  border-color: #49422e;
+  background: #f8f5ed;
+  border-color: #d8c9a9;
 }
 
 .tui-agent-shell .assistant-form.agent-composer.waiting-input textarea:disabled {
-  color: #7a817b;
+  color: #989991;
 }
 
 .tui-agent-shell .agent-composer-suggestions,
 .tui-agent-shell .agent-control-popover {
   color: var(--tui-text);
-  background: #161c19;
-  border-color: #3a463f;
+  background: #fbfaf7;
+  border-color: #d5d1c8;
   border-radius: 3px;
-  box-shadow: 0 -14px 38px rgba(0, 0, 0, .34);
+  box-shadow: 0 -12px 32px rgba(42, 47, 44, .14);
 }
 
 .tui-agent-shell .agent-suggestion-section-label,
 .tui-agent-shell .agent-control-popover-heading small,
 .tui-agent-shell .agent-control-option-copy small {
-  color: #68746d;
+  color: #8a8f88;
 }
 
 .tui-agent-shell .agent-suggestion-list > button,
 .tui-agent-shell .agent-control-option {
-  color: #a7b2ab;
+  color: #59615b;
   background: transparent;
   border-color: transparent;
 }
@@ -6980,9 +6978,9 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .agent-control-option:hover,
 .tui-agent-shell .agent-control-option:focus-visible,
 .tui-agent-shell .agent-control-option.selected {
-  color: #e0e6e2;
-  background: #202a25;
-  border-color: #32453b;
+  color: #2f6255;
+  background: #e9f1ed;
+  border-color: #b9cec5;
 }
 
 .tui-agent-shell .agent-suggestion-list > button strong,
@@ -6993,25 +6991,25 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-suggestion-list > button small,
 .tui-agent-shell .agent-suggestion-list > button em {
-  color: #727f78;
+  color: #858c86;
 }
 
 .tui-agent-shell .agent-suggestion-footer {
-  color: #68746d;
-  background: #121714;
+  color: #858c86;
+  background: #eeece6;
   border-top-color: var(--tui-line);
 }
 
 .tui-agent-shell .agent-suggestion-footer kbd {
-  color: #a0ada5;
-  background: #202923;
-  border-color: #39443e;
+  color: #69726c;
+  background: #e0ded7;
+  border-color: #cac6bd;
 }
 
 .tui-agent-shell .agent-control-option-mark {
   color: var(--tui-accent);
-  background: #202923;
-  border-color: #3b4a42;
+  background: #e4ece8;
+  border-color: #c2d1ca;
 }
 
 .tui-agent-shell .tui-agent-statusline {
@@ -7021,9 +7019,9 @@ details[open] > summary .agent-trace-chevron {
   gap: 9px;
   margin: 0 -10px;
   padding: 0 10px 0 12px;
-  color: #617068;
-  background: #0d120f;
-  border-top: 1px solid #29322e;
+  color: #7c837d;
+  background: #e9e6de;
+  border-top: 1px solid #d5d1c8;
   font-family: 'DM Mono', monospace;
   font-size: 7px;
 }
@@ -7031,12 +7029,12 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .tui-agent-statusline .agent-token-usage {
   flex: 0 1 auto;
   gap: 6px;
-  color: #6f7d75;
+  color: #7c837d;
   font-size: 7px;
 }
 
 .tui-agent-shell .tui-agent-statusline .agent-token-usage span:first-child {
-  color: #829087;
+  color: #6d766f;
   font-family: 'DM Mono', monospace;
   font-size: 7px;
   font-weight: 400;
@@ -7058,20 +7056,20 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .tui-context-status span {
-  color: #78867e;
+  color: #748078;
   font-size: 7px;
   white-space: nowrap;
 }
 
 .tui-agent-shell .agent-context-track {
-  stroke: #344039;
+  stroke: #c7c4bc;
 }
 
 .tui-agent-shell .tui-status-model {
   min-width: 0;
   margin-left: auto;
   overflow: hidden;
-  color: #748179;
+  color: #747c76;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -7083,21 +7081,21 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-history-toolbar,
 .tui-agent-shell .agent-history-search {
-  background: #131916;
+  background: #eeece5;
   border-color: var(--tui-line);
 }
 
 .tui-agent-shell .agent-history-toolbar strong,
 .tui-agent-shell .agent-history-search input,
 .tui-agent-shell .agent-history-item-main > button > span {
-  color: #d4dcd7;
+  color: #454c47;
 }
 
 .tui-agent-shell .agent-history-toolbar small,
 .tui-agent-shell .agent-history-item-main > button > small,
 .tui-agent-shell .agent-history-meta,
 .tui-agent-shell .agent-history-empty {
-  color: #738078;
+  color: #868c86;
 }
 
 .tui-agent-shell .agent-history-search input {
@@ -7110,54 +7108,52 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-history-item:hover,
 .tui-agent-shell .agent-history-item.current {
-  background: #1a231e;
+  background: #e9eee9;
 }
 
 .tui-agent-shell .agent-history-item.current {
-  border-color: #3f5f50;
+  border-color: #9eb9ad;
 }
 
 .tui-agent-shell .agent-history-actions button {
-  color: #738078;
+  color: #858c86;
 }
 
 .tui-agent-shell .agent-history-actions button:hover:not(:disabled),
 .tui-agent-shell .agent-history-actions button.active {
   color: var(--tui-accent);
-  background: #243029;
+  background: #dde9e4;
 }
 
 .tui-agent-shell.collapsed {
-  background: #101512;
+  background: var(--tui-bg);
 }
 
 .tui-agent-shell.collapsed .assistant-reopen {
   color: var(--tui-accent);
-  background: #17201c;
-  border: 1px solid #33423a;
+  background: #e9eee9;
+  border: 1px solid #c8d6cf;
 }
 
 @media (max-width: 1050px) and (min-width: 761px) {
   .editor-page .tui-agent-shell {
     width: min(430px, 48vw);
     background: var(--tui-bg);
-    border-left: 1px solid #29322e;
-    box-shadow: -18px 0 50px rgba(5, 8, 6, .3);
+    border-left: 1px solid #d5d1c8;
+    box-shadow: -18px 0 50px rgba(42, 47, 44, .14);
   }
 }
 
 @media (max-width: 760px) {
   .editor-page .tui-agent-shell {
-    background:
-      radial-gradient(circle at 96% 0, rgba(83, 139, 115, .1), transparent 32%),
-      var(--tui-bg);
+    background: var(--tui-bg);
     box-shadow: none;
   }
 
   .editor-page .tui-agent-shell .agent-panel-heading {
     min-height: calc(52px + env(safe-area-inset-top, 0px));
     flex-basis: calc(52px + env(safe-area-inset-top, 0px));
-    background: #121815;
+    background: var(--tui-panel);
   }
 
   .editor-page .tui-agent-shell .agent-conversation {

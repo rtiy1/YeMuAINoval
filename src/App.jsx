@@ -3278,6 +3278,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }
   }
 
+  async function submitAssistantFollowup(response) {
+    const answer = Object.values(
+      response?.answers && typeof response.answers === 'object' ? response.answers : {},
+    ).find((value) => typeof value === 'string' && value.trim())
+    const message = String(answer || response?.text || response || '').trim()
+    if (!message) return
+    await submitAssistant(null, message)
+  }
+
   async function regenerateAssistant(run) {
     const threadId = assistantThread?.id
     const turnId = run?.turnId
@@ -4124,6 +4133,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   onApply={applyAssistantRevision}
                   onApplyArtifacts={applyAssistantArtifacts}
                   onChoose={(reply) => submitAssistantAnswer(message, reply)}
+                  onFollowup={submitAssistantFollowup}
                   onRegenerate={message.id === latestAgentRunId ? regenerateAssistant : null}
                   choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
                   regenerateDisabled={assistantRunning || assistantLoading || message.id !== latestAgentRunId}

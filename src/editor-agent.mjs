@@ -261,36 +261,88 @@ function markdownTableCells(line, preserveDelimiter = false) {
 function parseMarkdownTableChoices(lines) {
   for (let delimiterIndex = 1; delimiterIndex < lines.length; delimiterIndex += 1) {
     const delimiterCells = markdownTableCells(lines[delimiterIndex], true)
-    if (!delimiterCells?.length || !delimiterCells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue
+    if (!delimiterCells?.length || !delimiterCells.every((cell) => /^:?-{2,}:?$/.test(cell))) continue
     const headerCells = markdownTableCells(lines[delimiterIndex - 1])
     if (!headerCells || headerCells.length < 2 || headerCells.length > 7) continue
 
-    let questionIndex = -1
+    const tableRows = []
+    let tableEndIndex = delimiterIndex
+    for (let index = delimiterIndex + 1; index < lines.length; index += 1) {
+      const cells = markdownTableCells(lines[index])
+      if (!cells || cells.length < headerCells.length) break
+      tableRows.push(cells)
+      tableEndIndex = index
+    }
+
+    let precedingQuestionIndex = -1
     for (let index = delimiterIndex - 2; index >= Math.max(0, delimiterIndex - 10); index -= 1) {
       const copy = cleanAgentChoiceText(lines[index])
-      if (/[？?]/.test(copy) || /请选择|更想要|哪一种|哪种|还是/.test(copy)) {
-        questionIndex = index
+      if (/[？?]/.test(copy) || /请选择|更想要|哪一种|哪种|还是|选一个/.test(copy)) {
+        precedingQuestionIndex = index
+        break
+      }
+    }
+    let followingQuestionIndex = -1
+    for (let index = tableEndIndex + 1; index <= Math.min(lines.length - 1, tableEndIndex + 6); index += 1) {
+      const copy = cleanAgentChoiceText(lines[index])
+      if (/[？?]/.test(copy) || /请选择|你选哪个|选一个/.test(copy)) {
+        followingQuestionIndex = index
         break
       }
     }
     const nearbyCopy = cleanAgentChoiceText(lines.slice(Math.max(0, delimiterIndex - 10), delimiterIndex - 1).join('\n'))
-    const hasChoiceCue = questionIndex >= 0 || /选择|方向|哪种|还是|更想|确认/.test(nearbyCopy)
+    const hasChoiceCue = precedingQuestionIndex >= 0
+      || followingQuestionIndex >= 0
+      || /选择|选一个|选项|方向|哪种|还是|更想|确认|下一步/.test(nearbyCopy)
     if (!hasChoiceCue) continue
+
+    const rowChoiceHeader = /^(?:选项|选择|方案|方向|option)$/i.test(headerCells[0])
+    const rowChoices = rowChoiceHeader
+      ? tableRows.map((cells) => {
+        const match = /^([A-H])(?:[.、:：])?\s*(.*?)$/i.exec(cells[0])
+        return match
+          ? { key: match[1].toUpperCase(), inlineLabel: cleanAgentChoiceText(match[2]), cells }
+          : null
+      }).filter(Boolean)
+      : []
+    if (
+      rowChoices.length >= 2
+      && rowChoices.length <= 6
+      && rowChoices.length === tableRows.length
+      && new Set(rowChoices.map((choice) => choice.key)).size === rowChoices.length
+    ) {
+      const preferredLabelIndex = headerCells.findIndex((header, index) => (
+        index > 0 && /做什么|内容|方案|方向|操作|下一步/.test(header)
+      ))
+      const labelIndex = preferredLabelIndex > 0 ? preferredLabelIndex : 1
+      const options = rowChoices.map(({ key, inlineLabel, cells }) => {
+        const label = inlineLabel || cells[labelIndex]
+        const description = cells.map((cell, cellIndex) => (
+          cellIndex > 0 && (inlineLabel || cellIndex !== labelIndex) && cell
+            ? `${headerCells[cellIndex] ? `${headerCells[cellIndex]}：` : ''}${cell}`
+            : ''
+        )).filter(Boolean).join(' · ')
+        return { key, label, description, reply: `${key}：${label}` }
+      }).filter((option) => option.label)
+      if (options.length < 2) continue
+      const questionIndex = followingQuestionIndex >= 0 ? followingQuestionIndex : precedingQuestionIndex
+      const introEndIndex = precedingQuestionIndex >= 0 ? precedingQuestionIndex : delimiterIndex - 1
+      return {
+        intro: cleanAgentChoiceText(lines.slice(0, introEndIndex).join('\n')),
+        question: firstChoiceQuestion(questionIndex >= 0 ? lines[questionIndex] : '') || '请选择一个方向继续',
+        hint: followingQuestionIndex >= 0
+          ? cleanAgentChoiceText(lines.slice(followingQuestionIndex + 1).join('\n'))
+          : cleanAgentChoiceText(lines.slice(tableEndIndex + 1).join('\n')),
+        options,
+      }
+    }
 
     const hasRowLabelColumn = headerCells[0] === ''
     const optionLabels = (hasRowLabelColumn ? headerCells.slice(1) : headerCells).filter(Boolean)
     if (optionLabels.length < 2 || optionLabels.length > 6) continue
 
-    const detailRows = []
-    let tableEndIndex = delimiterIndex
-    for (let index = delimiterIndex + 1; index < lines.length; index += 1) {
-      const cells = markdownTableCells(lines[index])
-      if (!cells || cells.length < optionLabels.length) break
-      detailRows.push(cells)
-      tableEndIndex = index
-    }
     const options = optionLabels.map((label, optionIndex) => {
-      const details = detailRows.slice(0, 4).map((cells) => {
+      const details = tableRows.slice(0, 4).map((cells) => {
         const rowLabel = hasRowLabelColumn ? cells[0] : ''
         const value = cells[optionIndex + (hasRowLabelColumn ? 1 : 0)]
         return value ? `${rowLabel ? `${rowLabel}：` : ''}${value}` : ''
@@ -303,11 +355,14 @@ function parseMarkdownTableChoices(lines) {
         reply: `${key}：${label}`,
       }
     })
+    const questionIndex = followingQuestionIndex >= 0 ? followingQuestionIndex : precedingQuestionIndex
     const questionStart = questionIndex >= 0 ? questionIndex : delimiterIndex - 2
     return {
-      intro: cleanAgentChoiceText(lines.slice(0, questionStart).join('\n')),
+      intro: cleanAgentChoiceText(lines.slice(0, precedingQuestionIndex >= 0 ? precedingQuestionIndex : delimiterIndex - 1).join('\n')),
       question: firstChoiceQuestion(lines[questionStart]) || '请选择一个方向继续',
-      hint: cleanAgentChoiceText(lines.slice(tableEndIndex + 1).join('\n')),
+      hint: followingQuestionIndex >= 0
+        ? cleanAgentChoiceText(lines.slice(followingQuestionIndex + 1).join('\n'))
+        : cleanAgentChoiceText(lines.slice(tableEndIndex + 1).join('\n')),
       options,
     }
   }
@@ -468,6 +523,12 @@ export function buildAgentTurnView(run) {
   const answerText = isStreaming
     ? nonEmptyText(run?.text, itemAnswerText)
     : nonEmptyText(itemAnswerText, run?.text, resultOutput, agentResponseText(run?.response))
+  const suggestedChoice = !choicePrompt && run?.status === 'completed'
+    ? parseAgentChoicePrompt(answerText)
+    : null
+  const suggestedChoicePrompt = suggestedChoice
+    ? { ...suggestedChoice, intro: '' }
+    : null
   const legacyActivityItems = items.length
     ? []
     : compactAgentEvents(run?.events).map((event) => ({
@@ -497,6 +558,7 @@ export function buildAgentTurnView(run) {
     outputText: resultOutput,
     originalText: nonEmptyText(run?.source?.selectedText, run?.source?.sourceText, result.original),
     choicePrompt,
+    suggestedChoicePrompt,
     effectiveStatus,
     isPlan: answerItem?.type === 'plan' || run?.mode === 'plan' || run?.source?.mode === 'plan',
     proposal,

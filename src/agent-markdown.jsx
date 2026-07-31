@@ -132,7 +132,7 @@ function tableCells(line) {
 
 function isTableDelimiter(line) {
   const cells = tableCells(line)
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+  return cells.length > 1 && cells.every((cell) => /^:?-{2,}:?$/.test(cell))
 }
 
 export default function AgentMarkdown({ value, streaming = false }) {

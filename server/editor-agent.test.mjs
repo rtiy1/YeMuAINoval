@@ -160,6 +160,50 @@ test('editor agent converts markdown comparison tables into selectable direction
   assert.match(parsed.hint, /进入开书流程/)
 })
 
+test('editor agent converts row-oriented markdown option tables into selectable followups', () => {
+  const output = `🎯 建议下一步（选一个）
+
+| 选项 | 做什么 | 适合你如果… |
+|:--|:--|:--|
+| A. 补全核心设定 | 建主角卡 + 力量体系 + 世界观 | 想把设定做扎实 |
+| B | 直接搭大纲 | 想快速看到章节蓝图 |
+| C | 一步到位开写 | 不想来回确认 |
+
+你选哪个？`
+  const parsed = parseAgentChoicePrompt(output)
+
+  assert.equal(parsed.question, '你选哪个？')
+  assert.deepEqual(parsed.options.map(({ key, label }) => ({ key, label })), [
+    { key: 'A', label: '补全核心设定' },
+    { key: 'B', label: '直接搭大纲' },
+    { key: 'C', label: '一步到位开写' },
+  ])
+  assert.match(parsed.options[0].description, /做什么：建主角卡/)
+  assert.match(parsed.options[0].description, /适合你如果…：想把设定做扎实/)
+})
+
+test('editor agent exposes completed markdown choices as non-blocking followups', () => {
+  const output = `## 下一步
+
+| 选项 | 做什么 |
+|---|---|
+| A | 补全设定 |
+| B | 直接搭大纲 |
+
+你选哪个？`
+  const view = buildAgentTurnView({
+    id: 'turn-followup',
+    status: 'completed',
+    text: output,
+    response: { status: 'completed', result: { output } },
+  })
+
+  assert.equal(view.effectiveStatus, 'completed')
+  assert.equal(view.choicePrompt, null)
+  assert.deepEqual(view.suggestedChoicePrompt.options.map((option) => option.label), ['补全设定', '直接搭大纲'])
+  assert.equal(view.suggestedChoicePrompt.intro, '')
+})
+
 test('editor agent renders structured blocking questions returned by skills', () => {
   const parsed = normalizeStructuredAgentQuestion({
     question: '副本核心体验选哪一种？',
@@ -239,6 +283,7 @@ test('editor agent renders requestUserInput Items as frontend plan options', () 
   assert.equal(view.effectiveStatus, 'needs_input')
   assert.equal(view.activeInputItem.id, 'request-1')
   assert.deepEqual(view.choicePrompt.options.map((option) => option.label), ['补人物卡', '写第一章'])
+  assert.equal(view.suggestedChoicePrompt, null)
 })
 
 test('editor agent applies Item SSE deltas and reconciles transient output', () => {

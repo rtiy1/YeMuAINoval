@@ -23,7 +23,7 @@ function choiceOptions(question) {
   }]
 }
 
-export function AgentChoicePrompt({ prompt, disabled, onChoose }) {
+export function AgentChoicePrompt({ prompt, disabled, onChoose, variant = 'blocking' }) {
   const promptKey = JSON.stringify(prompt)
   const questions = useMemo(() => (
     Array.isArray(prompt.questions) && prompt.questions.length
@@ -39,6 +39,7 @@ export function AgentChoicePrompt({ prompt, disabled, onChoose }) {
   const currentQuestion = questions[Math.min(questionIndex, questions.length - 1)]
   const options = choiceOptions(currentQuestion)
   const selectedOption = options.find((option) => option.key === selected)
+  const suggestedFollowup = variant === 'followup'
 
   useEffect(() => {
     setQuestionIndex(0)
@@ -92,16 +93,16 @@ export function AgentChoicePrompt({ prompt, disabled, onChoose }) {
     completeAnswer(`其他：${value}`)
   }
 
-  return <div className="agent-choice-response">
+  return <div className={`agent-choice-response ${suggestedFollowup ? 'suggested-followup' : ''}`}>
     {prompt.intro && <p className="agent-choice-intro">{prompt.intro}</p>}
     <section
       className="agent-choice-card"
-      aria-label="Agent 正在等待你的选择"
+      aria-label={suggestedFollowup ? 'Agent 建议的快捷回复' : 'Agent 正在等待你的选择'}
       aria-describedby={`agent-choice-question-${currentQuestion.id}`}
     >
       <header>
-        <span>{currentQuestion.header || '需要你确认'}</span>
-        <small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length}` : '选择一项继续'}</small>
+        <span>{currentQuestion.header || (suggestedFollowup ? '快捷回复' : '需要你确认')}</span>
+        <small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length}` : suggestedFollowup ? '发送为新消息' : '选择一项继续'}</small>
       </header>
       <p id={`agent-choice-question-${currentQuestion.id}`}>{currentQuestion.question}</p>
       <div className="agent-choice-options" role="radiogroup" aria-label={currentQuestion.question}>
