@@ -1,6 +1,6 @@
 <div align="center">
 
-# 夜幕 AI 小说 🌙✨
+# 叙事工坊 · YeMu AI Novel 🌙
 
 ![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
 ![Bun](https://img.shields.io/badge/Bun-1.3.14+-f9f1e1.svg)
@@ -9,7 +9,7 @@
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-**面向网文作者的 AI 创作工作台 · 让「夜雨」陪你把一个想法写成一本小说**
+**Web 优先的 AI 小说创作工作台 · 让「夜雨」陪你把想法持续写成作品**
 
 [特性](#-特性) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [API](#-api) • [项目结构](#-项目结构) • [致谢](#-致谢)
 
@@ -19,18 +19,18 @@
 
 ## ✨ 特性
 
-- 🤖 **沉浸式写作工作台** — 章节目录、正文编辑器与右侧「夜雨」Agent 同屏，自动带入当前作品和章节上下文
+- 🌐 **Web 创作工作台** — 产品直接运行在浏览器中，章节目录、正文编辑器与右侧「夜雨」Agent 同屏，自动带入当前作品和章节上下文
+- 🤖 **Agent 编辑器** — 以 `Thread → Turn → Item` 渲染流式回复、思考摘要、执行计划和工具项；需要确认时直接在 Web 端显示选项卡与自定义输入
 - 📝 **章节化写作** — 章节大纲、正文、编辑历史与写作统计独立保存，支持自动保存、撤销重做、章节拆分、TXT 导入与整书导出
 - 🧠 **持续作品记忆** — 六类长期事实（角色状态 / 已发生事件 / 世界规则 / 章节摘要 / 不可违背事实 / 语言习惯）自动进入写作上下文，防止长篇写崩设定
-- ✏️ **可审阅 AI 修改** — AI 改写先变成逐段 diff，按段接受或拒绝、显示修改原因；应用前自动建立快照，可一键恢复
+- ✏️ **可审阅 AI 修改** — AI 改写以逐项 diff 呈现，可分别接受或拒绝并查看修改原因；应用前保留正文快照，可一键恢复
 - 🪝 **伏笔生命周期** — 登记伏笔的分类、重要性、埋入章节、计划回收与实际回收章节，未回收伏笔自动进入上下文
 - 🔍 **可选联网搜索** — 工作台 Agent 开启「联网」后先检索再回答；Tavily 优先，零配置回退 DuckDuckGo
-- 👥 **多智能体协作** — 可按任务切换模型、思考强度与单 / 多智能体模式，由多个审阅 Agent 并行分析后统一汇总
+- 👥 **双子 Agent 协作** — 可切换单 / 多智能体模式；协作模式由两个子 Agent 并行分析，再交给夜雨结合报告完成最终回复
 - 🔐 **双格式模型** — 支持 OpenAI 兼容与 Anthropic（Claude）两种格式，均可填自定义 Base URL 走代理
-- 💾 **可恢复 Agent 会话** — 每个作品章节拥有独立的 Thread / Turn / Item，刷新页面或切换章节后仍可恢复执行状态与结果
+- 💾 **可恢复 Agent 会话** — 每个作品章节可保存多个 Thread，刷新页面或切换章节后仍能恢复 Turn、Item、追问答案与执行结果
 - 🧩 **安全 Skill 市场** — 社区 Skill 经过文件规则与专用模型双重审查后发布，导入后以受限的 prompt-only 模式运行
 - ⚙️ **内嵌 Agent Runtime** — Bun API 进程直接调用仓库内的 YeMu Agent Runtime，无额外 Python AI 网关
-
 
 > 💡 欢迎提交 Issue 或 Pull Request！
 
@@ -60,7 +60,7 @@ git clone https://github.com/rtiy1/YeMuAINoval.git
 cd YeMuAINoval
 
 # 2. 安装工作区依赖
-bun install
+bun install --frozen-lockfile
 
 # 3. 配置环境变量
 cp .env.example .env
@@ -109,7 +109,7 @@ bun run start
 
 `AUTH_SECRET` 必须与数据库备份一起妥善保管并保持不变；更换后，已有登录会话会失效，数据库中已加密的用户模型 Key 也无法解密。
 
-本站默认采用 BYOK：每位用户在设置中保存自己的模型 Key。`ALLOW_SHARED_MODEL_KEY=false` 会禁止回退到服务端模型 Key；`REGISTRATION_MODE=owner-only` 允许空数据库中的首位站长通过邮箱验证码注册，之后自动关闭注册。开放注册的生产环境必须配置邮件发送。AI 默认不设每日次数额度，但保留每分钟速率和并发限制保护 worker，可通过 `AI_*_LIMIT` 调整。
+本站默认采用 BYOK：每位用户在设置中保存自己的模型 Key。`ALLOW_SHARED_MODEL_KEY=false` 会禁止回退到服务端模型 Key；`REGISTRATION_MODE=owner-only` 允许空数据库中的首位站长通过邮箱验证码注册，之后自动关闭注册。生产环境只要允许注册，就必须配置邮件发送。AI 默认不设每日次数额度，但会限制每分钟请求数和单用户并发任务数，可通过 `AI_*_LIMIT` 调整。
 
 ## 🗄️ 数据存储与迁移
 
@@ -143,7 +143,7 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 | **API Key** | 加密存储（AES-256-GCM，复用 `AUTH_SECRET`），返回时脱敏 |
 | **模型名** | 手动输入或点击「获取模型列表」从对应 API 拉取 |
 | **Temperature** | 0-2，控制生成随机性 |
-| **Max Tokens** | 最大输出 token 数（Anthropic 必填，未填默认 4096） |
+| **Max Tokens** | 最大输出 token 数，未填写时默认 4096 |
 | **上下文窗口** | 模型上下文窗口大小，用于自动截断超长输入 |
 
 调用 Skill 时，Bun API 读取用户配置并交给进程内的 YeMu Agent Runtime，按服务商选择 OpenAI Completions 或 Anthropic Messages 传输，并可覆盖服务端 `.env` 默认值。
@@ -152,34 +152,38 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 
 | 变量 | 必需 | 说明 |
 |------|------|------|
+| `NODE_ENV` | 生产 ✅ | 生产部署设为 `production` |
+| `HOST` / `PORT` | — | Bun 服务监听地址和端口，默认 `127.0.0.1:8787` |
 | `AUTH_SECRET` | ✅ | JWT 签发与 API Key 加密密钥（≥32 字符） |
-| `VITE_API_URL` | — | Web 应用 API 地址；留空使用同源 `/api` |
-| `WEB_ORIGIN` | ✅ | 允许访问 API 的 Web 来源，逗号分隔 |
+| `VITE_API_URL` | — | Web 构建时的 API 地址；留空使用同源 `/api` |
+| `WEB_ORIGIN` | 生产 ✅ | 允许访问 API 的 Web 来源，逗号分隔 |
 | `APP_PUBLIC_URL` | 生产 ✅ | 邮件中密码重置链接使用的 HTTPS 站点地址 |
 | `ACCESS_TOKEN_TTL_MINUTES` | — | 访问令牌有效期，默认 60 分钟 |
 | `REFRESH_SESSION_DAYS` | — | 可滚动续期的登录会话有效期，默认 90 天 |
 | `REFRESH_COOKIE_SECURE` | — | `auto` / `true` / `false`，默认按实际请求协议决定 |
 | `REFRESH_COOKIE_SAME_SITE` | — | `lax` / `strict` / `none`，跨站前后端需 HTTPS 并设为 `none` |
-| `EMAIL_PROVIDER` | 开放注册时 ✅ | `resend`；本地可用 `console` 查看验证码和重置链接 |
+| `EMAIL_PROVIDER` | 允许注册时 ✅ | 生产使用 `resend`；本地可用 `console` 查看验证码和重置链接 |
 | `RESEND_API_KEY` | Resend ✅ | Resend 服务端 API Key |
 | `EMAIL_FROM` | Resend ✅ | 已验证域名的发件人地址 |
 | `EMAIL_VERIFICATION_CODE_TTL_MINUTES` | — | 注册邮箱验证码有效期，默认 10 分钟 |
 | `PASSWORD_RESET_TOKEN_TTL_MINUTES` | — | 单次密码重置链接有效期，默认 30 分钟 |
 | `TRUST_PROXY` | — | Express 信任的反向代理层数或 `false` |
-| `DATABASE_URL` | — | PostgreSQL 连接串；留空用 JSON 文件 |
-| `REDIS_URL` | — | Redis 连接串；留空回退数据库 |
+| `STORY_DATA_FILE` | — | JSON 回退存储路径，默认 `server/data/db.json` |
+| `DATABASE_URL` | 生产建议 | PostgreSQL 连接串；留空使用 JSON 文件 |
+| `DATABASE_POOL_MAX` / `DATABASE_SSL` | — | PostgreSQL 连接池大小与 SSL 开关 |
+| `REDIS_URL` | — | 写作助手会话与任务队列连接串；留空回退 JSON / PostgreSQL |
 | `AI_TASK_QUEUE_ENABLED` | — | 配置 Redis 时是否启用独立任务队列；默认 `true`，启用时还需要 PostgreSQL 和 worker |
 | `AI_TASK_CLAIM_IDLE_MS` | — | worker 接管失联任务前的等待时间，最小且默认 180000 ms |
 | `AI_TASK_CLAIM_INTERVAL_MS` | — | worker 扫描失联任务的间隔，最小 10000 ms、默认 30000 ms |
 | `ALLOW_SHARED_MODEL_KEY` | — | 是否允许用户回退服务端模型 Key；BYOK 部署保持 `false` |
-| `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed` |
+| `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed`；生产默认 `owner-only` |
 | `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |
 | `AI_CONCURRENT_REQUEST_LIMIT` | — | 每用户并发 AI 请求与任务上限 |
 | `AI_REQUESTS_PER_MINUTE` | — | 每用户 AI HTTP 请求速率上限 |
 | `SKILL_REVIEW_MODE` | — | Skill 市场审查模式：生产建议 `required`，本地可用 `optional` |
-| `SKILL_REVIEW_API_URL` | 生产 ✅ | 专用安全审查模型的完整接口地址 |
-| `SKILL_REVIEW_API_KEY` | 生产 ✅ | 专用审查密钥，仅保存在服务端环境变量 |
-| `SKILL_REVIEW_MODEL` | 生产 ✅ | 专用安全审查模型 ID |
+| `SKILL_REVIEW_API_URL` | 发布 Skill 时 ✅ | 专用安全审查模型的完整接口地址 |
+| `SKILL_REVIEW_API_KEY` | 发布 Skill 时 ✅ | 专用审查密钥，仅保存在服务端环境变量 |
+| `SKILL_REVIEW_MODEL` | 发布 Skill 时 ✅ | 专用安全审查模型 ID |
 | `SKILL_REVIEW_API_STYLE` | — | `responses`（默认）或 `chat-completions` |
 | `SKILL_REVIEW_TIMEOUT_MS` | — | 单次 Skill 安全审查超时，默认 45000 ms |
 | `OPENAI_*` | — | 服务端 OpenAI 默认（可被用户配置覆盖） |
@@ -196,8 +200,9 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 
 ## 🧠 工作台 Agent 与联网搜索
 
-- **Agent 生命周期**：每个作品章节拥有独立的持久化 `Thread → Turn → Item`；刷新、切换章节或 Turn 仍在 worker 中运行时，重新进入章节会恢复用户消息、执行计划、执行项和可审阅结果。浏览器优先通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated`、`item/*` 事件，不支持流式响应时自动回退轮询。
-- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔与作品记忆；输入区可切换模型、思考强度、单 / 多智能体和联网搜索。
+- **Agent 生命周期**：每个作品章节可保存多个持久化 `Thread`，每个 `Turn` 由消息、思考摘要、计划、工具调用、结构化追问和修改建议等 `Item` 组成。任务可在 API 进程内执行，也可通过 Redis 交给独立 worker；重新进入章节会恢复当前状态。
+- **Web 交互渲染**：浏览器通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated` 与 `item/*` 事件，不支持流式响应时自动回退轮询。计划选择、补充问题和 diff 审阅均由 Web 前端直接渲染，无需 TUI 或桌面客户端。
+- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔、作品记忆与本地文本文件；输入区可切换模型、思考强度、单 / 多智能体和联网搜索。
 - **共享 Agent 指令层**：写作、审稿、记忆和搜索工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
 - **联网搜索**：打开工作台输入区的「联网」开关后，每轮先检索再结合来源回答。配置 `TAVILY_API_KEY` 时使用 Tavily，留空则回退 DuckDuckGo；网络失败时会直接报告错误。
 
@@ -214,33 +219,37 @@ Web 端当前以「工作台」为创作入口：新建空白作品或导入本�
 - `POST /api/auth/password/forgot` · `POST /api/auth/password/reset` — 申请并完成密码重置
 
 **设置与模型**
-- `GET / PUT /api/settings` — 模型配置（API Key 脱敏）
+- `GET /api/settings` · `PUT /api/settings` — 模型配置（API Key 脱敏）
 - `POST /api/ai/models` — 拉取可用模型列表（OpenAI / Anthropic）
 - `GET /api/ai/skills` — 能力目录
 - `GET /api/ai/usage` — 当前用户 AI 调用与并发占用；BYOK 默认每日额度不限
 
 **AI 调用**
 - `POST /api/ai/agent/runs` — 通用 Story Agent 入口
-- `GET / POST /api/ai/threads` · `GET / PATCH / DELETE /api/ai/threads/:threadId` · `POST /api/ai/threads/:threadId/resume` — Agent Thread 列表、创建、读取、重命名、恢复与归档
+- `GET /api/ai/threads` · `POST /api/ai/threads` · `GET / PATCH / DELETE /api/ai/threads/:threadId` · `POST /api/ai/threads/:threadId/resume` — Agent Thread 列表、创建、读取、重命名、恢复与归档
 - `POST /api/ai/threads/:threadId/turns` · `GET /api/ai/threads/:threadId/turns/:turnId` · `GET .../stream` · `POST .../input` · `POST .../regenerate` · `POST .../steer` · `POST .../interrupt` — Turn 生命周期与 `turn/*`、`item/*` SSE 事件
-- `POST /api/ai/tasks` · `GET /api/ai/tasks/:taskId` · `GET /api/ai/tasks/:taskId/stream` · `POST /api/ai/tasks/:taskId/cancel` · `POST /api/ai/tasks/:taskId/retry` — worker Task 兼容层与重试接口
+- `GET /api/ai/tasks` · `POST /api/ai/tasks` · `GET /api/ai/tasks/:taskId` · `GET .../stream` · `POST .../cancel` · `POST .../retry` · `POST .../artifacts/apply` — 异步 Task、流式状态、重试和产物应用接口
 - `POST /api/ai/reviews/chapter` — 章节诊断
+
+**Skill 市场**
+- `GET /api/skill-market` · `POST /api/skill-market` — 浏览或上传社区 Skill
+- `GET /api/skill-market/:skillId/download` · `POST .../review` · `POST / DELETE .../install` · `DELETE /api/skill-market/:skillId` — 下载、复审、导入、移除与删除
 
 **引导式创作会话**
 - `GET / DELETE /api/writing-assistant/session` · `POST /api/writing-assistant/messages` — 读取、清空或继续持久化建书会话
 - `POST /api/writing-assistant/confirm` — 确认并创建建书方案
 
 **作品与章节**
-- `GET / POST /api/projects` · `POST /api/projects/smart` · `POST /api/projects/import` · `GET / PATCH / DELETE /api/projects/:projectId`
-- `GET / POST /api/projects/:projectId/chapters` · `PATCH / DELETE .../chapters/:chapterId`
-- `GET / PUT /api/projects/:projectId/chapters/:chapterId/draft` — 章节正文
-- `GET / POST /api/projects/:projectId/chapters/:chapterId/history` — 编辑快照
+- `GET /api/projects` · `POST /api/projects` · `POST /api/projects/smart` · `POST /api/projects/import` · `GET / PATCH / DELETE /api/projects/:projectId`
+- `GET /api/projects/:projectId/chapters` · `POST /api/projects/:projectId/chapters` · `PATCH / DELETE .../chapters/:chapterId`
+- `GET /api/projects/:projectId/chapters/:chapterId/draft` · `PUT /api/projects/:projectId/chapters/:chapterId/draft` — 章节正文
+- `GET /api/projects/:projectId/chapters/:chapterId/history` · `POST /api/projects/:projectId/chapters/:chapterId/history` — 编辑快照
 - `GET /api/projects/:projectId/chapters/:chapterId/context` — 写作上下文
 
 **素材与连续性**
-- `GET / POST /api/ideas` · `PATCH / DELETE /api/ideas/:ideaId`
-- `GET / POST /api/foreshadows` · `PATCH / DELETE /api/foreshadows/:foreshadowId` — 伏笔生命周期
-- `GET / POST /api/story-memories` · `POST /api/story-memories/batch` · `PATCH / DELETE /api/story-memories/:memoryId` — 六类作品长期记忆
+- `GET /api/ideas` · `POST /api/ideas` · `PATCH / DELETE /api/ideas/:ideaId`
+- `GET /api/foreshadows` · `POST /api/foreshadows` · `PATCH / DELETE /api/foreshadows/:foreshadowId` — 伏笔生命周期
+- `GET /api/story-memories` · `POST /api/story-memories` · `POST /api/story-memories/batch` · `PATCH / DELETE /api/story-memories/:memoryId` — 六类作品长期记忆
 - `POST /api/projects/:projectId/chapters/:chapterId/memory-candidates` — 夜雨整理本章记忆候选项
 
 **统计**
@@ -250,17 +259,18 @@ Web 端当前以「工作台」为创作入口：新建空白作品或导入本�
 
 ## 🛠️ Story Skill 能力
 
-项目内的根目录 `skills/` 是 oh-story-claudecode Skills 的 vendored 副本，这个位置是运行时约定而不是独立 workspace：`src/agent-runtime.ts` 从仓库根定位 `skills/*/SKILL.md`，Bun API 再以受限工具加载所需的引用文件。部署服务端时需要让 `skills/` 与 `src/`、`server/` 一起保留在应用根目录。
+项目内的根目录 `skills/` 是 oh-story-claudecode Skills 的 vendored 副本，这个位置是运行时约定而不是独立 workspace：`src/agent-runtime.ts` 从仓库根定位 `skills/*/SKILL.md`，Bun API 再以受限工具加载所需的引用文件。部署时需要保留完整仓库工作区，至少不能拆开 `skills/`、`src/`、`server/` 与运行时依赖的 `packages/`。
 
-| Skill | Executor | 状态 |
-|-------|----------|------|
-| `story` | `yemu-agent-runtime` | ✅ ready |
-| `story-review` / `story-deslop` | `yemu-agent-runtime` | ✅ ready |
-| `story-search` | `yemu-agent-runtime` | ✅ ready（联网搜索） |
-| `story-long/short-write` 等 | `yemu-agent-runtime` | ✅ ready |
-| `story-cover` / `browser-cdp` | `yemu-agent-runtime` | ✅ registered |
+| 能力 | 内置 Skill |
+|------|------------|
+| 路由与准备 | `story`、`story-setup` |
+| 长短篇创作 | `story-long-write`、`story-short-write` |
+| 分析与趋势 | `story-long-analyze`、`story-short-analyze`、`story-long-scan`、`story-short-scan` |
+| 审稿与润色 | `story-review`、`story-deslop` |
+| 导入与检索 | `story-import`、`story-search` |
+| 扩展能力 | `story-cover`、`browser-cdp` |
 
-执行 Story Skill 时会通过受限的读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
+运行时当前会自动发现 15 个内置 Skill；`GET /api/ai/skills` 会根据当前用户是否已配置模型，将可用状态返回为 `ready` 或 `needs_model`。执行时通过受限读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
 
 ## ✅ 验证
 
@@ -287,19 +297,39 @@ GitHub Actions 会在推送与 Pull Request 中自动执行类型检查、完整
 
 ```
 YeMuAINoval/
-├── src/                # React + Vite 前端
-├── server/             # Bun + Express API（状态拥有者）
-│   ├── index.mjs       # HTTP 路由、认证与服务编排
-│   ├── store.mjs       # JSON / PostgreSQL 聚合存储
-│   ├── agent-thread.mjs # 持久化 Thread / Turn / Item 生命周期
-│   ├── ai-worker.mjs   # Redis Stream 独立任务 worker
-│   ├── chat-memory.mjs # Redis 聊天记忆
-│   └── migrations/     # PostgreSQL 迁移
-├── skills/             # vendored Story Skill 契约
-├── packages/           # 内嵌 YeMu Agent、模型与工具运行时
-├── crates/             # @yemu/native 与内嵌 Shell 的 Rust 源码
-├── docs/               # 内嵌运行时与项目专题文档
-└── scripts/            # 内嵌运行时的构建和验证脚本
+├── src/                         # React + Vite Web 产品
+│   ├── App.jsx                  # 创作工作台与页面状态
+│   ├── agent-editor.jsx         # Thread / Turn / Item 助手编辑器
+│   ├── agent-interactions.jsx   # 计划选项与 diff 审阅交互
+│   ├── agent-runtime.ts         # 产品与内嵌 Agent Runtime 的边界
+│   ├── editor-agent.mjs         # Web Agent 消息与结果适配
+│   ├── platform.mjs             # 浏览器平台能力
+│   └── prompts/                 # 静态模型提示词
+├── server/                      # Bun + Express API 与生产静态服务
+│   ├── index.mjs                # HTTP 路由、认证与服务编排
+│   ├── store.mjs                # JSON / PostgreSQL 聚合存储
+│   ├── agent-thread.mjs         # 持久化 Thread / Turn / Item 生命周期
+│   ├── story-agent.mjs          # Story Agent 调用入口
+│   ├── ai-worker.mjs            # Redis Stream 独立任务 worker
+│   ├── chat-memory.mjs          # Redis 聊天记忆
+│   ├── data/                    # 本地 JSON 数据与 Skill 市场文件
+│   └── migrations/              # PostgreSQL 迁移
+├── skills/                      # 根目录 Story Skills（运行时直接加载）
+├── public/                      # Web 静态资源与模型图标
+├── packages/                    # 内嵌 Agent、模型、TUI 与工具运行时
+│   ├── agent/                   # 通用 Agent 状态与执行循环
+│   ├── ai/                      # 模型服务商与流式协议
+│   ├── catalog/                 # 模型目录
+│   ├── coding-agent/            # Agent 工具与运行时实现
+│   └── yemu-memory/             # 内嵌记忆能力
+├── crates/                      # @yemu/native 使用的 Rust 源码
+├── types/                       # 项目类型声明
+├── patches/                     # Bun patchedDependencies 补丁
+├── docs/                        # 内嵌运行时与项目专题文档
+├── scripts/                     # 内嵌运行时构建与验证脚本
+├── package.json                 # 根工作区与 Web 产品命令
+├── vite.config.js               # Web 开发代理与生产构建
+└── tsconfig.app.json            # Web 产品 TypeScript 配置
 ```
 
 ---
