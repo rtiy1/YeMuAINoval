@@ -5,6 +5,7 @@
 ![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
 ![Bun](https://img.shields.io/badge/Bun-1.3.14+-f9f1e1.svg)
 ![React](https://img.shields.io/badge/React-19-61dafb.svg)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -26,7 +27,7 @@
 - ✏️ **可审阅 AI 修改** — AI 改写以逐项 diff 呈现，可分别接受或拒绝并查看修改原因；应用前保留正文快照，可一键恢复
 - 🪝 **伏笔生命周期** — 登记伏笔的分类、重要性、埋入章节、计划回收与实际回收章节，未回收伏笔自动进入上下文
 - 🔍 **可选联网搜索** — 工作台 Agent 开启「联网」后先检索再回答；Tavily 优先，零配置回退 DuckDuckGo
-- 👥 **双子 Agent 协作** — 可切换单 / 多智能体模式；协作模式由两个子 Agent 并行分析，再交给夜雨结合报告完成最终回复
+- 👥 **多智能体协作** — 可切换单 / 多智能体模式；协作模式由两个子 Agent 并行分析，再交给夜雨结合报告完成最终回复
 - 🔐 **双格式模型** — 支持 OpenAI 兼容与 Anthropic（Claude）两种格式，均可填自定义 Base URL 走代理
 - 💾 **可恢复 Agent 会话** — 每个作品章节可保存多个 Thread，刷新页面或切换章节后仍能恢复 Turn、Item、追问答案与执行结果
 - 🧩 **安全 Skill 市场** — 社区 Skill 经过文件规则与专用模型双重审查后发布，导入后以受限的 prompt-only 模式运行
@@ -36,14 +37,15 @@
 
 ## 💻 环境要求
 
-| 组件 | 最低要求 | 说明 |
+| 组件 | 版本 | 说明 |
 |------|---------|------|
 | **Bun** | 1.3.14+ | API、Agent Runtime、测试与前端构建 |
-| **PostgreSQL** | 16（可选） | 生产存储；本地开发可用 JSON 文件回退 |
-| **Redis** | 7（可选） | 聊天记忆持久化；未配置则回退数据库 |
+| **Docker Compose** | v2（服务器推荐） | 一键运行 Web、PostgreSQL、Redis 与 Worker |
+| **PostgreSQL** | 16（生产建议） | 关系存储；本地开发可使用 JSON 文件回退 |
+| **Redis** | 7（可选） | 写作助手会话与跨进程 AI 任务队列 |
 | **AI API Key** | 使用 AI 时必需 | 可由用户在设置中保存，也可配置服务端共享 Key |
 
-> **📌 说明**：本项目依赖外部 AI API，不需要本地 GPU。本地开发不配置 `DATABASE_URL` 和 `REDIS_URL` 时，全部回退到 `server/data/db.json`，零依赖即可跑通。
+> **📌 说明**：本项目依赖外部 AI API，不需要本地 GPU。本地开发不配置 `DATABASE_URL` 和 `REDIS_URL` 时，核心状态写入 `server/data/db.json`，无需额外启动数据库或队列服务。
 
 ## 🚀 快速开始
 
@@ -95,16 +97,42 @@ bun run start
 
 生产环境由 Express 同时托管 API 和 `dist/` 前端资源，默认监听 `127.0.0.1:8787`（可用 `HOST` / `PORT` 修改）。设置 `DATABASE_URL` 后，用户、会话、作品、章节、正文和素材写入关系表，其余兼容状态保留在版本化 JSONB 中；写操作通过事务保证一致性。
 
+### 一键服务器脚本
+
+Linux 服务器只需安装 Docker Engine 与 Compose 插件，不需要在宿主机安装 Bun、PostgreSQL 或 Redis。根目录 `deploy.sh` 会创建权限为 `600` 的 `.env`，自动生成 `AUTH_SECRET` 和 PostgreSQL 密码，然后构建并启动 Web、PostgreSQL、Redis 与独立 AI Worker：
+
+```bash
+YEMU_PUBLIC_URL=https://novel.example.com ./deploy.sh start
+```
+
+首次自动生成的配置会保持 `DOCKER_REGISTRATION_MODE=closed`，避免在没有邮件验证服务时开放注册。需要创建首位站长时，请先在 `.env` 配置 `EMAIL_PROVIDER=resend`、`RESEND_API_KEY`、`EMAIL_FROM`，再把 Docker 注册模式改成 `owner-only` 并重启。
+
+```bash
+./deploy.sh restart     # 重新构建镜像并重建服务
+./deploy.sh status      # 查看容器与健康状态
+./deploy.sh logs        # 持续查看 Web 和 Worker 日志
+./deploy.sh stop        # 停止服务并保留容器与数据
+./deploy.sh down        # 删除容器和网络，但保留数据卷
+./deploy.sh check       # 检查 Docker、环境变量与 Compose
+```
+
+也可以直接运行 `docker compose up -d --build --wait`，或通过 Bun 调用 `bun run docker:start`、`bun run docker:restart` 和 `bun run docker:logs`。Compose 中所有服务都使用 `restart: unless-stopped`，服务器重启后会由 Docker 自动恢复。
+
 ## 🌐 生产部署
 
-当前主线不包含旧的 Docker Compose / Python AI 服务部署栈。生产环境先执行 `bun run build`，再以 `bun run start` 启动同时托管 API 与 `dist/` 的 Bun 服务；PostgreSQL、Redis 和 HTTPS 反向代理按部署平台提供。
+当前 Docker 方案只运行 Bun Web/API 与内嵌 Agent Runtime，不包含旧 Python AI 网关。Compose 默认启动：
 
-公网部署应将 `HOST` 设为平台要求的监听地址，在服务前配置 HTTPS，并把 `WEB_ORIGIN` 与 `APP_PUBLIC_URL` 设置为实际站点地址。刷新令牌 Cookie 默认按请求协议自动设置 `Secure`：HTTPS 会启用，直接 HTTP 部署也能恢复会话，但不应把明文 HTTP 端口暴露到公网。反向代理层数通过 `TRUST_PROXY` 设置。
+- `web`：Bun + Express，同时托管 `/api` 和构建后的 React
+- `worker`：Redis Stream AI 任务消费者
+- `postgres`：用户、会话、作品、章节和兼容 JSONB 状态
+- `redis`：任务队列与写作助手会话
+
+`web` 默认仅绑定宿主机 `127.0.0.1:8787`。公网部署应在前面配置 Caddy 或 Nginx HTTPS 反向代理，并将 `YEMU_PUBLIC_URL` 设置为实际 HTTPS 域名；只有确实需要直接暴露端口时才设置 `YEMU_BIND_ADDRESS=0.0.0.0`。PostgreSQL 与 Redis 仅连接内部 Docker 网络，不向宿主机开放端口。
 
 > **📌 注意事项**
 >
 > 1. `AUTH_SECRET` 必须设置，用于 JWT 签发与 API Key 加密
-> 2. `WEB_ORIGIN` 用逗号分隔允许访问 API 的 Web 来源
+> 2. Docker 部署使用 `YEMU_PUBLIC_URL` 同时设置允许来源与邮件公开地址
 > 3. 可选配置 `ANTHROPIC_*` / `TAVILY_API_KEY` 启用 Anthropic 默认与联网搜索
 
 `AUTH_SECRET` 必须与数据库备份一起妥善保管并保持不变；更换后，已有登录会话会失效，数据库中已加密的用户模型 Key 也无法解密。
@@ -152,6 +180,12 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 
 | 变量 | 必需 | 说明 |
 |------|------|------|
+| `YEMU_PUBLIC_URL` | Docker ✅ | 站点公开地址，例如 `https://novel.example.com` |
+| `YEMU_BIND_ADDRESS` / `YEMU_PORT` | — | Docker 暴露到宿主机的地址与端口，默认 `127.0.0.1:8787` |
+| `POSTGRES_DB` / `POSTGRES_USER` | — | Compose 数据库名与用户，默认均为 `yemu` |
+| `POSTGRES_PASSWORD` | Docker ✅ | PostgreSQL 密码；`deploy.sh` 首次运行自动生成 |
+| `DOCKER_REGISTRATION_MODE` | — | Docker 注册模式，默认 `closed` |
+| `DOCKER_SKILL_REVIEW_MODE` | — | Docker Skill 审查模式，默认 `required` |
 | `NODE_ENV` | 生产 ✅ | 生产部署设为 `production` |
 | `HOST` / `PORT` | — | Bun 服务监听地址和端口，默认 `127.0.0.1:8787` |
 | `AUTH_SECRET` | ✅ | JWT 签发与 API Key 加密密钥（≥32 字符） |
@@ -169,6 +203,7 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 | `PASSWORD_RESET_TOKEN_TTL_MINUTES` | — | 单次密码重置链接有效期，默认 30 分钟 |
 | `TRUST_PROXY` | — | Express 信任的反向代理层数或 `false` |
 | `STORY_DATA_FILE` | — | JSON 回退存储路径，默认 `server/data/db.json` |
+| `STORY_SKILL_MARKET_DIR` | — | 社区 Skill 包存储目录 |
 | `DATABASE_URL` | 生产建议 | PostgreSQL 连接串；留空使用 JSON 文件 |
 | `DATABASE_POOL_MAX` / `DATABASE_SSL` | — | PostgreSQL 连接池大小与 SSL 开关 |
 | `REDIS_URL` | — | 写作助手会话与任务队列连接串；留空回退 JSON / PostgreSQL |
@@ -291,7 +326,7 @@ GitHub Actions 会在推送与 Pull Request 中自动执行类型检查、完整
 
 ## 📄 许可证
 
-本项目源代码采用 [MIT License](LICENSE)。
+本项目源代码采用 [MIT License](LICENSE)。Story Skills 与内嵌运行时的上游声明见 [`skills/LICENSE`](skills/LICENSE) 和 [`NOTICE.md`](NOTICE.md)。
 
 ## 📁 项目结构
 
@@ -327,6 +362,9 @@ YeMuAINoval/
 ├── patches/                     # Bun patchedDependencies 补丁
 ├── docs/                        # 内嵌运行时与项目专题文档
 ├── scripts/                     # 内嵌运行时构建与验证脚本
+├── Dockerfile                   # Bun 多阶段生产镜像
+├── compose.yaml                 # Web、Worker、PostgreSQL 与 Redis
+├── deploy.sh                    # Docker Compose 一键部署入口
 ├── package.json                 # 根工作区与 Web 产品命令
 ├── vite.config.js               # Web 开发代理与生产构建
 └── tsconfig.app.json            # Web 产品 TypeScript 配置

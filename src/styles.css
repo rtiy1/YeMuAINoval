@@ -6055,3 +6055,1132 @@ details[open] > summary .agent-trace-chevron {
   color: #8a9690;
   cursor: default;
 }
+
+/* -------------------------------------------------------------------------- */
+/* TUI shell for the Web writing agent                                         */
+/* -------------------------------------------------------------------------- */
+
+.tui-agent-shell {
+  --tui-bg: #111613;
+  --tui-panel: #151b18;
+  --tui-raised: #1a221e;
+  --tui-user: #1d2823;
+  --tui-line: #2b3530;
+  --tui-line-soft: #222b27;
+  --tui-text: #d8dfda;
+  --tui-muted: #89958e;
+  --tui-faint: #58645e;
+  --tui-accent: #7db79f;
+  --tui-cyan: #78adbf;
+  --tui-warm: #d0a16c;
+  --tui-danger: #d7796f;
+  color: var(--tui-text);
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at 96% 0, rgba(83, 139, 115, .09), transparent 30%),
+    var(--tui-bg);
+  border-left-color: #252d29;
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+}
+
+.tui-agent-shell .tui-agent-header {
+  min-height: 52px;
+  flex-basis: 52px;
+  padding: 0 9px 0 13px;
+  background: rgba(18, 24, 21, .96);
+  border-bottom: 1px solid var(--tui-line);
+}
+
+.tui-agent-shell .tui-agent-title {
+  min-width: 0;
+  gap: 9px;
+  color: var(--tui-text);
+}
+
+.tui-agent-shell .tui-agent-sigil {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+  color: var(--tui-accent);
+  background: rgba(125, 183, 159, .09);
+  border: 1px solid rgba(125, 183, 159, .25);
+  border-radius: 3px;
+  font-size: 9px;
+}
+
+.tui-agent-shell .tui-agent-title-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.tui-agent-shell .tui-agent-title-copy strong {
+  color: var(--tui-text);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .04em;
+}
+
+.tui-agent-shell .tui-agent-title-copy small {
+  overflow: hidden;
+  color: var(--tui-faint);
+  font-size: 7px;
+  letter-spacing: .12em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-agent-shell .agent-panel-heading .icon-button {
+  color: #758078;
+  background: transparent;
+}
+
+.tui-agent-shell .agent-panel-heading .icon-button:hover,
+.tui-agent-shell .agent-panel-heading .icon-button.active {
+  color: var(--tui-text);
+  background: var(--tui-raised);
+}
+
+.tui-agent-shell .tui-agent-session {
+  min-height: 32px;
+  flex-basis: 32px;
+  gap: 10px;
+  padding: 0 12px 0 14px;
+  color: var(--tui-muted);
+  background: #131916;
+  border-bottom: 1px solid var(--tui-line-soft);
+}
+
+.tui-agent-location {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  font-size: 8px;
+}
+
+.tui-agent-location span {
+  flex: 0 0 auto;
+  color: var(--tui-cyan);
+}
+
+.tui-agent-location strong {
+  overflow: hidden;
+  color: #9da8a1;
+  font-size: 8px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-agent-location strong::before {
+  content: '/';
+  margin-right: 7px;
+  color: var(--tui-faint);
+}
+
+.tui-agent-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #718078;
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.tui-agent-state i {
+  width: 5px;
+  height: 5px;
+  background: var(--tui-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(125, 183, 159, .45);
+}
+
+.tui-agent-state.running {
+  color: var(--tui-accent);
+}
+
+.tui-agent-state.running i {
+  animation: agent-context-pulse 1.1s ease-in-out infinite;
+}
+
+.tui-agent-state.waiting {
+  color: var(--tui-warm);
+}
+
+.tui-agent-state.waiting i {
+  background: var(--tui-warm);
+  box-shadow: 0 0 8px rgba(208, 161, 108, .4);
+}
+
+.tui-agent-shell .agent-compaction-note {
+  min-height: 27px;
+  padding: 0 14px;
+  color: #819087;
+  background: rgba(55, 84, 70, .13);
+  border-bottom-color: #29362f;
+}
+
+.tui-agent-shell .agent-compaction-note svg {
+  color: var(--tui-accent);
+}
+
+.tui-agent-shell .agent-conversation {
+  gap: 18px;
+  padding: 17px 14px 32px;
+  color: var(--tui-text);
+  background: transparent;
+  scrollbar-color: #39443e transparent;
+  scrollbar-width: thin;
+}
+
+.tui-agent-shell .agent-conversation::-webkit-scrollbar {
+  width: 7px;
+}
+
+.tui-agent-shell .agent-conversation::-webkit-scrollbar-thumb {
+  background: #354039;
+  border: 2px solid var(--tui-bg);
+  border-radius: 10px;
+}
+
+.tui-agent-shell .tui-agent-empty {
+  min-height: 100%;
+  align-items: stretch;
+  justify-content: center;
+  padding: 20px 4px 46px;
+  text-align: left;
+}
+
+.tui-agent-wordmark {
+  width: 66px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 19px 2px;
+  color: var(--tui-accent);
+  border-top: 1px solid #466354;
+  border-bottom: 1px solid #466354;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -.08em;
+  line-height: 1.25;
+}
+
+.tui-agent-wordmark span:last-child {
+  color: var(--tui-warm);
+}
+
+.tui-agent-empty-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tui-agent-empty-heading > span {
+  color: var(--tui-accent);
+  font-size: 13px;
+}
+
+.tui-agent-shell .tui-agent-empty-heading strong {
+  margin: 0;
+  color: var(--tui-text);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tui-agent-shell .tui-agent-empty > p {
+  max-width: none;
+  margin: 9px 0 0 20px;
+  color: var(--tui-muted);
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  font-size: 9px;
+  line-height: 1.75;
+  text-align: left;
+}
+
+.tui-agent-shell .agent-starters {
+  gap: 1px;
+  margin-top: 22px;
+  border-top: 1px solid var(--tui-line-soft);
+  border-bottom: 1px solid var(--tui-line-soft);
+}
+
+.tui-agent-shell .agent-starters button {
+  min-height: 35px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0 5px;
+  color: var(--tui-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--tui-line-soft);
+  border-radius: 0;
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  font-size: 8px;
+}
+
+.tui-agent-shell .agent-starters button:last-child {
+  border-bottom: 0;
+}
+
+.tui-agent-shell .agent-starters button:hover {
+  color: var(--tui-text);
+  background: var(--tui-raised);
+  border-color: var(--tui-line-soft);
+}
+
+.tui-agent-shell .agent-starters code {
+  color: var(--tui-cyan);
+  font-size: 8px;
+}
+
+.tui-agent-shell .agent-starters span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-agent-shell .agent-starters kbd {
+  color: var(--tui-faint);
+  font-family: 'DM Mono', monospace;
+  font-size: 8px;
+}
+
+.tui-agent-shell .agent-user-turn {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+}
+
+.tui-user-prompt {
+  padding-top: 10px;
+  color: var(--tui-accent);
+  font-size: 11px;
+}
+
+.tui-agent-shell .agent-user-turn p {
+  max-width: none;
+  margin: 0;
+  padding: 9px 10px;
+  color: #e0e6e2;
+  background: var(--tui-user);
+  border: 0;
+  border-left: 2px solid #476b59;
+  border-radius: 0;
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.tui-agent-shell .agent-editor-turn {
+  gap: 9px;
+}
+
+.tui-agent-shell .agent-transcript-status {
+  min-height: 18px;
+  gap: 7px;
+  color: var(--tui-faint);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.tui-agent-shell .agent-transcript-status > small {
+  color: var(--tui-faint);
+}
+
+.tui-turn-symbol,
+.tui-trace-symbol,
+.tui-output-symbol {
+  flex: 0 0 auto;
+  color: var(--tui-accent);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.tui-turn-symbol.running,
+.tui-trace-symbol.running,
+.tui-output-symbol.running {
+  display: inline-block;
+  animation: tui-star-pulse 1s steps(8, end) infinite;
+}
+
+.tui-turn-symbol.needs_input {
+  color: var(--tui-warm);
+}
+
+@keyframes tui-star-pulse {
+  50% { opacity: .35; transform: rotate(45deg); }
+}
+
+.tui-agent-shell .agent-transcript {
+  gap: 7px;
+}
+
+.tui-agent-shell .agent-transcript-tool,
+.tui-agent-shell .agent-transcript-input {
+  grid-template-columns: 9px 13px minmax(0, 1fr) auto;
+  gap: 5px;
+  color: #8d9992;
+  font-size: 8px;
+}
+
+.tui-trace-branch {
+  color: #3f4d46;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.tui-agent-shell .agent-transcript-tool > svg,
+.tui-agent-shell .agent-transcript-input > svg {
+  color: #71877c;
+}
+
+.tui-agent-shell .agent-transcript-tool.running {
+  color: #b1bcb5;
+}
+
+.tui-agent-shell .agent-transcript-tool.failed,
+.tui-agent-shell .agent-transcript-tool.interrupted,
+.tui-agent-shell .agent-transcript-tool.cancelled {
+  color: var(--tui-danger);
+}
+
+.tui-agent-shell .agent-transcript-tool small,
+.tui-agent-shell .agent-transcript-input small,
+.tui-agent-shell .agent-transcript-tool > code {
+  color: var(--tui-faint);
+}
+
+.tui-agent-shell .agent-transcript-reasoning,
+.tui-agent-shell .agent-transcript-plan {
+  color: var(--tui-muted);
+}
+
+.tui-agent-shell .agent-transcript-reasoning > summary,
+.tui-agent-shell .agent-transcript-plan > summary {
+  min-height: 21px;
+  gap: 7px;
+  color: #8d9992;
+  font-size: 8px;
+}
+
+.tui-agent-shell .agent-transcript-reasoning > summary > small,
+.tui-agent-shell .agent-transcript-plan > summary > small {
+  color: var(--tui-faint);
+}
+
+.tui-agent-shell .agent-trace-chevron {
+  color: #536059;
+}
+
+.tui-agent-shell .agent-transcript-reasoning > .agent-markdown,
+.tui-agent-shell .agent-transcript-plan > ol {
+  margin-left: 4px;
+  padding-left: 13px;
+  color: #7f8b84;
+  border-left-color: #344039;
+}
+
+.tui-agent-shell .agent-transcript-plan li {
+  color: #6e7a73;
+  font-size: 8px;
+}
+
+.tui-agent-shell .agent-transcript-plan li.completed,
+.tui-agent-shell .agent-transcript-plan li.inProgress {
+  color: #a4b1aa;
+}
+
+.tui-agent-shell .agent-transcript-plan li > span:first-child {
+  border-color: #52625a;
+}
+
+.tui-agent-shell .agent-transcript-output {
+  padding-top: 5px;
+}
+
+.tui-agent-shell .agent-transcript-output > header {
+  gap: 7px;
+  color: var(--tui-text);
+}
+
+.tui-agent-shell .agent-transcript-output > header > strong {
+  color: #c7d0ca;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.tui-agent-shell .agent-markdown {
+  margin-top: 8px;
+  color: #cbd3ce;
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  line-height: 1.75;
+}
+
+.tui-agent-shell .agent-markdown h1,
+.tui-agent-shell .agent-markdown h2,
+.tui-agent-shell .agent-markdown h3,
+.tui-agent-shell .agent-markdown h4 {
+  color: #edf1ee;
+  border-bottom-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-markdown h1 {
+  font-size: 13px;
+}
+
+.tui-agent-shell .agent-markdown h2 {
+  font-size: 12px;
+}
+
+.tui-agent-shell .agent-markdown h3,
+.tui-agent-shell .agent-markdown h4 {
+  font-size: 10px;
+}
+
+.tui-agent-shell .agent-markdown a {
+  color: var(--tui-cyan);
+}
+
+.tui-agent-shell .agent-markdown code {
+  color: #a7d5c1;
+  background: #202b26;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-markdown-code {
+  color: #d8dfda;
+  background: #0b0f0d;
+  border: 1px solid var(--tui-line);
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-markdown blockquote {
+  color: #9eaaa3;
+  background: #171e1a;
+  border-left-color: #526f61;
+}
+
+.tui-agent-shell .agent-markdown-table-wrap {
+  border-color: var(--tui-line);
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-markdown th,
+.tui-agent-shell .agent-markdown td {
+  border-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-markdown th {
+  color: #d6ddd8;
+  background: #1b231f;
+}
+
+.tui-agent-shell .agent-answer-actions {
+  margin: 0 0 0 16px;
+}
+
+.tui-agent-shell .agent-answer-actions button {
+  color: #68766f;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-answer-actions button:hover:not(:disabled) {
+  color: var(--tui-text);
+  background: var(--tui-raised);
+}
+
+.tui-agent-shell .agent-runtime-checks {
+  color: #89a897;
+}
+
+.tui-agent-shell .agent-finding-list {
+  border-top-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-finding-list > div {
+  border-bottom-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-finding-list > div > span {
+  color: var(--tui-warm);
+}
+
+.tui-agent-shell .agent-finding-list p {
+  color: #bfc8c2;
+}
+
+.tui-agent-shell .agent-finding-list small {
+  color: var(--tui-muted);
+}
+
+.tui-agent-shell .agent-choice-card {
+  background: #151c18;
+  border-color: #36433c;
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-choice-card > header span,
+.tui-agent-shell .agent-choice-card > p {
+  color: #d4dcd7;
+}
+
+.tui-agent-shell .agent-choice-card > header small,
+.tui-agent-shell .agent-choice-hint {
+  color: var(--tui-faint);
+}
+
+.tui-agent-shell .agent-choice-options {
+  gap: 0;
+  padding: 0 5px 5px;
+}
+
+.tui-agent-shell .agent-choice-options button {
+  min-height: 41px;
+  color: #aeb9b2;
+  background: transparent;
+  border-color: transparent;
+  border-top-color: var(--tui-line-soft);
+  border-radius: 0;
+}
+
+.tui-agent-shell .agent-choice-options button:hover:not(:disabled),
+.tui-agent-shell .agent-choice-options button.selected {
+  color: #e1e7e3;
+  background: #1e2a24;
+  border-color: #365446;
+}
+
+.tui-agent-shell .agent-choice-options button strong {
+  color: var(--tui-accent);
+  background: transparent;
+  border: 1px solid #405148;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-choice-options button.selected strong {
+  color: #101613;
+  background: var(--tui-accent);
+  border-color: var(--tui-accent);
+}
+
+.tui-agent-shell .agent-choice-options button .agent-choice-copy small {
+  color: #75827b;
+}
+
+.tui-agent-shell .agent-choice-options button:hover:not(:disabled) .agent-choice-copy small,
+.tui-agent-shell .agent-choice-options button.selected .agent-choice-copy small {
+  color: #8fa89c;
+}
+
+.tui-agent-shell .agent-choice-custom input {
+  color: var(--tui-text);
+  background: #101512;
+  border-color: #405148;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-choice-custom button,
+.tui-agent-shell .agent-choice-confirm {
+  color: #101512;
+  background: var(--tui-accent);
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+.tui-agent-shell .agent-mutation-preview {
+  color: #d0c3aa;
+  background: #211d15;
+  border-color: #51452d;
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-mutation-preview header small {
+  color: #9f927a;
+}
+
+.tui-agent-shell .agent-mutation-counts span {
+  color: #d6bc88;
+  background: #322917;
+}
+
+.tui-agent-shell .agent-mutation-preview > button {
+  color: #121713;
+  background: var(--tui-warm);
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-mutation-applied {
+  color: #a5c9b8;
+  background: #18261f;
+  border-color: #345142;
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-diff {
+  background: #111613;
+  border-color: #354039;
+  border-radius: 3px;
+}
+
+.tui-agent-shell .agent-diff > header,
+.tui-agent-shell .agent-diff-hunk,
+.tui-agent-shell .agent-diff > footer {
+  border-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-diff > header > div,
+.tui-agent-shell .agent-diff > header strong {
+  color: #b8c2bc;
+}
+
+.tui-agent-shell .agent-diff-hunk-heading,
+.tui-agent-shell .agent-diff > footer {
+  background: #191f1c;
+}
+
+.tui-agent-shell .agent-diff-hunk-heading > span {
+  color: #a7b1ab;
+}
+
+.tui-agent-shell .agent-diff-hunk-heading > small,
+.tui-agent-shell .agent-diff > footer span {
+  color: #6f7c75;
+}
+
+.tui-agent-shell .agent-diff-hunk-heading button {
+  color: #7c8982;
+}
+
+.tui-agent-shell .agent-diff-hunk-heading button.active {
+  color: #111613;
+  background: var(--tui-accent);
+}
+
+.tui-agent-shell .agent-diff-hunk-heading button.active.reject {
+  background: var(--tui-danger);
+}
+
+.tui-agent-shell .diff-line.removed {
+  color: #d9a19b;
+  background: #261918;
+}
+
+.tui-agent-shell .diff-line.added {
+  color: #a9d4bc;
+  background: #15241c;
+}
+
+.tui-agent-shell .agent-diff > footer button {
+  color: #111613;
+  background: var(--tui-accent);
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-composer-wrap {
+  padding: 8px 10px 0;
+  background: #101512;
+  border-top-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-context-line {
+  padding: 0 3px 7px;
+  color: #6f7b74;
+}
+
+.tui-agent-shell .agent-context-line small,
+.tui-agent-shell .agent-context-line span {
+  color: inherit;
+}
+
+.tui-agent-shell .agent-context-warning {
+  color: var(--tui-warm);
+}
+
+.tui-agent-shell .assistant-form.agent-composer {
+  min-height: 112px;
+  padding: 0;
+  overflow: visible;
+  background: #161c19;
+  border-color: #3a463f;
+  border-radius: 3px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .16);
+}
+
+.tui-agent-shell .assistant-form.agent-composer:focus-within {
+  border-color: #60836f;
+  box-shadow: 0 0 0 1px rgba(125, 183, 159, .12), 0 10px 30px rgba(0, 0, 0, .16);
+}
+
+.tui-agent-shell .assistant-form.agent-composer > .tui-composer-input {
+  min-height: 65px;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: start;
+  gap: 4px;
+  margin: 0;
+  padding: 9px 10px 4px;
+}
+
+.tui-composer-input > span {
+  padding-top: 3px;
+  color: var(--tui-accent);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+}
+
+.tui-agent-shell .assistant-form.agent-composer .tui-composer-input textarea {
+  min-height: 54px;
+  max-height: 156px;
+  padding: 1px 0;
+  color: #dce3de;
+  background: transparent;
+  caret-color: var(--tui-accent);
+  font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.tui-agent-shell .assistant-form.agent-composer textarea::placeholder {
+  color: #5f6a64;
+}
+
+.tui-agent-shell .assistant-form.agent-composer > .agent-attachment-list {
+  padding: 8px 9px 0;
+}
+
+.tui-agent-shell .agent-attachment-chip {
+  color: #a2aea7;
+  background: #202a25;
+  border-color: #35443c;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .assistant-form.agent-composer > .agent-composer-footer {
+  min-height: 38px;
+  margin: 0;
+  padding: 4px 6px 6px 8px;
+  border-top: 1px solid var(--tui-line-soft);
+}
+
+.tui-agent-shell .agent-control-divider {
+  background: #364039;
+}
+
+.tui-agent-shell .agent-composer-controls .agent-mode-trigger,
+.tui-agent-shell .agent-composer-controls .agent-tool-button,
+.tui-agent-shell .agent-composer-controls .agent-control-trigger {
+  color: #7e8a83;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .agent-composer-controls .agent-mode-trigger:hover,
+.tui-agent-shell .agent-composer-controls .agent-mode-trigger.open,
+.tui-agent-shell .agent-composer-controls .agent-tool-button:hover,
+.tui-agent-shell .agent-composer-controls .agent-tool-button.active,
+.tui-agent-shell .agent-composer-controls .agent-control-trigger:hover:not(:disabled),
+.tui-agent-shell .agent-composer-controls .agent-control-trigger.open {
+  color: #d2dad5;
+  background: #222b27;
+}
+
+.tui-agent-shell .agent-composer-controls .agent-mode-trigger.team.active,
+.tui-agent-shell .agent-composer-controls .agent-tool-button.active {
+  color: var(--tui-accent);
+}
+
+.tui-agent-shell .agent-model-glyph {
+  color: #aab5ae;
+  filter: grayscale(.25) brightness(1.35);
+}
+
+.tui-agent-shell .assistant-form.agent-composer .assistant-send {
+  color: #111613;
+  background: var(--tui-accent);
+  border-radius: 2px;
+}
+
+.tui-agent-shell .assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
+  background: #9acbb5;
+}
+
+.tui-agent-shell .assistant-form.agent-composer .assistant-send:disabled {
+  color: #758078;
+  background: #303a35;
+}
+
+.tui-agent-shell .assistant-form.agent-composer .assistant-send.stop {
+  color: #160f0e;
+  background: var(--tui-danger);
+}
+
+.tui-agent-shell .assistant-form.agent-composer .assistant-send.steer {
+  color: #101613;
+  background: var(--tui-cyan);
+}
+
+.tui-agent-shell .agent-composer-blocked {
+  color: #d9bd89;
+  background: #241f16;
+  border-color: #4f4229;
+  border-radius: 2px;
+}
+
+.tui-agent-shell .assistant-form.agent-composer.waiting-input {
+  background: #171b17;
+  border-color: #49422e;
+}
+
+.tui-agent-shell .assistant-form.agent-composer.waiting-input textarea:disabled {
+  color: #7a817b;
+}
+
+.tui-agent-shell .agent-composer-suggestions,
+.tui-agent-shell .agent-control-popover {
+  color: var(--tui-text);
+  background: #161c19;
+  border-color: #3a463f;
+  border-radius: 3px;
+  box-shadow: 0 -14px 38px rgba(0, 0, 0, .34);
+}
+
+.tui-agent-shell .agent-suggestion-section-label,
+.tui-agent-shell .agent-control-popover-heading small,
+.tui-agent-shell .agent-control-option-copy small {
+  color: #68746d;
+}
+
+.tui-agent-shell .agent-suggestion-list > button,
+.tui-agent-shell .agent-control-option {
+  color: #a7b2ab;
+  background: transparent;
+  border-color: transparent;
+}
+
+.tui-agent-shell .agent-suggestion-list > button.active,
+.tui-agent-shell .agent-suggestion-list > button:hover,
+.tui-agent-shell .agent-control-option:hover,
+.tui-agent-shell .agent-control-option:focus-visible,
+.tui-agent-shell .agent-control-option.selected {
+  color: #e0e6e2;
+  background: #202a25;
+  border-color: #32453b;
+}
+
+.tui-agent-shell .agent-suggestion-list > button strong,
+.tui-agent-shell .agent-control-option-copy strong,
+.tui-agent-shell .agent-control-popover-heading strong {
+  color: inherit;
+}
+
+.tui-agent-shell .agent-suggestion-list > button small,
+.tui-agent-shell .agent-suggestion-list > button em {
+  color: #727f78;
+}
+
+.tui-agent-shell .agent-suggestion-footer {
+  color: #68746d;
+  background: #121714;
+  border-top-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-suggestion-footer kbd {
+  color: #a0ada5;
+  background: #202923;
+  border-color: #39443e;
+}
+
+.tui-agent-shell .agent-control-option-mark {
+  color: var(--tui-accent);
+  background: #202923;
+  border-color: #3b4a42;
+}
+
+.tui-agent-shell .tui-agent-statusline {
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 -10px;
+  padding: 0 10px 0 12px;
+  color: #617068;
+  background: #0d120f;
+  border-top: 1px solid #29322e;
+  font-family: 'DM Mono', monospace;
+  font-size: 7px;
+}
+
+.tui-agent-shell .tui-agent-statusline .agent-token-usage {
+  flex: 0 1 auto;
+  gap: 6px;
+  color: #6f7d75;
+  font-size: 7px;
+}
+
+.tui-agent-shell .tui-agent-statusline .agent-token-usage span:first-child {
+  color: #829087;
+  font-family: 'DM Mono', monospace;
+  font-size: 7px;
+  font-weight: 400;
+}
+
+.tui-agent-shell .tui-context-status {
+  width: auto;
+  height: 23px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 2px;
+  color: var(--tui-accent);
+  border-radius: 2px;
+}
+
+.tui-agent-shell .tui-context-status svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tui-agent-shell .tui-context-status span {
+  color: #78867e;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.tui-agent-shell .agent-context-track {
+  stroke: #344039;
+}
+
+.tui-agent-shell .tui-status-model {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: #748179;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-agent-shell .agent-history-view {
+  color: var(--tui-text);
+  background: var(--tui-bg);
+}
+
+.tui-agent-shell .agent-history-toolbar,
+.tui-agent-shell .agent-history-search {
+  background: #131916;
+  border-color: var(--tui-line);
+}
+
+.tui-agent-shell .agent-history-toolbar strong,
+.tui-agent-shell .agent-history-search input,
+.tui-agent-shell .agent-history-item-main > button > span {
+  color: #d4dcd7;
+}
+
+.tui-agent-shell .agent-history-toolbar small,
+.tui-agent-shell .agent-history-item-main > button > small,
+.tui-agent-shell .agent-history-meta,
+.tui-agent-shell .agent-history-empty {
+  color: #738078;
+}
+
+.tui-agent-shell .agent-history-search input {
+  background: transparent;
+}
+
+.tui-agent-shell .agent-history-item {
+  border-color: var(--tui-line-soft);
+}
+
+.tui-agent-shell .agent-history-item:hover,
+.tui-agent-shell .agent-history-item.current {
+  background: #1a231e;
+}
+
+.tui-agent-shell .agent-history-item.current {
+  border-color: #3f5f50;
+}
+
+.tui-agent-shell .agent-history-actions button {
+  color: #738078;
+}
+
+.tui-agent-shell .agent-history-actions button:hover:not(:disabled),
+.tui-agent-shell .agent-history-actions button.active {
+  color: var(--tui-accent);
+  background: #243029;
+}
+
+.tui-agent-shell.collapsed {
+  background: #101512;
+}
+
+.tui-agent-shell.collapsed .assistant-reopen {
+  color: var(--tui-accent);
+  background: #17201c;
+  border: 1px solid #33423a;
+}
+
+@media (max-width: 1050px) and (min-width: 761px) {
+  .editor-page .tui-agent-shell {
+    width: min(430px, 48vw);
+    background: var(--tui-bg);
+    border-left: 1px solid #29322e;
+    box-shadow: -18px 0 50px rgba(5, 8, 6, .3);
+  }
+}
+
+@media (max-width: 760px) {
+  .editor-page .tui-agent-shell {
+    background:
+      radial-gradient(circle at 96% 0, rgba(83, 139, 115, .1), transparent 32%),
+      var(--tui-bg);
+    box-shadow: none;
+  }
+
+  .editor-page .tui-agent-shell .agent-panel-heading {
+    min-height: calc(52px + env(safe-area-inset-top, 0px));
+    flex-basis: calc(52px + env(safe-area-inset-top, 0px));
+    background: #121815;
+  }
+
+  .editor-page .tui-agent-shell .agent-conversation {
+    padding: 18px 15px 28px;
+  }
+
+  .editor-page .tui-agent-shell .agent-composer-wrap {
+    padding: 8px 10px 0;
+  }
+
+  .editor-page .tui-agent-shell .assistant-form.agent-composer {
+    min-height: 116px;
+  }
+
+  .editor-page .tui-agent-shell .assistant-form.agent-composer .tui-composer-input textarea {
+    min-height: 66px;
+    max-height: 144px;
+    padding: 1px 0;
+  }
+
+  .editor-page .tui-agent-shell.collapsed .assistant-reopen {
+    color: #111613;
+    background: var(--tui-accent);
+    border-color: rgba(255, 255, 255, .2);
+  }
+}

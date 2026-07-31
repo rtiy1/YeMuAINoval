@@ -4067,10 +4067,13 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
 
         <div className="workspace-resizer assistant-resizer" role="separator" tabIndex={0} aria-label="调整助手栏宽度" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="520" aria-valuenow={workspaceWidths.assistant} onKeyDown={(event) => nudgeWorkspace('assistant', event)} onPointerDown={(event) => startWorkspaceResize('assistant', event)} onPointerMove={resizeWorkspace} onPointerUp={stopWorkspaceResize} onPointerCancel={stopWorkspaceResize} />
 
-        <aside className={`insight-rail agent-rail ${assistantOpen ? '' : 'collapsed'}`}>
+        <aside className={`insight-rail agent-rail tui-agent-shell ${assistantOpen ? '' : 'collapsed'}`}>
           {assistantOpen ? <>
-            <div className="assistant-panel-heading agent-panel-heading">
-              <div className="assistant-title"><Bot size={16} /><strong>{ASSISTANT_NAME}</strong><span>AGENT</span></div>
+            <div className="assistant-panel-heading agent-panel-heading tui-agent-header">
+              <div className="assistant-title tui-agent-title">
+                <span className="tui-agent-sigil" aria-hidden="true">◆</span>
+                <span className="tui-agent-title-copy"><strong>{ASSISTANT_NAME}</strong><small>YEMU AGENT · WEB TTY</small></span>
+              </div>
               <div><button className={`icon-button small ${assistantHistoryOpen ? 'active' : ''}`} aria-label="会话历史" title="会话历史" onClick={openAssistantHistoryView}><History size={15} /></button><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
             </div>
             {assistantHistoryOpen ? <AgentThreadHistory
@@ -4085,20 +4088,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               onFavorite={(thread, isFavorited) => updateHistoricalThread(thread, { isFavorited })}
               onArchive={archiveHistoricalThread}
             /> : <>
-            <div className="agent-session-strip">
-              <div className="agent-token-usage" title={agentSessionUsage.estimated ? '部分模型未返回 usage，缺失部分为估算值' : '模型返回的 Token 用量'}>
-                <span>Tokens{agentSessionUsage.estimated && agentSessionUsage.inputTokens ? ' ≈' : ''}</span>
-                <span>↑ {compactTokenCount(agentSessionUsage.inputTokens)}</span>
-                <span>↓ {compactTokenCount(agentSessionUsage.outputTokens)}</span>
-                <span>◇ {compactTokenCount(agentSessionUsage.cachedInputTokens)}</span>
-                {agentSessionUsage.reasoningTokens > 0 && <span>◈ {compactTokenCount(agentSessionUsage.reasoningTokens)}</span>}
+            <div className="agent-session-strip tui-agent-session">
+              <div className="tui-agent-location" title={`${project?.title} / ${displayChapter.title}`}>
+                <span>~/story</span>
+                <strong>{displayChapter.title}</strong>
               </div>
-              <button type="button" className={`agent-context-progress ${assistantRunning ? 'running' : ''}`} title={agentContextLabel} aria-label={agentContextLabel} onClick={onOpenSettings}>
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle className="agent-context-track" cx="12" cy="12" r="9" pathLength="100" />
-                  <circle className="agent-context-value" cx="12" cy="12" r="9" pathLength="100" strokeDasharray={`${agentContextPercent} 100`} />
-                </svg>
-              </button>
+              <span className={`tui-agent-state ${assistantRunning ? 'running' : assistantAwaitingInput ? 'waiting' : ''}`}>
+                <i aria-hidden="true" />
+                {assistantRunning ? 'RUNNING' : assistantAwaitingInput ? 'INPUT' : 'READY'}
+              </span>
             </div>
             {assistantThread?.compactedTurnCount > 0 && <div className="agent-compaction-note" title={assistantThread.contextSummary || '较早对话已压缩为滚动摘要，并会继续参与后续写作'}>
               <BrainCircuit size={12} />
@@ -4106,18 +4104,18 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
             </div>}
             <div className="agent-conversation" ref={assistantStreamRef}>
               {assistantLoading && <div className="agent-empty"><LoaderCircle size={20} className="spin" /><strong>正在恢复会话</strong><p>读取本章的 Agent Turn 与任务状态。</p></div>}
-              {!assistantLoading && assistantMessages.length === 0 && <div className="agent-empty">
-                <div className="agent-empty-mark"><Bot size={20} /></div>
-                <strong>和 {ASSISTANT_NAME} 一起写</strong>
-                <p>Agent 会读取当前作品、章节正文和选区，执行任务后再由你决定是否应用修改。</p>
+              {!assistantLoading && assistantMessages.length === 0 && <div className="agent-empty tui-agent-empty">
+                <div className="tui-agent-wordmark" aria-hidden="true"><span>YE</span><span>MU</span></div>
+                <div className="tui-agent-empty-heading"><span>❯</span><strong>和 {ASSISTANT_NAME} 一起写</strong></div>
+                <p>当前作品、章节正文与选区已经挂载。输入自然语言，或从一个命令开始。</p>
                 <div className="agent-starters">
-                  <button onClick={(event) => submitAssistant(event, '/write 加强冲突，结尾留下新的悬念')}><PenLine size={13} />续写本章</button>
-                  <button onClick={(event) => submitAssistant(event, '/review 重点检查人物动机和节奏')}><BrainCircuit size={13} />审查章节</button>
-                  <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><Wand2 size={13} />自然化润色</button>
+                  <button onClick={(event) => submitAssistant(event, '/write 加强冲突，结尾留下新的悬念')}><code>/write</code><span>续写本章并加强冲突</span><kbd>↵</kbd></button>
+                  <button onClick={(event) => submitAssistant(event, '/review 重点检查人物动机和节奏')}><code>/review</code><span>检查人物动机与节奏</span><kbd>↵</kbd></button>
+                  <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><code>/polish</code><span>保留语气并自然化润色</span><kbd>↵</kbd></button>
                 </div>
               </div>}
               {assistantMessages.map((message, index) => message.role === 'user'
-                ? <div className="agent-user-turn" key={message.id}><p>{message.text}</p></div>
+                ? <div className="agent-user-turn" key={message.id}><span className="tui-user-prompt" aria-hidden="true">❯</span><p>{message.text}</p></div>
                 : <AgentEditorTurn
                   key={message.id}
                   run={message}
@@ -4137,19 +4135,22 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               <form className={`assistant-form agent-composer ${assistantAwaitingInput ? 'waiting-input' : ''}`} onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
                 {assistantAttachments.length > 0 && <div className="agent-attachment-list" aria-label="已添加的上下文文件">{assistantAttachments.map((file) => <span className="agent-attachment-chip" key={file.key}><FileText size={11} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={() => removeAssistantAttachment(file.key)}><X size={10} /></button></span>)}</div>}
-                <textarea
-                  ref={assistantInputRef}
-                  value={assistantInput}
-                  disabled={assistantLoading || assistantAwaitingInput}
-                  onChange={handleAssistantInputChange}
-                  onClick={(event) => refreshAssistantSuggestion(event.currentTarget.value, event.currentTarget.selectionStart)}
-                  onKeyDown={handleAssistantComposerKeyDown}
-                  rows={3}
-                  placeholder={assistantAwaitingInput ? '请先完成上方选择…' : assistantRunning ? '追加指令到当前轮次…' : '让 Agent 续写、审查或修改… 输入 @ 添加文件，/ 使用命令'}
-                  aria-label="输入问题或需求"
-                  aria-autocomplete="list"
-                  aria-expanded={Boolean(assistantSuggestion)}
-                />
+                <div className="tui-composer-input">
+                  <span aria-hidden="true">❯</span>
+                  <textarea
+                    ref={assistantInputRef}
+                    value={assistantInput}
+                    disabled={assistantLoading || assistantAwaitingInput}
+                    onChange={handleAssistantInputChange}
+                    onClick={(event) => refreshAssistantSuggestion(event.currentTarget.value, event.currentTarget.selectionStart)}
+                    onKeyDown={handleAssistantComposerKeyDown}
+                    rows={3}
+                    placeholder={assistantAwaitingInput ? '请先完成上方选择…' : assistantRunning ? '追加指令到当前轮次…' : '输入任务；@ 添加文件，/ 使用命令'}
+                    aria-label="输入问题或需求"
+                    aria-autocomplete="list"
+                    aria-expanded={Boolean(assistantSuggestion)}
+                  />
+                </div>
                 {assistantSuggestion && <div className="agent-composer-suggestions" role="listbox" aria-label={assistantSuggestion.type === 'command' ? '命令建议' : '文件建议'}>
                   <div className="agent-suggestion-list">
                     {assistantSuggestion.type === 'command' ? <>
@@ -4221,6 +4222,23 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   </div>
                 </div>
               </form>
+              <div className="tui-agent-statusline">
+                <div className="agent-token-usage" title={agentSessionUsage.estimated ? '部分模型未返回 usage，缺失部分为估算值' : '模型返回的 Token 用量'}>
+                  <span>{agentSessionUsage.estimated && agentSessionUsage.inputTokens ? 'tokens ≈' : 'tokens'}</span>
+                  <span>↑{compactTokenCount(agentSessionUsage.inputTokens)}</span>
+                  <span>↓{compactTokenCount(agentSessionUsage.outputTokens)}</span>
+                  <span>◇{compactTokenCount(agentSessionUsage.cachedInputTokens)}</span>
+                  {agentSessionUsage.reasoningTokens > 0 && <span>◈{compactTokenCount(agentSessionUsage.reasoningTokens)}</span>}
+                </div>
+                <button type="button" className={`agent-context-progress tui-context-status ${assistantRunning ? 'running' : ''}`} title={agentContextLabel} aria-label={agentContextLabel} onClick={onOpenSettings}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle className="agent-context-track" cx="12" cy="12" r="9" pathLength="100" />
+                    <circle className="agent-context-value" cx="12" cy="12" r="9" pathLength="100" strokeDasharray={`${agentContextPercent} 100`} />
+                  </svg>
+                  <span>{agentContextPercent}% ctx</span>
+                </button>
+                <span className="tui-status-model" title={agentModel || '默认模型'}>{agentModel || 'default'} · {agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || '自动'}</span>
+              </div>
             </div>
             </>}
           </> : <button className="assistant-reopen" aria-label={`展开${ASSISTANT_NAME}`} title={`展开${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(true)}><Bot size={17} /><span>AI</span><ChevronLeft size={14} /></button>}

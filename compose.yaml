@@ -1,0 +1,135 @@
+name: yemu-novel
+
+x-yemu-environment: &yemu-environment
+  NODE_ENV: production
+  HOST: 0.0.0.0
+  PORT: 8787
+  AUTH_SECRET: ${AUTH_SECRET:?请在 .env 中设置 AUTH_SECRET}
+  WEB_ORIGIN: ${YEMU_PUBLIC_URL:-http://127.0.0.1:8787}
+  APP_PUBLIC_URL: ${YEMU_PUBLIC_URL:-http://127.0.0.1:8787}
+  TRUST_PROXY: ${TRUST_PROXY:-1}
+  REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-auto}
+  REGISTRATION_MODE: ${DOCKER_REGISTRATION_MODE:-closed}
+  SKILL_REVIEW_MODE: ${DOCKER_SKILL_REVIEW_MODE:-required}
+  STORY_DATA_FILE: /app/data/db.json
+  STORY_SKILL_MARKET_DIR: /app/data/skill-market
+  DATABASE_URL: postgresql://${POSTGRES_USER:-yemu}:${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-yemu}
+  DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+  DATABASE_SSL: "false"
+  REDIS_URL: redis://redis:6379/0
+  AI_TASK_QUEUE_ENABLED: "true"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yemu}
+      POSTGRES_USER: ${POSTGRES_USER:-yemu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - backend
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yemu-novel-agent:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${YEMU_ENV_FILE:-.env}
+    environment: *yemu-environment
+    ports:
+      - "${YEMU_BIND_ADDRESS:-127.0.0.1}:${YEMU_PORT:-8787}:8787"
+    volumes:
+      - yemu-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8787/api/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - frontend
+      - backend
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yemu-novel-agent:local
+    restart: unless-stopped
+    init: true
+    command: ["bun", "server/ai-worker.mjs"]
+    env_file:
+      - ${YEMU_ENV_FILE:-.env}
+    environment: *yemu-environment
+    volumes:
+      - yemu-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const ready = Bun.file('/tmp/story-ai-worker-ready'); const ok = await ready.exists() && Date.now() - ready.lastModified < 30000; process.exit(ok ? 0 : 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - frontend
+      - backend
+
+volumes:
+  postgres-data:
+  redis-data:
+  yemu-data:
+
+networks:
+  frontend:
+  backend:
+    internal: true

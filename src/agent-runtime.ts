@@ -290,15 +290,26 @@ function cleanBaseUrl(value: string | undefined, fallback: string): string {
 	return candidate.replace(/\/+$/, "");
 }
 
+function openAICompatibleProvider(baseUrl: string): string {
+	try {
+		const hostname = new URL(baseUrl).hostname.toLowerCase();
+		if (hostname === "api.openai.com") return "openai";
+		if (hostname === "api.deepseek.com" || hostname.endsWith(".deepseek.com")) return "deepseek";
+	} catch {
+		// Invalid URLs are rejected by the settings API before reaching the runtime.
+	}
+	return "openai-compatible";
+}
+
 function positiveInteger(value: number | undefined, fallback: number, maximum: number): number {
 	return Number.isFinite(value) && Number(value) > 0 ? Math.min(Math.floor(Number(value)), maximum) : fallback;
 }
 
 function modelForConfig(config: YemuModelConfig | null | undefined): { model: Model; apiKey: string; effort?: Effort } {
-	const provider = config?.provider === "anthropic" ? "anthropic" : "openai";
+	const configuredProvider = config?.provider === "anthropic" ? "anthropic" : "openai";
 	const apiKey =
 		config?.api_key?.trim() ||
-		(provider === "anthropic" ? Bun.env.ANTHROPIC_API_KEY?.trim() : Bun.env.OPENAI_API_KEY?.trim()) ||
+		(configuredProvider === "anthropic" ? Bun.env.ANTHROPIC_API_KEY?.trim() : Bun.env.OPENAI_API_KEY?.trim()) ||
 		"";
 	if (!apiKey) {
 		throw Object.assign(new Error("模型 API Key 未配置，请先在设置中填写密钥"), { status: 400 });
@@ -306,13 +317,14 @@ function modelForConfig(config: YemuModelConfig | null | undefined): { model: Mo
 
 	const id =
 		config?.model?.trim() ||
-		(provider === "anthropic" ? Bun.env.ANTHROPIC_MODEL?.trim() : Bun.env.OPENAI_MODEL?.trim()) ||
-		(provider === "anthropic" ? "claude-sonnet-4-5" : "gpt-4o-mini");
-	const api = provider === "anthropic" ? "anthropic-messages" : "openai-completions";
+		(configuredProvider === "anthropic" ? Bun.env.ANTHROPIC_MODEL?.trim() : Bun.env.OPENAI_MODEL?.trim()) ||
+		(configuredProvider === "anthropic" ? "claude-sonnet-4-5" : "gpt-4o-mini");
+	const api = configuredProvider === "anthropic" ? "anthropic-messages" : "openai-completions";
 	const baseUrl =
-		provider === "anthropic"
+		configuredProvider === "anthropic"
 			? cleanBaseUrl(config?.api_base_url || Bun.env.ANTHROPIC_BASE_URL, "https://api.anthropic.com")
 			: cleanBaseUrl(config?.api_base_url || Bun.env.OPENAI_BASE_URL, "https://api.openai.com/v1");
+	const provider = configuredProvider === "anthropic" ? "anthropic" : openAICompatibleProvider(baseUrl);
 	const effort = config?.reasoning_effort;
 	const model = buildModel({
 		id,
@@ -555,6 +567,9 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		if (request.callbacks?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
 		await agent.prompt(userPrompt);
 		await callbackQueue;
+		if (agent.state.error) {
+			throw new Error(agent.state.error);
+		}
 		const messages = agent.state.messages;
 		const fallbackText = assistantText(messages);
 		const submission: StoryAgentResult = toolState.submission

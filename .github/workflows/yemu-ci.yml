@@ -10,6 +10,10 @@ on:
       - "skills/**"
       - "public/**"
       - "index.html"
+      - ".dockerignore"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "deploy.sh"
       - "vite.config.js"
       - "tsconfig.app.json"
       - "packages/agent/**"
@@ -27,6 +31,10 @@ on:
       - "skills/**"
       - "public/**"
       - "index.html"
+      - ".dockerignore"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "deploy.sh"
       - "vite.config.js"
       - "tsconfig.app.json"
       - "packages/agent/**"
@@ -64,6 +72,16 @@ jobs:
 
       - name: Type-check YeMu agent
         run: bun run check
+
+      - name: Validate server deployment script
+        run: |
+          bash -n deploy.sh
+          cp .env.example .env
+          AUTH_SECRET=ci-only-auth-secret-with-at-least-32-characters \
+          POSTGRES_PASSWORD=ci-only-postgres-password \
+          YEMU_ENV_FILE=.env \
+          docker compose config --quiet
+          rm .env
 
       - name: Run YeMu tests
         run: bun run test

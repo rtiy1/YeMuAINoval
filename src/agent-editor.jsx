@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
-  Bot,
-  BrainCircuit,
   Check,
   CheckSquare2,
   ChevronRight,
-  CircleHelp,
   Code2,
   Copy,
   FileText,
-  List,
   LoaderCircle,
   RotateCcw,
   ShieldAlert,
@@ -82,6 +78,7 @@ function ToolItem({ item }) {
       : itemDuration(item)
 
   return <div className={`agent-transcript-tool ${status}`} data-item-type={item.type}>
+    <span className="tui-trace-branch" aria-hidden="true">{status === 'running' ? '├' : '└'}</span>
     {status === 'running'
       ? <LoaderCircle size={13} className="spin" />
       : failed
@@ -101,9 +98,9 @@ function ReasoningItem({ item }) {
   if (!text) return null
   return <details className="agent-transcript-reasoning" open={item.status === 'inProgress'}>
     <summary>
-      {item.status === 'inProgress'
-        ? <LoaderCircle size={13} className="spin" />
-        : <BrainCircuit size={13} />}
+      <span className={`tui-trace-symbol ${item.status === 'inProgress' ? 'running' : ''}`} aria-hidden="true">
+        {item.status === 'inProgress' ? '✻' : '◇'}
+      </span>
       <span>思考</span>
       {itemDuration(item) && <small>{itemDuration(item)}</small>}
       <ChevronRight size={12} className="agent-trace-chevron" />
@@ -118,6 +115,7 @@ function CompletedInputItem({ item }) {
     .filter(Boolean)
     .join('；')
   return <div className="agent-transcript-input" data-item-type={item.type}>
+    <span className="tui-trace-branch" aria-hidden="true">└</span>
     <CheckSquare2 size={13} />
     <div><span>{questions || '补充信息'}</span><small>{itemResponse(item) || '已回答'}</small></div>
   </div>
@@ -128,7 +126,7 @@ function OutputItem({ item, assistantName, streaming = false }) {
   if (!text) return null
   const plan = item.type === 'plan'
   return <section className={`agent-transcript-output ${streaming ? 'streaming' : ''}`} data-item-type={item.type}>
-    <header>{plan ? <List size={14} /> : <Bot size={14} />}<strong>{plan ? '计划' : assistantName}</strong></header>
+    <header><span className={`tui-output-symbol ${streaming ? 'running' : ''}`} aria-hidden="true">{plan ? '▤' : streaming ? '✻' : '◆'}</span><strong>{plan ? '计划' : assistantName}</strong></header>
     <AgentMarkdown value={text} streaming={streaming} />
   </section>
 }
@@ -137,7 +135,7 @@ function PlanSteps({ plan }) {
   if (!plan.length) return null
   const completed = plan.filter((step) => step.status === 'completed').length
   return <details className="agent-transcript-plan" open={plan.some((step) => step.status === 'inProgress')}>
-    <summary><List size={13} /><span>执行计划</span><small>{completed}/{plan.length}</small><ChevronRight size={12} className="agent-trace-chevron" /></summary>
+    <summary><span className="tui-trace-symbol" aria-hidden="true">▤</span><span>执行计划</span><small>{completed}/{plan.length}</small><ChevronRight size={12} className="agent-trace-chevron" /></summary>
     <ol>{plan.map((step, index) => <li className={step.status} key={`${step.step}-${index}`}>
       {step.status === 'completed'
         ? <Check size={11} />
@@ -238,11 +236,9 @@ export function AgentEditorTurn({
 
   return <article className={`agent-turn agent-editor-turn ${run.status}`} data-agent-protocol={view.usesItemProtocol ? 'items' : 'legacy'}>
     <div className="agent-transcript-status">
-      {['queued', 'running'].includes(run.status)
-        ? <LoaderCircle size={12} className="spin" />
-        : view.effectiveStatus === 'needs_input'
-          ? <CircleHelp size={12} />
-          : <Check size={12} />}
+      <span className={`tui-turn-symbol ${['queued', 'running'].includes(run.status) ? 'running' : view.effectiveStatus}`} aria-hidden="true">
+        {['queued', 'running'].includes(run.status) ? '✻' : view.effectiveStatus === 'needs_input' ? '?' : '◆'}
+      </span>
       <span>{turnStatusLabels[view.effectiveStatus] || '运行中'}</span>
       <small>{formatAgentDuration(elapsed)}</small>
     </div>
