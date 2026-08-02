@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseCompactCommandArgs, parseSlashCommand, resolveSelection } from './agent-commands.mjs'
+import { EDITOR_AGENT_COMMANDS, parseCompactCommandArgs, parseSlashCommand, resolveSelection } from './agent-commands.mjs'
 
 test('editor slash commands retain the full Chinese argument', () => {
   assert.deepEqual(parseSlashCommand('/write 加强章末钩子'), { name: 'write', argument: '加强章末钩子' })
   assert.deepEqual(parseSlashCommand('/write:加强章末钩子'), { name: 'write', argument: '加强章末钩子' })
   assert.deepEqual(parseSlashCommand('/clear'), { name: 'new', argument: '' })
   assert.deepEqual(parseSlashCommand('/q'), { name: 'quit', argument: '' })
+  assert.deepEqual(parseSlashCommand('/续写 加强冲突'), { name: 'continue', argument: '加强冲突' })
+  assert.deepEqual(parseSlashCommand('/重写:保留结局'), { name: 'rewrite', argument: '保留结局' })
   assert.equal(parseSlashCommand('直接对话'), null)
+})
+
+test('writing commands remain first-class entries in the slash menu', () => {
+  assert.deepEqual(
+    EDITOR_AGENT_COMMANDS.slice(1, 7).map((command) => command.name),
+    ['write', 'continue', 'rewrite', 'outline', 'expand', 'shorten'],
+  )
+  assert.equal(EDITOR_AGENT_COMMANDS.find((command) => command.name === 'write')?.group, 'writing')
 })
 
 test('compact command follows TUI mode and focus parsing', () => {

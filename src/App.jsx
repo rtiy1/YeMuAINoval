@@ -3326,6 +3326,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     if (command.name === 'tools') {
       appendLocalCommandResult(message, [
         'read_story_skill　读取 Story Skill 与参考文件',
+        'web_search　联网检索公开资料（开启联网或使用 /search 时可用）',
         'list_story_files　浏览 PostgreSQL 作品工作区',
         'read_story_file　读取 PostgreSQL 作品文件',
         'write_story_file　创建或更新作品文件',
@@ -3640,7 +3641,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       : !explicitCommand && agentMode === 'plan'
         ? `story-${project?.type === '短篇' ? 'short' : 'long'}-analyze`
         : command.skill
-    const effectiveSkill = agentWebSearch ? 'story-search' : modeSkill
+    // 联网是工具权限，不能覆盖 /write 等命令已经选定的 Story Skill。
+    const effectiveSkill = modeSkill
     const textarea = textareaRef.current
     const selectionStart = textarea?.selectionStart ?? draft.length
     const selectionEnd = textarea?.selectionEnd ?? selectionStart

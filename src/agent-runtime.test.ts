@@ -97,6 +97,13 @@ function deepSeekToolSseResponse(id: string, name: string, args: Record<string, 
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function providerErrorResponse(status: number, message: string): Response {
+	return new Response(
+		JSON.stringify({ error: { message, type: "server_error" } }),
+		{ status, headers: { "content-type": "application/json" } },
+	);
+}
+
 test("web agent runtime discovers Story Skills and validates model credentials", async () => {
 	const previousOpenAIKey = Bun.env.OPENAI_API_KEY;
 	const previousAnthropicKey = Bun.env.ANTHROPIC_API_KEY;
@@ -231,6 +238,131 @@ test("reasoning-only length stops automatically continue to a visible answer", a
 		expect(payloads[1]?.reasoning_effort).toBe("high");
 		const recoveryMessages = payloads[1]?.messages;
 		expect(JSON.stringify(recoveryMessages)).toContain("系统续跑");
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("writing skills keep their route while the TUI web search tool is enabled", async () => {
+	const responses = [
+		deepSeekToolSseResponse("call-search", "web_search", { query: "宋代夜市 营业时间", limit: 3 }),
+		deepSeekToolSseResponse("call-submit-search", "submit_story_result", {
+			status: "completed",
+			output: "已结合检索资料给出写作建议。",
+		}),
+		deepSeekSseResponse("完成"),
+	];
+	const searchQueries: string[] = [];
+	const requestPayloads: Array<Record<string, unknown>> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			requestPayloads.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>);
+			return responses[calls++] ?? deepSeekSseResponse("完成");
+		},
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "续写夜市场景，并核对宋代夜市资料",
+			skill: "story-long-write",
+			payload: { tool_policy: { externalSearch: "allow", mutateStoryData: "propose" } },
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		}, {
+			searchWeb: async (params) => {
+				searchQueries.push(params.query);
+				return {
+					content: [{ type: "text", text: "[1] 宋代城市夜市资料\n    https://example.test/song-night-market" }],
+					details: { response: { provider: "test", sources: [{ url: "https://example.test/song-night-market" }] } },
+				};
+			},
+		});
+		expect(response.selected_skill).toBe("story-long-write");
+		expect(response.result.output).toBe("已结合检索资料给出写作建议。");
+		expect(searchQueries).toEqual(["宋代夜市 营业时间"]);
+		const firstTools = Array.isArray(requestPayloads[0]?.tools) ? requestPayloads[0].tools : [];
+		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).toContain("web_search");
+		expect(JSON.stringify(requestPayloads[1]?.messages)).toContain("example.test/song-night-market");
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("transient provider failures retry once without replaying visible output", async () => {
+	const responses = [
+		providerErrorResponse(503, "Service temporarily unavailable"),
+		deepSeekSseResponse("自动重试后完成。"),
+	];
+	const deltas: string[] = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("完成"),
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "分析这个开场",
+			skill: "story-long-analyze",
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		}, { onDelta: delta => deltas.push(delta) });
+		expect(calls).toBe(2);
+		expect(deltas.join("")).toBe("自动重试后完成。");
+		expect(response.result.output).toBe("自动重试后完成。");
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("context overflow compacts the active Web turn and continues", async () => {
+	const payloadBodies: string[] = [];
+	const responses = [
+		providerErrorResponse(400, "This model's maximum context length is 128000 tokens, but the request is too large."),
+		deepSeekSseResponse("压缩上下文后已继续完成。"),
+	];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			payloadBodies.push(typeof init?.body === "string" ? init.body : "");
+			return responses[calls++] ?? deepSeekSseResponse("完成");
+		},
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "根据附件分析并续写",
+			skill: "story-long-write",
+			payload: {
+				attached_files: [
+					{ name: "资料一.md", content: "甲".repeat(30_000) },
+					{ name: "资料二.md", content: "乙".repeat(30_000) },
+				],
+				conversation: Array.from({ length: 12 }, (_, index) => ({ role: "user", text: `旧消息${index}：${"丙".repeat(2_000)}` })),
+			},
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+				context_window: 128_000,
+			},
+		});
+		expect(calls).toBe(2);
+		expect(response.result.output).toBe("压缩上下文后已继续完成。");
+		expect(payloadBodies[1]?.length).toBeLessThan(payloadBodies[0]?.length ?? 0);
+		expect(payloadBodies[1]).toContain("上下文压缩省略");
 	} finally {
 		fetchSpy.mockRestore();
 	}

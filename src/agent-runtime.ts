@@ -1,9 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Agent } from "@yemu/agent-core/agent";
-import type { AgentEvent, AgentTool } from "@yemu/agent-core/types";
+import { Agent, type AgentPromptOptions } from "@yemu/agent-core/agent";
+import { estimateTokens } from "@yemu/agent-core/compaction";
+import type { AgentEvent, AgentMessage, AgentTool } from "@yemu/agent-core/types";
 import { buildModel } from "@yemu/model-catalog/build";
 import { type AssistantMessage, type Effort, type Model, z } from "@yemu/model-runtime";
+import * as AIError from "@yemu/model-runtime/error";
 import { render } from "@yemu/utils/prompt";
 import agentRequestTemplate from "./prompts/agent-request.md" with { type: "text" };
 import agentSystemTemplate from "./prompts/agent-system.md" with { type: "text" };
@@ -15,6 +17,11 @@ import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with 
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
 import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
+import {
+	runSearchQuery,
+	webSearchSchema,
+	type SearchQueryParams,
+} from "../packages/coding-agent/src/web/search/index";
 import {
 	createStoryFileWorkspace,
 	mergeStoryFileArtifacts,
@@ -236,7 +243,16 @@ export interface StoryAgentCallbacks {
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
+	searchWeb?: (params: SearchQueryParams, signal?: AbortSignal) => Promise<StoryWebSearchResult>;
 	signal?: AbortSignal;
+}
+
+export interface StoryWebSearchResult {
+	content: Array<{ type: "text"; text: string }>;
+	details: {
+		response?: unknown;
+		error?: string;
+	};
 }
 
 export interface StoryToolEvent {
@@ -272,6 +288,8 @@ interface ToolState {
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
+	canSearchWeb: boolean;
+	searchWeb?: (params: SearchQueryParams, signal?: AbortSignal) => Promise<StoryWebSearchResult>;
 }
 
 function structuredStoryFileText(value: unknown, depth = 0): string {
@@ -449,6 +467,162 @@ function safePayloadJson(payload: Record<string, unknown>): string {
 		.replaceAll("&", "\\u0026");
 }
 
+type PromptPackingLevel = "normal" | "compact" | "minimal";
+
+function headTailExcerpt(value: unknown, maxChars: number): unknown {
+	if (typeof value !== "string" || value.length <= maxChars) return value;
+	const headChars = Math.max(1, Math.floor(maxChars * 0.3));
+	const tailChars = Math.max(1, maxChars - headChars);
+	return `${value.slice(0, headChars)}\n…（上下文压缩省略 ${value.length - maxChars} 字符）…\n${value.slice(-tailChars)}`;
+}
+
+function packedRecordList(
+	value: unknown,
+	limit: number,
+	contentChars: number,
+	keep: "first" | "last" = "last",
+): Array<Record<string, unknown>> | unknown {
+	if (!Array.isArray(value)) return value;
+	const entries = keep === "first" ? value.slice(0, limit) : value.slice(-limit);
+	return entries.flatMap(entry => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+		const record = structuredClone(entry as Record<string, unknown>);
+		for (const key of ["content", "text", "body", "ending", "outline", "summary"]) {
+			record[key] = headTailExcerpt(record[key], contentChars);
+		}
+		return [record];
+	});
+}
+
+function packWritingContext(value: unknown, level: Exclude<PromptPackingLevel, "normal">): unknown {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+	const context = structuredClone(value as Record<string, unknown>);
+	const minimal = level === "minimal";
+	context.previousChapters = packedRecordList(context.previousChapters, minimal ? 2 : 4, minimal ? 900 : 1_600);
+	context.storyMemory = packedRecordList(context.storyMemory, minimal ? 10 : 24, minimal ? 500 : 800, "first");
+	context.materials = packedRecordList(context.materials, minimal ? 5 : 10, minimal ? 500 : 800, "first");
+	context.unresolvedForeshadows = packedRecordList(
+		context.unresolvedForeshadows,
+		minimal ? 8 : 16,
+		minimal ? 500 : 800,
+		"first",
+	);
+	if (context.storyFiles && typeof context.storyFiles === "object" && !Array.isArray(context.storyFiles)) {
+		const storyFiles = structuredClone(context.storyFiles as Record<string, unknown>);
+		storyFiles.inventory = Array.isArray(storyFiles.inventory)
+			? storyFiles.inventory.slice(0, minimal ? 30 : 60)
+			: storyFiles.inventory;
+		storyFiles.loaded = packedRecordList(
+			storyFiles.loaded,
+			minimal ? 2 : 5,
+			minimal ? 3_000 : 6_000,
+			"first",
+		);
+		context.storyFiles = storyFiles;
+	}
+	if (context.layers && typeof context.layers === "object" && !Array.isArray(context.layers)) {
+		const layers = structuredClone(context.layers as Record<string, unknown>);
+		for (const [name, limit] of [["near", minimal ? 2 : 3], ["mid", minimal ? 3 : 7], ["far", minimal ? 6 : 15]] as const) {
+			const layer = layers[name];
+			if (!layer || typeof layer !== "object" || Array.isArray(layer)) continue;
+			const packedLayer = structuredClone(layer as Record<string, unknown>);
+			packedLayer.chapters = packedRecordList(packedLayer.chapters, limit, minimal ? 600 : 900);
+			layers[name] = packedLayer;
+		}
+		context.layers = layers;
+	}
+	return context;
+}
+
+function packPromptPayload(payload: Record<string, unknown>, level: PromptPackingLevel): Record<string, unknown> {
+	const packed = structuredClone(payload);
+	if (typeof packed.content === "string") {
+		if (packed.content === packed.source_text || packed.content === packed.selected_text) delete packed.content;
+	}
+	if (level === "normal") return packed;
+	const minimal = level === "minimal";
+	packed.source_text = headTailExcerpt(packed.source_text, minimal ? 12_000 : 30_000);
+	packed.selected_text = headTailExcerpt(packed.selected_text, minimal ? 10_000 : 24_000);
+	packed.content = headTailExcerpt(packed.content, minimal ? 10_000 : 24_000);
+	packed.conversation_summary = headTailExcerpt(packed.conversation_summary, minimal ? 8_000 : 16_000);
+	packed.conversation = packedRecordList(packed.conversation, minimal ? 4 : 8, minimal ? 2_000 : 4_000);
+	packed.continuation_conversation = packedRecordList(
+		packed.continuation_conversation,
+		minimal ? 2 : 4,
+		minimal ? 2_000 : 4_000,
+	);
+	packed.attached_files = packedRecordList(
+		packed.attached_files,
+		minimal ? 2 : 4,
+		minimal ? 4_000 : 8_000,
+		"first",
+	);
+	packed.writing_context = packWritingContext(packed.writing_context, level);
+	return packed;
+}
+
+function promptTokenEstimate(systemPrompt: string, userPrompt: string): number {
+	const messages: AgentMessage[] = [systemPrompt, userPrompt].map(text => ({
+		role: "user",
+		content: [{ type: "text", text }],
+		timestamp: 0,
+	}));
+	return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
+
+function compactRecoveryMessages(messages: readonly AgentMessage[], reducedUserPrompt: string): AgentMessage[] {
+	let firstUserReplaced = false;
+	return messages.map(message => {
+		if (message.role === "user" && !firstUserReplaced) {
+			firstUserReplaced = true;
+			return {
+				...message,
+				content: typeof message.content === "string"
+					? reducedUserPrompt
+					: message.content.map(block => block.type === "text" ? { ...block, text: reducedUserPrompt } : block),
+			};
+		}
+		if (message.role === "toolResult") {
+			return {
+				...message,
+				content: message.content.map(block =>
+					block.type === "text" ? { ...block, text: String(headTailExcerpt(block.text, 6_000)) } : block,
+				),
+			};
+		}
+		return message;
+	});
+}
+
+function hasReplayUnsafeAssistantOutput(message: AssistantMessage): boolean {
+	return message.content.some(block =>
+		block.type === "toolCall" ||
+		block.type === "image" ||
+		block.type === "anthropicServerTool" ||
+		(block.type === "text" && block.text.trim().length > 0),
+	);
+}
+
+async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+	if (!signal) {
+		await Bun.sleep(delayMs);
+		return;
+	}
+	if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+	await new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		const onAbort = (): void => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			reject(new DOMException("Aborted", "AbortError"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 async function skillInstructions(
 	skillName: string,
 	skillMap: Map<string, Skill>,
@@ -573,6 +747,25 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
+	const searchTool: AgentTool<typeof webSearchSchema, StoryWebSearchResult["details"]> = {
+		name: "web_search",
+		label: "联网搜索",
+		description:
+			"搜索公开网页中的最新资料。返回标题、链接与摘要；需要当前信息或用户明确要求联网时调用，不得伪造搜索结果。",
+		parameters: webSearchSchema,
+		strict: true,
+		loadMode: "essential",
+		approval: "read",
+		async execute(_toolCallId, params, signal) {
+			if (!state.canSearchWeb) throw new Error("当前任务未开启联网搜索");
+			const result = state.searchWeb
+				? await state.searchWeb(params, signal)
+				: await runSearchQuery(params, { signal });
+			if (result.details.error) throw new Error(result.details.error);
+			return result;
+		},
+	};
+
 	const writeFileTool: AgentTool<typeof writeStoryFileSchema, { path: string; chars: number }> = {
 		name: "write_story_file",
 		label: "暂存作品文件",
@@ -648,6 +841,7 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 
 	return [
 		readTool,
+		...(state.canSearchWeb ? [searchTool] : []),
 		listFilesTool,
 		readFileTool,
 		...(state.canMutateStoryFiles ? [writeFileTool, editFileTool] : []),
@@ -753,8 +947,28 @@ function compactToolArguments(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 	const args = value as Record<string, unknown>;
 	const compact: Record<string, unknown> = {};
-	for (const key of ["path", "prefix", "title", "category", "replace_all", "requestId", "count", "chars", "accepted"]) {
+	for (const key of [
+		"path",
+		"prefix",
+		"title",
+		"category",
+		"replace_all",
+		"requestId",
+		"count",
+		"chars",
+		"accepted",
+		"query",
+		"recency",
+		"limit",
+		"provider",
+		"error",
+	]) {
 		if (args[key] !== undefined) compact[key] = args[key];
+	}
+	if (args.response && typeof args.response === "object" && !Array.isArray(args.response)) {
+		const response = args.response as Record<string, unknown>;
+		compact.provider = response.provider;
+		if (Array.isArray(response.sources)) compact.sources = response.sources.length;
 	}
 	for (const key of ["content", "old_text", "new_text"]) {
 		if (typeof args[key] === "string") compact[`${key}_chars`] = args[key].length;
@@ -778,21 +992,41 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 	const systemPrompt = render(agentSystemTemplate, {
 		mode: request.mode,
 		role: request.role,
+		webSearchEnabled:
+			request.mode === "story" &&
+			(request.skillName === "story-search" ||
+				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
+					"allow"),
 	});
-	const userPrompt =
+	const { model, apiKey, effort } = modelForConfig(request.modelConfig);
+	const renderUserPrompt = (payload: Record<string, unknown>): string =>
 		request.mode === "compact"
 			? render(compactRequestTemplate, {
-					existingSummary: String(request.payload.existingSummary ?? ""),
-					instructions: String(request.payload.instructions ?? ""),
-					messagesJson: safePayloadJson({ messages: request.payload.messages }),
+					existingSummary: String(payload.existingSummary ?? ""),
+					instructions: String(payload.instructions ?? ""),
+					messagesJson: safePayloadJson({ messages: payload.messages }),
 				})
 			: render(agentRequestTemplate, {
 					skillName: request.skillName,
 					skillInstructions: instructions,
 					message: request.message,
-					payloadJson: safePayloadJson(request.payload),
+					payloadJson: safePayloadJson(payload),
 				});
-	const { model, apiKey, effort } = modelForConfig(request.modelConfig);
+	let promptPayload = request.mode === "compact" ? request.payload : packPromptPayload(request.payload, "normal");
+	let userPrompt = renderUserPrompt(promptPayload);
+	const contextWindow = model.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+	const promptThreshold = Math.max(1, Math.floor(contextWindow * 0.85));
+	if (request.mode !== "compact" && promptTokenEstimate(systemPrompt, userPrompt) > promptThreshold) {
+		promptPayload = packPromptPayload(request.payload, "compact");
+		userPrompt = renderUserPrompt(promptPayload);
+	}
+	if (request.mode !== "compact" && promptTokenEstimate(systemPrompt, userPrompt) > promptThreshold) {
+		promptPayload = packPromptPayload(request.payload, "minimal");
+		userPrompt = renderUserPrompt(promptPayload);
+	}
+	const overflowRecoveryPrompt = request.mode === "compact"
+		? userPrompt
+		: renderUserPrompt(packPromptPayload(request.payload, "minimal"));
 	const temperature =
 		Number.isFinite(request.modelConfig?.temperature) && Number(request.modelConfig?.temperature) >= 0
 			? Number(request.modelConfig?.temperature)
@@ -811,6 +1045,12 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			"allow"
 				? request.callbacks?.writeStoryFile
 				: undefined,
+		canSearchWeb:
+			request.mode === "story" &&
+			(request.skillName === "story-search" ||
+				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
+					"allow"),
+		searchWeb: request.callbacks?.searchWeb,
 	};
 	const requiredStoryFiles = toolState.canMutateStoryFiles
 		? storyFileMutationRequirement(request.message, request.payload)
@@ -871,10 +1111,34 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		agent.abort(request.callbacks?.signal?.reason);
 	};
 	request.callbacks?.signal?.addEventListener("abort", abort, { once: true });
+	let transientRetryCount = 0;
+	let overflowRecoveryCount = 0;
+	const promptWithRecovery = async (input: string, options?: AgentPromptOptions): Promise<void> => {
+		await agent.prompt(input, options);
+		while (agent.state.error) {
+			request.callbacks?.signal?.throwIfAborted();
+			const failed = latestAssistantMessage(agent.state.messages);
+			if (!failed || hasReplayUnsafeAssistantOutput(failed)) return;
+			const isOverflow = AIError.isContextOverflow(failed, contextWindow);
+			if (isOverflow && overflowRecoveryCount < 1) {
+				overflowRecoveryCount += 1;
+				if (agent.state.messages.at(-1) === failed) agent.popMessage();
+				agent.replaceMessages(compactRecoveryMessages(agent.state.messages, overflowRecoveryPrompt));
+				await agent.continue();
+				continue;
+			}
+			const errorId = AIError.classifyMessage(failed);
+			if (isOverflow || !AIError.retriable(errorId) || transientRetryCount >= 2) return;
+			transientRetryCount += 1;
+			if (agent.state.messages.at(-1) === failed) agent.popMessage();
+			await waitForRetry(transientRetryCount === 1 ? 300 : 900, request.callbacks?.signal);
+			await agent.continue();
+		}
+	};
 
 	try {
 		if (request.callbacks?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-		await agent.prompt(
+		await promptWithRecovery(
 			userPrompt,
 			requiredStoryFiles ? { toolChoice: { type: "function", name: "list_story_files" } } : undefined,
 		);
@@ -900,7 +1164,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				agent.setThinkingLevel(undefined);
 				agent.setDisableReasoning(true);
 				try {
-					await agent.prompt(
+					await promptWithRecovery(
 						outputLimitRecoveries === 1
 							? "系统续跑：上一轮因达到单次输出 Token 上限而被截断。沿用已经完成的分析，不要从头重复思考；立即完成尚未执行的工具调用，并给出可见的最终答复。"
 							: "系统强制收尾：输出额度已再次耗尽。停止继续展开分析，立即完成必要的文件工具调用；若工作已完成，调用 submit_story_result 提交当前最佳结果。",
@@ -923,7 +1187,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			const before = toolState.storyFiles.written().length;
 			const remaining = requiredStoryFiles - before;
 			toolState.submission = undefined;
-			await agent.prompt(
+			await promptWithRecovery(
 				`系统执行校验：用户要求实际创建或修改作品文件，但目前只成功写入 ${before} 份，至少还需 ${remaining} 份。现在必须调用 write_story_file 写入一份尚未完成的文件；不要只描述计划，也不要在达到数量前提交结果。`,
 				{ toolChoice: { type: "function", name: "write_story_file" } },
 			);

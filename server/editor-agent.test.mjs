@@ -32,6 +32,17 @@ test('editor agent routes slash commands by project length', () => {
   )
   assert.equal(resolveEditorAgentCommand('/scan', { type: '长篇' }).skill, 'story-long-scan')
   assert.deepEqual(
+    resolveEditorAgentCommand('/continue 加快节奏', { type: '长篇' }),
+    { skill: 'story-long-write', message: '从当前章节结尾继续写：加快节奏' },
+  )
+  assert.deepEqual(
+    resolveEditorAgentCommand('/rewrite 保留凶手身份', { type: '短篇' }),
+    { skill: 'story-short-write', message: '重写当前章节：保留凶手身份' },
+  )
+  assert.equal(resolveEditorAgentCommand('/outline', { type: '长篇' }).skill, 'story-long-write')
+  assert.equal(resolveEditorAgentCommand('/expand', { type: '长篇' }).skill, 'story-long-write')
+  assert.equal(resolveEditorAgentCommand('/shorten', { type: '短篇' }).skill, 'story-short-write')
+  assert.deepEqual(
     resolveEditorAgentCommand('/skill story-review 检查人物动机', { type: '长篇' }),
     { skill: 'story-review', message: '检查人物动机' },
   )
