@@ -8,9 +8,9 @@ import {
 } from '../src/agent-runtime.ts'
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
-import { enrichStoryAgentPayload, readStoryFileForAgent } from './writing-context.mjs'
+import { enrichStoryAgentPayload } from './writing-context.mjs'
 import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
-import { readStoryWorkspaceFile, writeStoryWorkspaceFile } from './story-workspace.mjs'
+import { readStoryDocument, writeStoryDocument } from './story-document-store.mjs'
 
 const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
 
@@ -48,32 +48,20 @@ async function preparedStoryAgentBody(user, input) {
   }
 }
 
-async function readCurrentStoryFile(userId, projectId, requestedPath) {
-  const [workspaceFile, databaseFile] = await Promise.all([
-    readStoryWorkspaceFile(userId, projectId, requestedPath),
-    loadDb().then((db) => readStoryFileForAgent(db, userId, projectId, requestedPath)),
-  ])
-  if (!workspaceFile) return databaseFile
-  if (!databaseFile) return workspaceFile
-  const workspaceUpdatedAt = Date.parse(workspaceFile.updatedAt || '') || 0
-  const databaseUpdatedAt = Date.parse(databaseFile.updatedAt || '') || 0
-  return databaseUpdatedAt >= workspaceUpdatedAt ? databaseFile : workspaceFile
-}
-
 export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null, onToolEvent = null) {
   const body = await preparedStoryAgentBody(user, input)
   const projectId = body.payload?.project_id || body.payload?.projectId || null
-  const canWriteWorkspace = body.payload?.tool_policy?.mutateStoryData === 'allow'
+  const canPersistStoryFiles = body.payload?.tool_policy?.mutateStoryData === 'allow'
   return await runStoryAgent(body, {
     signal,
     onDelta: onDelta || undefined,
     onReasoningDelta: onReasoningDelta || undefined,
     onToolEvent: onToolEvent || undefined,
     readStoryFile: projectId
-      ? async (path) => readCurrentStoryFile(user.id, projectId, path)
+      ? async (path) => readStoryDocument(user.id, projectId, path)
       : undefined,
-    writeStoryFile: projectId && canWriteWorkspace
-      ? async (file) => writeStoryWorkspaceFile(user.id, projectId, file)
+    writeStoryFile: projectId && canPersistStoryFiles
+      ? async (file) => writeStoryDocument(user.id, projectId, file)
       : undefined,
   })
 }
@@ -106,7 +94,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
       const result = await runStoryDelegate({ ...body, role }, {
         signal,
         readStoryFile: projectId
-          ? async (path) => readCurrentStoryFile(user.id, projectId, path)
+          ? async (path) => readStoryDocument(user.id, projectId, path)
           : undefined,
       })
       const completed = {

@@ -201,7 +201,7 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
   assert.deepEqual(agentTurnItems(turn, task).map((item) => item.type), [
     'userMessage',
     'lifecycle',
-    'dynamicToolCall',
+    'lifecycle',
     'dynamicToolCall',
     'agentMessage',
   ])

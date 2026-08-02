@@ -233,8 +233,8 @@ test("file requests are corrected when the model only describes a plan", async (
 			payload: {
 				tool_policy: { mutateStoryData: "allow" },
 				conversation: [
-					{ role: "user", text: "创建一份世界规则文件" },
-					{ role: "assistant", text: "我会先整理规则，确认后写入。" },
+					{ role: "user", text: "按方案补全世界设定" },
+					{ role: "assistant", text: "是否确认创建这个文件？确认后进入 Phase 3。" },
 				],
 			},
 			model_config: {

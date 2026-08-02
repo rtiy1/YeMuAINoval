@@ -663,8 +663,13 @@ function storyFileMutationRequirement(message: string, payload: Record<string, u
 			const entry = conversation[index];
 			if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
 			const record = entry as Record<string, unknown>;
-			const candidate = record.role === "user" ? String(record.text ?? record.content ?? "").trim() : "";
-			if (isFileMutation(candidate)) {
+			const role = String(record.role ?? "");
+			const candidate = ["user", "assistant"].includes(role)
+				? String(record.text ?? record.content ?? "").trim()
+				: "";
+			const pendingAssistantFile =
+				role === "assistant" && /(?:是否|要不要|确认后|待确认|确认创建|确认写入)/.test(candidate);
+			if (isFileMutation(candidate) && (role === "user" || pendingAssistantFile)) {
 				sourceText = candidate;
 				break;
 			}

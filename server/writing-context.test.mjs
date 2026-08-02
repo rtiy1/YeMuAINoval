@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildWritingContext, enrichStoryAgentPayload, readStoryFileForAgent, resolveStoryAttachments } from './writing-context.mjs'
+import { buildWritingContext, chapterStoryFilePath, enrichStoryAgentPayload, readStoryFileForAgent, resolveStoryAttachments, storyFilePath } from './writing-context.mjs'
 
 const now = '2026-07-28T00:00:00.000Z'
 const project = { id: 'project-1', userId: 'user-1', title: '旧港来信', type: '长篇', genre: '悬疑', style: '克制', tone: '追查失踪案' }
@@ -33,13 +33,11 @@ test('writing context separates chapter layers and loads Skill files by path', (
   assert.equal(context.layers.far.chapters[0].summarySource, 'memory')
   assert.equal(context.summaryStatus.previousChapterCount, 14)
   assert.deepEqual(context.summaryStatus.missingChapterIds.slice(0, 2), [2, 3])
-  assert.deepEqual(context.storyFiles.inventory.map((item) => item.path).sort(), [
-    '大纲/卷纲_第一卷.md',
-    '大纲/大纲.md',
-    '大纲/细纲_第001章.md',
-    '大纲/细纲_第015章.md',
-    '追踪/伏笔.md',
-  ])
+  const inventoryPaths = context.storyFiles.inventory.map((item) => item.path)
+  assert.ok(inventoryPaths.includes('大纲/大纲.md'))
+  assert.ok(inventoryPaths.includes('追踪/伏笔.md'))
+  assert.ok(inventoryPaths.includes('线索/灯塔.md'))
+  assert.equal(inventoryPaths.filter((path) => path.startsWith('正文/')).length, 15)
   assert.equal(context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
   assert.match(context.storyFiles.loaded[0].content, /进入灯塔/)
   assert.equal(context.storyFiles.loaded[1].path, '大纲/卷纲_第一卷.md')
@@ -85,4 +83,20 @@ test('agent file reads are scoped to the current user and project', () => {
   assert.match(file.content, /旧港失踪案/)
   assert.equal(readStoryFileForAgent(db, 'other-user', project.id, '大纲/大纲.md'), null)
   assert.equal(readStoryFileForAgent(db, 'user-1', project.id, '../db.json'), null)
+})
+
+test('left-rail records and chapter drafts are exposed as readable workspace files', () => {
+  const currentDb = structuredClone(db)
+  currentDb.ideas.push({
+    id: 'idea-plain', userId: 'user-1', projectId: project.id,
+    label: '人物', folder: '人物', title: '林默', body: '失踪案记者', tags: [],
+  })
+  const characterPath = storyFilePath(currentDb.ideas.at(-1))
+  assert.equal(characterPath, '人物/林默.md')
+  assert.equal(readStoryFileForAgent(currentDb, 'user-1', project.id, characterPath).content, '失踪案记者')
+
+  const chapter = currentDb.chapters[project.id][0]
+  const chapterPath = chapterStoryFilePath(chapter)
+  assert.match(chapterPath, /^正文\//)
+  assert.equal(readStoryFileForAgent(currentDb, 'user-1', project.id, chapterPath).content, currentDb.drafts[project.id][String(chapter.id)])
 })

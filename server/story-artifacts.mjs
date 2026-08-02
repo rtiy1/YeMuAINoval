@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { chapterStoryFilePath } from './writing-context.mjs'
 
 function text(value, limit) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit)
@@ -233,6 +234,33 @@ export function applyStoryArtifacts(db, {
   const fileChanges = []
   for (const item of list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)) {
     const folder = text(item.category || item.path.split('/')[0] || '资料', 40)
+    const targetChapter = chapters.find((chapter) => chapterStoryFilePath(chapter) === item.path)
+    if (targetChapter) {
+      const key = String(targetChapter.id)
+      const previous = typeof drafts[key] === 'string' ? drafts[key] : ''
+      if (previous && previous !== item.content) {
+        const snapshots = history[key] ||= []
+        snapshots.push({
+          id: crypto.randomUUID(),
+          content: previous,
+          words: previous.replace(/\s/g, '').length,
+          createdAt: timestamp,
+        })
+        history[key] = snapshots.slice(-80)
+      }
+      drafts[key] = item.content
+      targetChapter.words = item.content.replace(/\s/g, '').length.toLocaleString('en-US')
+      targetChapter.updatedAt = timestamp
+      fileChanges.push({
+        id: `chapter:${targetChapter.id}`,
+        path: item.path,
+        title: targetChapter.title,
+        category: '正文',
+        action: 'updated',
+      })
+      documentCount += 1
+      continue
+    }
     const label = text(folder === '大纲' ? '大纲文档' : `${folder}文档`, 20)
     const change = upsertIdea(db, {
       userId,
@@ -259,6 +287,9 @@ export function applyStoryArtifacts(db, {
   const applied = projectUpdated || characterCount > 0 || worldbuildingCount > 0 || chapterCount > 0 || documentCount > 0
   if (applied) {
     project.chapters = chapters.length
+    project.words = chapters.reduce((total, chapter) => {
+      return total + String(drafts[String(chapter.id)] || '').replace(/\s/g, '').length
+    }, 0).toLocaleString('en-US')
     project.updated = '刚刚'
     project.updatedAt = timestamp
   }

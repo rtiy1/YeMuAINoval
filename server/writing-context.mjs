@@ -8,11 +8,35 @@ function contextExcerpt(value, maxLength = 1600) {
   return `${text.slice(0, Math.floor(maxLength * 0.35))}\n…\n${text.slice(-Math.floor(maxLength * 0.65))}`
 }
 
-function storyFilePath(idea) {
+function workspaceSegment(value, fallback) {
+  const normalized = String(value || fallback || '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
+    .replace(/[.\s]+$/g, '')
+    .trim()
+    .slice(0, 100)
+  return normalized || fallback
+}
+
+function taggedStoryFilePath(idea) {
   const tag = Array.isArray(idea?.tags)
     ? idea.tags.find((item) => String(item).startsWith('文件:'))
     : null
   return tag ? String(tag).slice(3).trim() : ''
+}
+
+export function storyFilePath(idea) {
+  const taggedPath = taggedStoryFilePath(idea)
+  if (taggedPath) return taggedPath
+  if (!idea?.title) return ''
+  const folder = workspaceSegment(idea.folder || idea.label, '资料')
+  const title = workspaceSegment(idea.title, idea.id || '未命名')
+  return `${folder}/${title}.md`
+}
+
+export function chapterStoryFilePath(chapter) {
+  const id = String(chapter?.id ?? '').padStart(3, '0')
+  const title = workspaceSegment(chapter?.title, `第${id}章`)
+  return `正文/${id}-${title}.md`
 }
 
 export function readStoryFileForAgent(db, userId, projectId, requestedPath) {
@@ -26,13 +50,23 @@ export function readStoryFileForAgent(db, userId, projectId, requestedPath) {
   const idea = (db.ideas || []).find((item) => item.userId === userId
     && item.projectId === projectId
     && storyFilePath(item) === path)
-  if (!idea) return null
+  if (idea) {
+    return {
+      path,
+      title: String(idea.title || path.split('/').at(-1) || '作品文件').slice(0, 160),
+      category: String(idea.folder || idea.label || path.split('/')[0] || '资料').slice(0, 40),
+      content: String(idea.body || '').replace(/\r\n?/g, '\n').slice(0, 50_000),
+      updatedAt: idea.updatedAt || idea.createdAt || '',
+    }
+  }
+  const chapter = (db.chapters?.[projectId] || []).find((item) => chapterStoryFilePath(item) === path)
+  if (!chapter) return null
   return {
     path,
-    title: String(idea.title || path.split('/').at(-1) || '作品文件').slice(0, 160),
-    category: String(idea.folder || idea.label || path.split('/')[0] || '资料').slice(0, 40),
-    content: String(idea.body || '').replace(/\r\n?/g, '\n').slice(0, 50_000),
-    updatedAt: idea.updatedAt || idea.createdAt || '',
+    title: String(chapter.title || path.split('/').at(-1) || '章节正文').slice(0, 160),
+    category: '正文',
+    content: String(db.drafts?.[projectId]?.[String(chapter.id)] || '').replace(/\r\n?/g, '\n').slice(0, 50_000),
+    updatedAt: chapter.updatedAt || chapter.createdAt || '',
   }
 }
 
@@ -41,11 +75,25 @@ function buildStoryFiles(db, project, chapter, instruction = '') {
   const chapterNumber = Number(chapter?.id)
   const chapterToken = Number.isFinite(chapterNumber) ? `第${String(chapterNumber).padStart(3, '0')}章` : ''
   const writingIntent = /续写|日更|继续写|接着写|正文|写第\s*[一二三四五六七八九十百千万两\d]+\s*章/.test(cue)
-  const records = (db.ideas || [])
+  const ideaRecords = (db.ideas || [])
     .filter((idea) => idea.userId === project.userId && idea.projectId === project.id && storyFilePath(idea))
+  const chapterRecords = (db.chapters?.[project.id] || []).map((item) => ({
+    id: `chapter:${item.id}`,
+    title: item.title,
+    body: db.drafts?.[project.id]?.[String(item.id)] || '',
+    folder: '正文',
+    label: '章节正文',
+    tags: [`文件:${chapterStoryFilePath(item)}`],
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    chapterId: item.id,
+  }))
+  const records = [...ideaRecords, ...chapterRecords]
     .map((idea) => {
       const path = storyFilePath(idea)
       let relevance = 0
+      if (path.startsWith('正文/')) relevance += writingIntent ? 20 : 5
+      if (String(idea.chapterId ?? '') === String(chapter?.id ?? '')) relevance += 30
       if (path === '大纲/大纲.md') relevance += 320
       if (path === '设定/题材定位.md') relevance += 270
       if (path === '设定/题材正文提示卡.md') relevance += 280
@@ -77,6 +125,7 @@ function buildStoryFiles(db, project, chapter, instruction = '') {
   let remaining = 48_000
   for (const { idea, path } of records) {
     if (loaded.length >= 10 || remaining <= 0) break
+    if (path.startsWith('正文/') && String(idea.chapterId ?? '') !== String(chapter?.id ?? '')) continue
     const content = contextExcerpt(idea.body, Math.min(10_000, remaining))
     if (!content) continue
     loaded.push({
@@ -206,7 +255,7 @@ export function buildWritingContext(db, project, chapter, instruction = '') {
   const materials = db.ideas
     .filter((idea) => idea.userId === project.userId
       && (!idea.projectId || idea.projectId === project.id)
-      && !storyFilePath(idea))
+      && !taggedStoryFilePath(idea))
     .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
     .slice(0, 20)
     .map((idea) => ({ label: idea.label, title: idea.title, body: contextExcerpt(idea.body, 500), tags: idea.tags || [] }))

@@ -111,6 +111,16 @@ import {
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
+
+function artifactRailTab(application) {
+  const changes = Array.isArray(application?.fileChanges) ? application.fileChanges : []
+  const categories = changes.map((item) => `${item?.category || ''}/${item?.path || ''}`).join('\n')
+  if (/正文/.test(categories)) return '目录'
+  if (application?.chapters > 0 || /大纲/.test(categories)) return '大纲'
+  if (application?.characters > 0 || /人物|角色/.test(categories)) return '人物'
+  if (application?.worldbuilding > 0 || /设定|世界|词条|追踪/.test(categories)) return '词条'
+  return '文件'
+}
 const THEME_KEY = 'story-studio-theme'
 const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
@@ -3566,7 +3576,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const artifactApplication = task.artifactApplication || response?.result?.artifacts_applied
     if (terminal && artifactApplication?.applied === true && !artifactSyncRef.current.has(task.id)) {
       artifactSyncRef.current.add(task.id)
-      if (artifactApplication.fileChanges?.length) setRailTab('文件')
+      if (artifactApplication.fileChanges?.length) setRailTab(artifactRailTab(artifactApplication))
       void onArtifactsApplied?.(artifactApplication)
     }
     setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.taskId === task.id) ? {
@@ -3779,7 +3789,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         artifactPreview: null,
         artifactApplication: response.application || response.task?.artifactApplication || null,
       } : item))
-      if (response.application?.fileChanges?.length) setRailTab('文件')
+      if (response.application?.fileChanges?.length) setRailTab(artifactRailTab(response.application))
       await onArtifactsApplied?.(response.application)
       onNotify(response.application?.summary || '资料变更已写入')
     } catch (error) {
@@ -3820,10 +3830,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const projectForeshadows = foreshadows.filter((item) => item.projectId === project?.id)
   const storyFilePath = (idea) => (idea.tags || []).find((tag) => String(tag).startsWith('文件:'))?.slice(3) || ''
   const storyFileIdeas = sortIdeas(matchedIdeas.filter((idea) => storyFilePath(idea)))
-  const regularIdeas = matchedIdeas.filter((idea) => !storyFilePath(idea))
-  const outlineIdeas = sortIdeas(regularIdeas.filter((idea) => idea.folder === '大纲' || /大纲/.test(`${idea.label}`)))
-  const characterIdeas = sortIdeas(regularIdeas.filter((idea) => idea.folder === '人物' || /人物|角色|主角|配角/.test(`${idea.label}`)))
-  const termIdeas = sortIdeas(regularIdeas.filter((idea) => !outlineIdeas.some((outline) => outline.id === idea.id)
+  const outlineIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '大纲' || /大纲/.test(`${idea.label}`)))
+  const characterIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '人物' || /人物|角色|主角|配角/.test(`${idea.label}`)))
+  const termIdeas = sortIdeas(matchedIdeas.filter((idea) => !outlineIdeas.some((outline) => outline.id === idea.id)
     && !characterIdeas.some((character) => character.id === idea.id)
     && (['世界观', '设定', '追踪'].includes(idea.folder) || /词条|设定|世界|地点|规则|关系|追踪|时间线/.test(`${idea.label}${idea.title}`))))
   const outlineEntries = [
@@ -4170,7 +4179,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><code>/polish</code><span>保留语气并自然化润色</span><kbd>↵</kbd></button>
                 </div>
               </div>}
-              {assistantMessages.length > 0 && <YemuAssistantTranscript messages={assistantMessages} assistantName="YEYU" working={assistantRunning} />}
+              {assistantMessages.length > 0 && <YemuAssistantTranscript messages={assistantMessages} assistantName={ASSISTANT_NAME} working={assistantRunning} />}
             </div>
             {latestAgentRun && <div className="agent-native-controls"><AgentEditorTurn
               key={`${latestAgentRun.id}:controls`}

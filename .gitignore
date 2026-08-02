@@ -77,7 +77,6 @@ python/yemu/web/dist/
 python/yemu/web/verify-out/
 /verify-out/
 python/yemu/.env
-/server/data/workspaces/
 
 # Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
 packages/coding-agent/bench/boot-baseline.json

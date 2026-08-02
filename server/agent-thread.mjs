@@ -466,7 +466,7 @@ export function agentTurnItems(turn, task) {
   }
   for (const event of task?.events || []) {
     if (event.type === 'result') continue
-    const dynamicTool = event.type === 'skill' || event.type === 'tool'
+    const dynamicTool = event.type === 'tool'
     items.push({
       id: event.id,
       type: dynamicTool ? 'dynamicToolCall' : 'lifecycle',

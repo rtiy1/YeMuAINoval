@@ -49,9 +49,9 @@ function ThinkingBlock({ text, redacted }: { text: string; redacted?: boolean })
 		<div className="tr-think">
 			<button type="button" className="tr-think-head" onClick={() => setOpen(v => !v)}>
 				<ChevronRight size={11} className={`tr-chev${open ? " tr-chev--open" : ""}`} />
-				thinking{redacted ? " · redacted" : ""}
+				思考过程{redacted ? " · 已隐去" : ""}
 			</button>
-			{open && <div className="tr-think-body">{redacted ? "(redacted by provider)" : text}</div>}
+			{open && <div className="tr-think-body">{redacted ? "（模型服务商已隐去思考内容）" : text}</div>}
 		</div>
 	);
 }
@@ -357,7 +357,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 			)}
 			{working && stream === null && activeTools.size === 0 && (
 				<Row kind="assistant" gutter={agentLabel}>
-					<div className="tr-shimmer">thinking…</div>
+					<div className="tr-shimmer">正在思考…</div>
 				</Row>
 			)}
 		</div>

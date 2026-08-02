@@ -106,7 +106,8 @@ function tuiAssistantMessage(run) {
       continue
     }
     if (item.type === 'agentMessage' || item.type === 'plan') {
-      const text = agentItemText(item)
+      const rawText = agentItemText(item)
+      const text = /^AI Skill 执行完成[.。]?$/.test(rawText) ? '本轮处理已完成。' : rawText
       if (text) content.push({ type: 'text', text })
     }
   }
@@ -172,8 +173,8 @@ export function YemuAssistantTranscript({ messages, assistantName, working = fal
       streamDone={!working}
       activeTools={activeTools}
       working={working}
-      userLabel="YOU"
-      agentLabel={assistantName || 'YEYU'}
+      userLabel="你"
+      agentLabel={assistantName || '夜雨'}
     />
   </div>
 }

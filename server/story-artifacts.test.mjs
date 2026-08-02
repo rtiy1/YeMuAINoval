@@ -85,3 +85,42 @@ test('story artifacts upsert project settings, cards, and chapter outlines idemp
   assert.equal(db.ideas.length, 5)
   assert.equal(db.ideas.find((idea) => idea.title === '枫羽').body, '普通人，已经完成第一次系统绑定。')
 })
+
+test('story workspace writes chapter files back to the chapter draft with history', () => {
+  const db = {
+    projects: [{ id: 'project-1', userId: 'user-1', title: '雾港', chapters: 1, words: '4' }],
+    chapters: {
+      'project-1': [{ id: 1, title: '第一章 抵达雾港', outline: '', words: '4', state: 'draft' }],
+    },
+    drafts: { 'project-1': { 1: '旧版正文' } },
+    editHistory: { 'project-1': { 1: [] } },
+    ideas: [],
+  }
+
+  const application = applyStoryArtifacts(db, {
+    userId: 'user-1',
+    projectId: 'project-1',
+    artifacts: {
+      documents: [{
+        path: '正文/001-第一章 抵达雾港.md',
+        title: '第一章 抵达雾港',
+        category: '正文',
+        content: '新版正文\n\n雾里传来汽笛声。',
+      }],
+    },
+    timestamp: '2026-08-02T00:00:00.000Z',
+  })
+
+  assert.equal(application.documents, 1)
+  assert.deepEqual(application.fileChanges, [{
+    id: 'chapter:1',
+    path: '正文/001-第一章 抵达雾港.md',
+    title: '第一章 抵达雾港',
+    category: '正文',
+    action: 'updated',
+  }])
+  assert.equal(db.drafts['project-1'][1], '新版正文\n\n雾里传来汽笛声。')
+  assert.equal(db.editHistory['project-1'][1][0].content, '旧版正文')
+  assert.equal(db.ideas.length, 0)
+  assert.equal(db.projects[0].words, '12')
+})
