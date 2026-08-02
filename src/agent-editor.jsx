@@ -30,6 +30,7 @@ import {
   AgentDiffReview,
 } from './agent-interactions.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
+import { Transcript as YemuTranscript } from '../packages/collab-web/src/components/transcript/Transcript.tsx'
 
 const turnStatusLabels = {
   completed: '已完成',
@@ -62,6 +63,119 @@ function itemResponse(item) {
     .flatMap((value) => Array.isArray(value) ? value : [value])
     .filter((value) => typeof value === 'string' && value.trim())
     .join('；')
+}
+
+const tuiToolNames = {
+  list_story_files: 'glob',
+  read_story_file: 'read',
+  write_story_file: 'write',
+  edit_story_file: 'edit',
+  read_story_skill: 'read',
+  request_user_input: 'ask',
+  submit_story_result: 'resolve',
+}
+
+function tuiToolArgs(item) {
+  const args = item.arguments || item.meta?.arguments || {}
+  const tool = tuiToolNames[item.tool] || item.tool || 'tool'
+  if (tool === 'write') return { ...args, file_path: args.path }
+  if (tool === 'edit') return { ...args, file_path: args.path }
+  if (tool === 'read') return { ...args, file_path: args.path }
+  if (tool === 'glob') return { ...args, pattern: args.prefix ? `${args.prefix}/**/*` : '**/*' }
+  return args
+}
+
+function tuiAssistantMessage(run) {
+  const view = buildAgentTurnView(run)
+  const content = []
+  for (const item of view.items || []) {
+    if (item.type === 'reasoning') {
+      const thinking = agentReasoningText(item)
+      if (thinking) content.push({ type: 'thinking', thinking })
+      continue
+    }
+    if (item.type === 'dynamicToolCall' || item.type === 'collabAgentToolCall') {
+      content.push({
+        type: 'toolCall',
+        id: item.id,
+        name: item.type === 'collabAgentToolCall' ? 'task' : tuiToolNames[item.tool] || item.tool || 'tool',
+        arguments: item.type === 'collabAgentToolCall'
+          ? { agent: item.receiver, prompt: item.summary }
+          : tuiToolArgs(item),
+      })
+      continue
+    }
+    if (item.type === 'agentMessage' || item.type === 'plan') {
+      const text = agentItemText(item)
+      if (text) content.push({ type: 'text', text })
+    }
+  }
+  if (!content.some((item) => item.type === 'text') && view.answerText) {
+    content.push({ type: 'text', text: view.answerText })
+  }
+  return {
+    role: 'assistant',
+    content,
+    stopReason: run.status === 'failed' ? 'error' : run.status === 'cancelled' ? 'aborted' : 'stop',
+    errorMessage: run.status === 'failed' ? run.text || run.statusMessage : undefined,
+  }
+}
+
+function tuiToolResult(item) {
+  const failed = ['failed', 'interrupted', 'cancelled'].includes(itemStatus(item))
+  return {
+    role: 'toolResult',
+    toolCallId: item.id,
+    toolName: tuiToolNames[item.tool] || item.tool || 'tool',
+    content: [{ type: 'text', text: failed ? item.meta?.error || '工具执行失败' : item.summary || '执行完成' }],
+    details: item.meta?.details || {},
+    isError: failed,
+  }
+}
+
+export function YemuAssistantTranscript({ messages, assistantName, working = false }) {
+  const entries = []
+  const activeTools = new Map()
+  let stream = null
+  for (const message of messages) {
+    if (message.role === 'user') {
+      entries.push({
+        id: message.id,
+        type: 'message',
+        timestamp: message.createdAt || null,
+        message: { role: 'user', content: [{ type: 'text', text: message.text || '' }] },
+      })
+      continue
+    }
+    const assistantMessage = tuiAssistantMessage(message)
+    const items = buildAgentTurnView(message).items || []
+    const running = ['queued', 'running'].includes(message.status)
+    if (running) stream = assistantMessage
+    else entries.push({ id: `${message.id}:assistant`, type: 'message', timestamp: message.completedAt || null, message: assistantMessage })
+    for (const item of items) {
+      if (!['dynamicToolCall', 'collabAgentToolCall'].includes(item.type)) continue
+      if (itemStatus(item) === 'running') {
+        activeTools.set(item.id, {
+          toolCallId: item.id,
+          toolName: item.type === 'collabAgentToolCall' ? 'task' : tuiToolNames[item.tool] || item.tool || 'tool',
+          args: item.type === 'collabAgentToolCall' ? { agent: item.receiver, prompt: item.summary } : tuiToolArgs(item),
+        })
+      } else {
+        entries.push({ id: `${item.id}:result`, type: 'message', timestamp: item.completedAt || null, message: tuiToolResult(item) })
+      }
+    }
+  }
+  return <div className="yemu-collab-transcript">
+    <YemuTranscript
+      entries={entries}
+      stream={stream}
+      streamDone={!working}
+      activeTools={activeTools}
+      working={working}
+      userLabel="YOU"
+      agentLabel={assistantName || 'YEYU'}
+    />
+  </div>
 }
 
 function ToolItem({ item }) {
@@ -212,6 +326,7 @@ export function AgentEditorTurn({
   onRegenerate,
   choiceDisabled = false,
   regenerateDisabled = false,
+  controlsOnly = false,
 }) {
   const view = buildAgentTurnView(run)
   const plan = Array.isArray(run.plan) ? run.plan : []
@@ -254,17 +369,17 @@ export function AgentEditorTurn({
   }
 
   return <article className={`agent-turn agent-editor-turn ${run.status}`} data-agent-protocol={view.usesItemProtocol ? 'items' : 'legacy'}>
-    <div className="agent-transcript-status">
+    {!controlsOnly && <div className="agent-transcript-status">
       <span className={`tui-turn-symbol ${['queued', 'running'].includes(run.status) ? 'running' : view.effectiveStatus}`} aria-hidden="true">
         {['queued', 'running'].includes(run.status) ? '✻' : view.effectiveStatus === 'needs_input' ? '?' : '◆'}
       </span>
       <span>{turnStatusLabels[view.effectiveStatus] || '运行中'}</span>
       <small>{formatAgentDuration(elapsed)}</small>
-    </div>
+    </div>}
 
-    <PlanSteps plan={plan} />
+    {!controlsOnly && <PlanSteps plan={plan} />}
 
-    <div className="agent-transcript">
+    {!controlsOnly && <div className="agent-transcript">
       {protocolItems.map((item) => <TranscriptItem
         key={item.id}
         item={item}
@@ -286,7 +401,14 @@ export function AgentEditorTurn({
           variant="followup"
         />
       </section>}
-    </div>
+    </div>}
+
+    {controlsOnly && view.choicePrompt && <section className="agent-transcript-question" data-item-type="requestUserInput">
+      <AgentChoicePrompt prompt={view.choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
+    </section>}
+    {controlsOnly && view.suggestedChoicePrompt && onFollowup && <section className="agent-transcript-question agent-suggested-followup" data-item-type="suggestedFollowup">
+      <AgentChoicePrompt prompt={view.suggestedChoicePrompt} disabled={choiceDisabled} onChoose={onFollowup} variant="followup" />
+    </section>}
 
     {run.status !== 'running' && !view.choicePrompt && Boolean(view.outputText || view.answerText) && <div className="agent-answer-actions">
       <button type="button" onClick={copyAnswer} title="复制回复" aria-label="复制回复">

@@ -6249,6 +6249,66 @@ details[open] > summary .agent-trace-chevron {
   scrollbar-width: thin;
 }
 
+.tui-agent-shell .agent-conversation.collab-native {
+  padding: 0;
+  overflow: hidden;
+}
+
+.yemu-collab-transcript {
+  --fg: var(--tui-text);
+  --fg-muted: var(--tui-muted);
+  --fg-faint: var(--tui-faint);
+  --accent: var(--tui-accent);
+  --accent-muted: color-mix(in srgb, var(--tui-accent) 13%, transparent);
+  --ok: #4f866f;
+  --warn: var(--tui-warm);
+  --err: var(--tui-danger);
+  --border: var(--tui-line-soft);
+  --border-strong: var(--tui-line);
+  --bg-raised: var(--tui-raised);
+  --bg-inset: color-mix(in srgb, var(--tui-bg) 86%, #000 14%);
+  --ring: var(--tui-cyan);
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "DM Mono", "Cascadia Mono", Consolas, monospace;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--tui-bg);
+}
+
+.yemu-collab-transcript .tr-root {
+  padding: 12px 12px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--tui-line) transparent;
+}
+
+.yemu-collab-transcript .tr-row {
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 0 9px;
+}
+
+.yemu-collab-transcript .tr-gutter {
+  font-size: 8px;
+  letter-spacing: .05em;
+}
+
+.yemu-collab-transcript .tv-card {
+  border-radius: 4px;
+  background: var(--tui-raised);
+}
+
+.agent-native-controls {
+  flex: 0 0 auto;
+  max-height: 42%;
+  padding: 0 12px 8px;
+  overflow-y: auto;
+  background: var(--tui-bg);
+}
+
+.agent-native-controls > .agent-editor-turn {
+  gap: 8px;
+}
+
 .tui-agent-shell .agent-conversation::-webkit-scrollbar {
   width: 7px;
 }

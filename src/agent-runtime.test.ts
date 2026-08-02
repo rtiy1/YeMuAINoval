@@ -219,6 +219,7 @@ test("file requests are corrected when the model only describes a plan", async (
 		deepSeekSseResponse("已创建 `设定/世界规则.md`。"),
 	];
 	const toolEvents: Array<{ phase: string; toolName: string }> = [];
+	const persistedFiles: Array<{ path: string; content?: string }> = [];
 	let calls = 0;
 	const mockedFetch = Object.assign(
 		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("完成"),
@@ -227,9 +228,15 @@ test("file requests are corrected when the model only describes a plan", async (
 	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
 	try {
 		const response = await runStoryAgent({
-			message: "创建一份世界规则文件",
+			message: "确认",
 			skill: "story-setup",
-			payload: { tool_policy: { mutateStoryData: "allow" } },
+			payload: {
+				tool_policy: { mutateStoryData: "allow" },
+				conversation: [
+					{ role: "user", text: "创建一份世界规则文件" },
+					{ role: "assistant", text: "我会先整理规则，确认后写入。" },
+				],
+			},
 			model_config: {
 				provider: "openai",
 				api_base_url: "https://api.deepseek.com/v1",
@@ -238,9 +245,12 @@ test("file requests are corrected when the model only describes a plan", async (
 			},
 		}, {
 			onToolEvent: (event) => toolEvents.push(event),
+			writeStoryFile: (file) => persistedFiles.push(file),
 		});
 		const documents = response.result.artifacts?.documents as Array<{ path: string }>;
 		expect(documents.map(file => file.path)).toEqual(["设定/世界规则.md"]);
+		expect(persistedFiles.map(file => file.path)).toEqual(["设定/世界规则.md"]);
+		expect(persistedFiles[0]?.content).toContain("能力必须遵守等价交换");
 		expect(toolEvents.map(event => `${event.phase}:${event.toolName}`)).toEqual([
 			"start:write_story_file",
 			"end:write_story_file",

@@ -220,6 +220,7 @@ export interface StoryAgentCallbacks {
 	onReasoningDelta?: (delta: string) => void | Promise<void>;
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
+	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	signal?: AbortSignal;
 }
 
@@ -255,6 +256,7 @@ interface ToolState {
 	referencesLoaded: Set<string>;
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
+	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 }
 
 interface Skill {
@@ -530,12 +532,14 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 			if (!state.canMutateStoryFiles) throw new Error("当前任务未授权修改作品文件");
 			const path = normalizeStoryFilePath(params.path);
 			const fallbackTitle = path.split("/").at(-1)?.replace(/\.[^.]+$/, "") || "作品文件";
-			const file = state.storyFiles.write({
+			const pendingFile = {
 				path,
 				title: params.title || fallbackTitle,
 				category: params.category || path.split("/")[0] || "资料",
 				content: params.content,
-			});
+			};
+			await state.persistStoryFile?.(pendingFile);
+			const file = state.storyFiles.write(pendingFile);
 			return {
 				content: [{ type: "text", text: `已暂存 ${file.path}（${file.content?.length ?? 0} 字符）。可以继续处理其他文件。` }],
 				details: { path: file.path, chars: file.content?.length ?? 0 },
@@ -552,7 +556,20 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		approval: "write",
 		async execute(_toolCallId, params) {
 			if (!state.canMutateStoryFiles) throw new Error("当前任务未授权修改作品文件");
-			const file = await state.storyFiles.edit(params.path, params.old_text, params.new_text, params.replace_all);
+			if (!params.old_text) throw new Error("old_text 不能为空");
+			const current = await state.storyFiles.read(params.path);
+			const content = current.content ?? "";
+			const occurrences = content.split(params.old_text).length - 1;
+			if (!occurrences) throw new Error("作品文件中没有找到 old_text");
+			if (!params.replace_all && occurrences > 1) {
+				throw new Error("old_text 出现多次；请提供更精确的文本或启用 replace_all");
+			}
+			const updated = params.replace_all
+				? content.replaceAll(params.old_text, params.new_text)
+				: content.replace(params.old_text, params.new_text);
+			const pendingFile = { ...current, content: updated };
+			await state.persistStoryFile?.(pendingFile);
+			const file = state.storyFiles.write(pendingFile);
 			return {
 				content: [{ type: "text", text: `已暂存对 ${file.path} 的修改（${file.content?.length ?? 0} 字符）。可以继续处理其他文件。` }],
 				details: { path: file.path, chars: file.content?.length ?? 0 },
@@ -634,12 +651,27 @@ function enqueueCallback<T>(
 
 function storyFileMutationRequirement(message: string, payload: Record<string, unknown>): number {
 	const explicit = Number(payload.required_story_files ?? payload.requiredStoryFiles);
-	const text = String(message || "").trim();
-	const mentionsFile = /(?:文件|文档|档案|资料|\.md\b|\.txt\b|\.json\b)/i.test(text);
-	const requestsMutation = /(?:创建|新建|建立|生成|写入|保存|落盘|补全|更新|修改|编辑|重写|整理成)/.test(text);
-	if (!mentionsFile || !requestsMutation) return 0;
 	if (Number.isFinite(explicit) && explicit > 0) return Math.min(12, Math.floor(explicit));
-	const countMatch = /([一二两三四五六七八九十\d]+)\s*(?:份|个|套|组)/.exec(text);
+	const currentText = String(message || "").trim();
+	const isFileMutation = (value: string): boolean =>
+		/(?:文件|文档|档案|资料|\.md\b|\.txt\b|\.json\b)/i.test(value) &&
+		/(?:创建|新建|建立|生成|写入|保存|落盘|补全|更新|修改|编辑|重写|整理成)/.test(value);
+	let sourceText = isFileMutation(currentText) ? currentText : "";
+	if (!sourceText && /^(?:确认|好的|好|可以|开始|执行|继续|就这样|没问题|按.+做|采用.+方案)[。！!\s]*$/.test(currentText)) {
+		const conversation = Array.isArray(payload.conversation) ? payload.conversation : [];
+		for (let index = conversation.length - 1; index >= Math.max(0, conversation.length - 12); index -= 1) {
+			const entry = conversation[index];
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+			const record = entry as Record<string, unknown>;
+			const candidate = record.role === "user" ? String(record.text ?? record.content ?? "").trim() : "";
+			if (isFileMutation(candidate)) {
+				sourceText = candidate;
+				break;
+			}
+		}
+	}
+	if (!sourceText) return 0;
+	const countMatch = /([一二两三四五六七八九十\d]+)\s*(?:份|个|套|组)/.exec(sourceText);
 	if (!countMatch) return 1;
 	if (/^\d+$/.test(countMatch[1])) return Math.min(12, Math.max(1, Number(countMatch[1])));
 	const digits: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -707,6 +739,11 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			["allow", "propose"].includes(
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.mutateStoryData ?? "deny"),
 			),
+		persistStoryFile:
+			String((request.payload.tool_policy as Record<string, unknown> | undefined)?.mutateStoryData ?? "deny") ===
+			"allow"
+				? request.callbacks?.writeStoryFile
+				: undefined,
 	};
 	const requiredStoryFiles = toolState.canMutateStoryFiles
 		? storyFileMutationRequirement(request.message, request.payload)

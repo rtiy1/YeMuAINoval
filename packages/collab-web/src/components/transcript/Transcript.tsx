@@ -18,6 +18,8 @@ export interface TranscriptProps {
 	compact?: boolean; // dense variant for the agent drawer
 	/** Sub-session drill-down capabilities forwarded to tool renderers. */
 	host?: ToolRenderHost;
+	userLabel?: string;
+	agentLabel?: string;
 }
 
 function Row({
@@ -146,11 +148,19 @@ interface EntryRowProps {
 	results: ReadonlyMap<string, ToolResultMessage>;
 	active: ReadonlyMap<string, ActiveTool>;
 	host?: ToolRenderHost;
+	userLabel: string;
+	agentLabel: string;
 }
 
 /** Re-render only when the entry itself or one of its tool pairings changed. */
 function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
-	if (prev.entry !== next.entry || prev.host !== next.host) return false;
+	if (
+		prev.entry !== next.entry ||
+		prev.host !== next.host ||
+		prev.userLabel !== next.userLabel ||
+		prev.agentLabel !== next.agentLabel
+	)
+		return false;
 	const e = next.entry;
 	if (e.type !== "message" || e.message.role !== "assistant") return true;
 	for (const block of e.message.content) {
@@ -161,20 +171,27 @@ function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
 	return true;
 }
 
-const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryRowProps): ReactNode {
+const EntryRow = memo(function EntryRow({
+	entry,
+	results,
+	active,
+	host,
+	userLabel,
+	agentLabel,
+}: EntryRowProps): ReactNode {
 	switch (entry.type) {
 		case "message": {
 			const msg = entry.message;
 			switch (msg.role) {
 				case "user":
 					return (
-						<Row kind="user" gutter="host" title={entry.timestamp}>
+						<Row kind="user" gutter={userLabel} title={entry.timestamp}>
 							<MsgContent content={msg.content} />
 						</Row>
 					);
 				case "assistant":
 					return (
-						<Row kind="assistant" gutter="agent" title={entry.timestamp}>
+						<Row kind="assistant" gutter={agentLabel} title={entry.timestamp}>
 							<AssistantBody message={msg} results={results} active={active} pending={false} host={host} />
 						</Row>
 					);
@@ -239,7 +256,17 @@ const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryR
 }, entryRowEqual);
 
 export function Transcript(props: TranscriptProps): ReactNode {
-	const { entries, stream, streamDone, activeTools, working, compact, host } = props;
+	const {
+		entries,
+		stream,
+		streamDone,
+		activeTools,
+		working,
+		compact,
+		host,
+		userLabel = "host",
+		agentLabel = "agent",
+	} = props;
 
 	const results = useMemo(() => {
 		const map = new Map<string, ToolResultMessage>();
@@ -291,10 +318,18 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		>
 			{entries.length === 0 && stream === null && !working && <div className="tr-empty">no activity yet</div>}
 			{entries.map(entry => (
-				<EntryRow key={entry.id} entry={entry} results={results} active={activeTools} host={host} />
+				<EntryRow
+					key={entry.id}
+					entry={entry}
+					results={results}
+					active={activeTools}
+					host={host}
+					userLabel={userLabel}
+					agentLabel={agentLabel}
+				/>
 			))}
 			{stream !== null && (
-				<Row kind="assistant" gutter="agent">
+				<Row kind="assistant" gutter={agentLabel}>
 					<AssistantBody
 						message={stream}
 						results={results}
@@ -305,7 +340,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				</Row>
 			)}
 			{tailTools.length > 0 && (
-				<Row kind="assistant" gutter={stream === null ? "agent" : ""}>
+				<Row kind="assistant" gutter={stream === null ? agentLabel : ""}>
 					{tailTools.map(tool => (
 						<ToolCard
 							key={tool.toolCallId}
@@ -321,7 +356,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				</Row>
 			)}
 			{working && stream === null && activeTools.size === 0 && (
-				<Row kind="assistant" gutter="agent">
+				<Row kind="assistant" gutter={agentLabel}>
 					<div className="tr-shimmer">thinking…</div>
 				</Row>
 			)}

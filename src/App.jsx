@@ -101,7 +101,7 @@ import {
   resolveEditorAgentCommand,
   waitForAgentPoll,
 } from './editor-agent.mjs'
-import { AgentEditorTurn } from './agent-editor.jsx'
+import { AgentEditorTurn, YemuAssistantTranscript } from './agent-editor.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
 import { resolveModelIcon } from './model-icons.mjs'
 import {
@@ -4158,7 +4158,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               <BrainCircuit size={12} />
               <span>已压缩 {assistantThread.compactedTurnCount} 轮上下文 · 摘要持续参与写作</span>
             </div>}
-            <div className="agent-conversation" ref={assistantStreamRef}>
+            <div className={`agent-conversation ${assistantMessages.length ? 'collab-native' : ''}`} ref={assistantStreamRef}>
               {assistantLoading && <div className="agent-empty"><LoaderCircle size={20} className="spin" /><strong>正在恢复会话</strong><p>读取本章的 Agent Turn 与任务状态。</p></div>}
               {!assistantLoading && assistantMessages.length === 0 && <div className="agent-empty tui-agent-empty">
                 <div className="tui-agent-wordmark" aria-hidden="true"><span>YE</span><span>MU</span></div>
@@ -4170,22 +4170,22 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><code>/polish</code><span>保留语气并自然化润色</span><kbd>↵</kbd></button>
                 </div>
               </div>}
-              {assistantMessages.map((message, index) => message.role === 'user'
-                ? <div className="agent-user-turn" key={message.id}><span className="tui-user-prompt" aria-hidden="true">❯</span><p>{message.text}</p></div>
-                : <AgentEditorTurn
-                  key={message.id}
-                  run={message}
-                  elapsedMs={message.status === 'running' ? assistantElapsedMs : message.durationMs}
-                  assistantName={ASSISTANT_NAME}
-                  onApply={applyAssistantRevision}
-                  onApplyArtifacts={applyAssistantArtifacts}
-                  onChoose={(reply) => submitAssistantAnswer(message, reply)}
-                  onFollowup={submitAssistantFollowup}
-                  onRegenerate={message.id === latestAgentRunId ? regenerateAssistant : null}
-                  choiceDisabled={assistantRunning || assistantLoading || index !== assistantMessages.length - 1}
-                  regenerateDisabled={assistantRunning || assistantLoading || message.id !== latestAgentRunId}
-                />)}
+              {assistantMessages.length > 0 && <YemuAssistantTranscript messages={assistantMessages} assistantName="YEYU" working={assistantRunning} />}
             </div>
+            {latestAgentRun && <div className="agent-native-controls"><AgentEditorTurn
+              key={`${latestAgentRun.id}:controls`}
+              run={latestAgentRun}
+              elapsedMs={latestAgentRun.status === 'running' ? assistantElapsedMs : latestAgentRun.durationMs}
+              assistantName={ASSISTANT_NAME}
+              onApply={applyAssistantRevision}
+              onApplyArtifacts={applyAssistantArtifacts}
+              onChoose={(reply) => submitAssistantAnswer(latestAgentRun, reply)}
+              onFollowup={submitAssistantFollowup}
+              onRegenerate={regenerateAssistant}
+              choiceDisabled={assistantRunning || assistantLoading}
+              regenerateDisabled={assistantRunning || assistantLoading}
+              controlsOnly
+            /></div>}
             <div className="agent-composer-wrap">
               <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
               {assistantAwaitingInput && <div className="agent-composer-blocked"><CircleHelp size={13} /><span>当前任务正在等待选择，请先回答上方问题</span></div>}
