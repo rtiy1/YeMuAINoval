@@ -17,11 +17,7 @@ import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with 
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
 import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
-import {
-	runSearchQuery,
-	webSearchSchema,
-	type SearchQueryParams,
-} from "../packages/coding-agent/src/web/search/index";
+import { runSearchQuery, webSearchSchema, type SearchQueryParams } from "./web-search-runtime";
 import {
 	createStoryFileWorkspace,
 	mergeStoryFileArtifacts,
