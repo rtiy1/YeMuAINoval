@@ -700,9 +700,13 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .rail-entity-list strong { overflow: hidden; color: #4b514a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .rail-entity-list small { overflow: hidden; color: #999c94; font-size: 9px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .rail-file-list { display: flex; flex-direction: column; gap: 3px; }
-.rail-file-list > button { width: 100%; min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) 12px; align-items: center; gap: 7px; padding: 9px 6px; color: #738078; text-align: left; background: transparent; border-radius: 4px; }
-.rail-file-list > button:hover { color: #3f5f55; background: #e7ece8; }
-.rail-file-list > button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rail-file-item { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: 4px; }
+.rail-file-item:hover, .rail-file-item:focus-within { background: #e7ece8; }
+.rail-file-open { width: 100%; min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) 12px; align-items: center; gap: 7px; padding: 9px 6px; color: #738078; text-align: left; background: transparent; }
+.rail-file-item:hover .rail-file-open, .rail-file-item:focus-within .rail-file-open { color: #3f5f55; }
+.rail-file-open > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rail-file-delete { width: 25px; height: 25px; display: grid; place-items: center; color: #a3a8a4; border-radius: 4px; opacity: .58; }
+.rail-file-delete:hover, .rail-file-delete:focus-visible { color: #b64f4f; background: rgba(182, 79, 79, .09); opacity: 1; }
 .rail-file-list strong, .rail-file-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-file-list strong { color: #4b514a; font-size: 10px; }
 .rail-file-list small { color: #929991; font-family: 'DM Mono', monospace; font-size: 8px; }
@@ -7419,9 +7423,21 @@ html[data-theme='dark'] .nav-item.active,
 html[data-theme='dark'] .secondary-nav .nav-item.active,
 html[data-theme='dark'] .project-shelf .recent-project.active,
 html[data-theme='dark'] .profile-more-button:hover,
-html[data-theme='dark'] .profile-more-button.active {
+html[data-theme='dark'] .profile-more-button.active,
+html[data-theme='dark'] .rail-file-item:hover,
+html[data-theme='dark'] .rail-file-item:focus-within {
   color: var(--ide-text);
   background: var(--ide-hover);
+}
+
+html[data-theme='dark'] .rail-file-open,
+html[data-theme='dark'] .rail-file-list strong {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] .rail-file-list small,
+html[data-theme='dark'] .rail-file-delete {
+  color: var(--ide-muted);
 }
 
 html[data-theme='dark'] .brand-mark,
