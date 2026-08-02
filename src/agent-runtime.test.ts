@@ -1,5 +1,16 @@
 import { expect, spyOn, test } from "bun:test";
-import { STORY_AGENT_RUNTIME_INFO, listStorySkills, runStoryAgent } from "./agent-runtime";
+import {
+	estimateWebTextTokens,
+	STORY_AGENT_RUNTIME_INFO,
+	listStorySkills,
+	runStoryAgent,
+} from "./agent-runtime";
+
+test("Web prompt token estimation stays lightweight and handles CJK text", () => {
+	expect(estimateWebTextTokens("一二三四")).toBe(4);
+	expect(estimateWebTextTokens("12345678")).toBe(2);
+	expect(estimateWebTextTokens("小说 draft")).toBe(4);
+});
 
 function deepSeekSseResponse(text: string): Response {
 	const events = [

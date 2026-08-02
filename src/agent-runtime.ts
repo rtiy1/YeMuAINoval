@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentPromptOptions } from "@yemu/agent-core/agent";
-import { estimateTokens } from "@yemu/agent-core/compaction";
 import type { AgentEvent, AgentMessage, AgentTool } from "@yemu/agent-core/types";
 import { buildModel } from "@yemu/model-catalog/build";
 import { type AssistantMessage, type Effort, type Model, z } from "@yemu/model-runtime";
@@ -557,13 +556,25 @@ function packPromptPayload(payload: Record<string, unknown>, level: PromptPackin
 	return packed;
 }
 
+export function estimateWebTextTokens(text: string): number {
+	let wideCharacters = 0;
+	let narrowCodeUnits = 0;
+	for (const character of text) {
+		const codePoint = character.codePointAt(0) ?? 0;
+		const isWideCharacter =
+			(codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+			(codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+			(codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+			(codePoint >= 0x3040 && codePoint <= 0x30ff) ||
+			(codePoint >= 0xac00 && codePoint <= 0xd7af);
+		if (isWideCharacter) wideCharacters += 1;
+		else narrowCodeUnits += character.length;
+	}
+	return wideCharacters + Math.ceil(narrowCodeUnits / 4);
+}
+
 function promptTokenEstimate(systemPrompt: string, userPrompt: string): number {
-	const messages: AgentMessage[] = [systemPrompt, userPrompt].map(text => ({
-		role: "user",
-		content: [{ type: "text", text }],
-		timestamp: 0,
-	}));
-	return messages.reduce((total, message) => total + estimateTokens(message), 0);
+	return estimateWebTextTokens(systemPrompt) + estimateWebTextTokens(userPrompt) + 16;
 }
 
 function compactRecoveryMessages(messages: readonly AgentMessage[], reducedUserPrompt: string): AgentMessage[] {
