@@ -7353,6 +7353,55 @@ details[open] > summary .agent-trace-chevron {
   color: var(--tui-accent);
 }
 
+/* Animated day/night switch. */
+.theme-toggle-icon {
+  position: relative;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  flex: 0 0 17px;
+  place-items: center;
+}
+
+.theme-toggle-icon > svg {
+  position: absolute;
+  inset: 0;
+  transition: opacity .28s ease, transform .42s cubic-bezier(.2, .75, .2, 1);
+}
+
+.theme-toggle.light .theme-moon,
+.theme-toggle.dark .theme-sun {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.theme-toggle.light .theme-sun {
+  opacity: 0;
+  transform: rotate(95deg) scale(.35);
+}
+
+.theme-toggle.dark .theme-moon {
+  opacity: 0;
+  transform: rotate(-95deg) scale(.35);
+}
+
+.theme-toggle:active .theme-toggle-icon {
+  transform: scale(.88);
+}
+
+.app-shell.sidebar-collapsed .theme-toggle > .theme-toggle-icon {
+  display: grid;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 9999; }
+
 /* Unified night theme for the writing surface and its embedded agent. */
 html[data-theme='dark'] {
   --ide-bg: #14171a;
@@ -7467,4 +7516,214 @@ html[data-theme='dark'] .toast {
   color: var(--ide-text);
   background: var(--ide-paper);
   border-color: var(--ide-line-strong);
+}
+
+/* Complete editor surfaces: the manuscript is part of the night theme too. */
+html[data-theme='dark'] .editor-topline,
+html[data-theme='dark'] .editor-layout,
+html[data-theme='dark'] .writing-canvas,
+html[data-theme='dark'] .writing-body,
+html[data-theme='dark'] .writing-body textarea,
+html[data-theme='dark'] .writing-footer,
+html[data-theme='dark'] .editor-page .rail-tabs,
+html[data-theme='dark'] .editor-page .rail-header,
+html[data-theme='dark'] .editor-page .outline-link,
+html[data-theme='dark'] .editor-searchbar {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .writing-body,
+html[data-theme='dark'] .writing-body textarea {
+  background: #1b2025;
+}
+
+html[data-theme='dark'] .writing-body textarea {
+  color: #d9dee3;
+  caret-color: var(--ide-green);
+}
+
+html[data-theme='dark'] .writing-loading {
+  color: var(--ide-muted);
+  background: rgba(27, 32, 37, .86);
+}
+
+html[data-theme='dark'] .manuscript-heading {
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .manuscript-heading h1,
+html[data-theme='dark'] .editor-document-context strong,
+html[data-theme='dark'] .editor-page .rail-header strong,
+html[data-theme='dark'] .editor-page .chapter-name,
+html[data-theme='dark'] .rail-outline-list > button > strong,
+html[data-theme='dark'] .rail-entity-list strong,
+html[data-theme='dark'] .rail-foreshadow-copy strong,
+html[data-theme='dark'] .rail-memory-item strong {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] .manuscript-heading span,
+html[data-theme='dark'] .editor-document-context,
+html[data-theme='dark'] .editor-status,
+html[data-theme='dark'] .editor-page .chapter-number,
+html[data-theme='dark'] .editor-page .chapter-words,
+html[data-theme='dark'] .writing-footer,
+html[data-theme='dark'] .rail-entity-list small,
+html[data-theme='dark'] .rail-foreshadow-copy small,
+html[data-theme='dark'] .rail-memory-item small {
+  color: var(--ide-muted);
+}
+
+html[data-theme='dark'] .editor-document-tab {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .editor-document-tab.active {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .editor-tab-close:hover,
+html[data-theme='dark'] .editor-new-tab:hover,
+html[data-theme='dark'] .editor-status:hover,
+html[data-theme='dark'] .toolbar-button:hover:not(:disabled),
+html[data-theme='dark'] .toolbar-button.active,
+html[data-theme='dark'] .editor-page .chapter-item-wrap:hover,
+html[data-theme='dark'] .rail-outline-list > button:hover,
+html[data-theme='dark'] .rail-entity-list > button:hover,
+html[data-theme='dark'] .rail-foreshadow-item:hover,
+html[data-theme='dark'] .rail-memory-item:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+
+html[data-theme='dark'] .editor-page .chapter-item-wrap {
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .editor-page .chapter-item-wrap.current,
+html[data-theme='dark'] .editor-page .rail-tabs button.active {
+  color: var(--ide-text);
+  background: var(--ide-active);
+}
+
+html[data-theme='dark'] .editor-page .rail-tabs button.active {
+  border-bottom-color: var(--ide-green);
+}
+
+html[data-theme='dark'] .toolbar-button,
+html[data-theme='dark'] .editor-page .rail-tabs button,
+html[data-theme='dark'] .editor-page .outline-link {
+  color: var(--ide-muted);
+}
+
+html[data-theme='dark'] .toolbar-divider {
+  background: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .editor-style-menu,
+html[data-theme='dark'] .chapter-menu,
+html[data-theme='dark'] .material-picker-dialog,
+html[data-theme='dark'] .material-detail-body,
+html[data-theme='dark'] .settings-dialog,
+html[data-theme='dark'] .search-dialog,
+html[data-theme='dark'] .review-dialog {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .editor-style-menu-heading strong,
+html[data-theme='dark'] .material-detail-body,
+html[data-theme='dark'] .modal h2,
+html[data-theme='dark'] .settings-header h2 {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] .editor-style-options button,
+html[data-theme='dark'] .modal input,
+html[data-theme='dark'] .modal textarea,
+html[data-theme='dark'] .modal select,
+html[data-theme='dark'] .settings-field input,
+html[data-theme='dark'] .settings-field select,
+html[data-theme='dark'] .material-picker-search {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .chapter-menu button,
+html[data-theme='dark'] .material-picker-item {
+  color: var(--ide-text);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .chapter-menu button:hover,
+html[data-theme='dark'] .material-picker-item:hover {
+  background: var(--ide-hover);
+}
+
+html[data-theme='dark'] .page,
+html[data-theme='dark'] .inner-page {
+  color: var(--ide-text);
+  background: var(--ide-bg);
+}
+
+html[data-theme='dark'] :is(
+  .summary-card,
+  .pulse-panel,
+  .dashboard-quick-actions,
+  .project-card,
+  .idea-card,
+  .analysis-card,
+  .tool-card,
+  .skill-card,
+  .focus-project,
+  .empty-state,
+  .deconstruct-banner,
+  .toolkit-status-bar,
+  .assistant-chat-bubble,
+  .assistant-chat-form,
+  .assistant-plan-question
+) {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] :is(
+  .summary-card,
+  .project-card,
+  .idea-card,
+  .analysis-card,
+  .tool-card,
+  .skill-card,
+  .focus-project,
+  .assistant-chat-bubble
+) :is(h2, h3, strong) {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] :is(
+  .summary-card,
+  .project-card,
+  .idea-card,
+  .analysis-card,
+  .tool-card,
+  .skill-card,
+  .focus-project,
+  .assistant-chat-bubble
+) :is(p, small, span) {
+  border-color: var(--ide-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle-icon > svg {
+    transition: none;
+  }
 }

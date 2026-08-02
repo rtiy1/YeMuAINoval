@@ -421,6 +421,37 @@ function App() {
       // The selected theme still applies for this session when storage is unavailable.
     }
   }, [theme])
+
+  function toggleTheme(event) {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark'
+    const root = document.documentElement
+    const applyTheme = () => {
+      root.dataset.theme = nextTheme
+      root.style.colorScheme = nextTheme
+      setTheme(nextTheme)
+    }
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduceMotion || typeof document.startViewTransition !== 'function') {
+      applyTheme()
+      return
+    }
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const x = bounds.left + bounds.width / 2
+    const y = bounds.top + bounds.height / 2
+    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y))
+    root.classList.add('theme-transitioning')
+    const transition = document.startViewTransition(applyTheme)
+    transition.ready.then(() => {
+      root.animate({
+        clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`],
+      }, {
+        duration: 520,
+        easing: 'cubic-bezier(.2,.72,.2,1)',
+        pseudoElement: '::view-transition-new(root)',
+      })
+    }).catch(() => undefined)
+    transition.finished.finally(() => root.classList.remove('theme-transitioning'))
+  }
   const skillSubmissionRef = useRef(null)
   const profileMenuRef = useRef(null)
 
@@ -1307,8 +1338,8 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <button className="nav-item theme-toggle" aria-label={theme === 'dark' ? '切换为日间模式' : '切换为夜间模式'} title={sidebarCollapsed ? (theme === 'dark' ? '日间模式' : '夜间模式') : undefined} onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>
-            {theme === 'dark' ? <Sun size={17} strokeWidth={1.8} /> : <Moon size={17} strokeWidth={1.8} />}
+          <button className={`nav-item theme-toggle ${theme}`} aria-label={theme === 'dark' ? '切换为日间模式' : '切换为夜间模式'} title={sidebarCollapsed ? (theme === 'dark' ? '日间模式' : '夜间模式') : undefined} onClick={toggleTheme}>
+            <span className="theme-toggle-icon" aria-hidden="true"><Moon className="theme-moon" size={17} strokeWidth={1.8} /><Sun className="theme-sun" size={17} strokeWidth={1.8} /></span>
             <span>{theme === 'dark' ? '日间模式' : '夜间模式'}</span>
           </button>
           <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
