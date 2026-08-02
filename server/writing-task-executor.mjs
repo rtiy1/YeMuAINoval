@@ -173,6 +173,73 @@ function finishRunningEvent(task, status = 'completed', updates = {}) {
   return event
 }
 
+const storyToolLabels = {
+  read_story_skill: '读取 Story Skill',
+  list_story_files: '查看作品文件',
+  read_story_file: '读取作品文件',
+  write_story_file: '写入作品文件',
+  edit_story_file: '修改作品文件',
+  request_user_input: '请求补充信息',
+  submit_story_result: '提交创作结果',
+}
+
+function storyToolLabel(event) {
+  const path = String(event?.arguments?.path || event?.details?.path || '').trim()
+  const base = storyToolLabels[event?.toolName] || `调用 ${event?.toolName || '工具'}`
+  return path ? `${base} · ${path}` : base
+}
+
+async function recordStoryToolEvent(taskId, executionId, executionGeneration, event) {
+  if (!event?.toolCallId || !event?.toolName) return
+  let streamEvent = null
+  await updateDb((db) => {
+    const task = db.writingTasks.find((item) => item.id === taskId)
+    if (!task || task.status !== 'running' || !executionMatches(task, executionId, executionGeneration)) return
+    task.events ||= []
+    const id = `${task.turnId}:tool:${event.toolCallId}`
+    const existing = task.events.find((item) => item.id === id)
+    const timestamp = new Date().toISOString()
+    const argumentsValue = event.arguments && typeof event.arguments === 'object' ? event.arguments : {}
+    const details = event.details && typeof event.details === 'object' ? event.details : {}
+    const meta = {
+      ...(existing?.meta || {}),
+      toolName: event.toolName,
+      arguments: Object.keys(argumentsValue).length ? argumentsValue : existing?.meta?.arguments || {},
+      ...(Object.keys(details).length ? { details } : {}),
+      ...(event.isError ? { error: '工具执行失败' } : {}),
+    }
+    const status = event.phase === 'end' ? (event.isError ? 'failed' : 'completed') : 'running'
+    const next = {
+      ...(existing || {}),
+      id,
+      type: 'tool',
+      label: storyToolLabel({ ...event, arguments: meta.arguments }),
+      status,
+      meta,
+      startedAt: existing?.startedAt || timestamp,
+      ...(status === 'running' ? {} : { completedAt: timestamp }),
+    }
+    if (existing) Object.assign(existing, next)
+    else task.events.push(next)
+    task.updatedAt = timestamp
+    touchAgentThread(db, task)
+    streamEvent = {
+      type: 'tool_event',
+      phase: event.phase,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      label: next.label,
+      status,
+      arguments: meta.arguments,
+      details: meta.details || {},
+      isError: event.isError === true,
+      interactionAttempt: task.interactionAttempt || 1,
+      executionGeneration,
+    }
+  })
+  if (streamEvent) publishTaskStreamEvent(taskId, streamEvent)
+}
+
 function touchAgentThread(db, task) {
   if (!task?.threadId) return
   const thread = db.agentThreads?.find((item) => item.id === task.threadId)
@@ -328,7 +395,12 @@ export async function executeWritingTask(taskId, {
         executionGeneration: prepared.executionGeneration,
       })
       scheduleCheckpoint()
-    }, flushReasoningSummary)
+    }, flushReasoningSummary, (event) => recordStoryToolEvent(
+      taskId,
+      executionId,
+      prepared.executionGeneration,
+      event,
+    ))
     await flushCheckpoint()
     const privateContinuation = responseContinuation(result)
     const resultContinuationMode = continuationMode(result, privateContinuation)

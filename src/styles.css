@@ -685,7 +685,7 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .editor-feature-button { min-height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; color: #fff; border-radius: 4px; font-size: 10px; white-space: nowrap; transition: transform .16s ease, filter .16s ease; }
 .editor-feature-button:hover { filter: brightness(.94); transform: translateY(-1px); }
 .editor-feature-button.violet { background: #7b4ce3; }.editor-feature-button.blue { background: #3e73d8; }.editor-feature-button.teal { background: #2e9b91; }.editor-feature-button.green { background: #27a66a; }.editor-feature-button.purple { background: #9b47d3; }.editor-feature-button.orange { background: #dd8b21; }.editor-feature-button.red { background: #d84c43; }.editor-feature-button.indigo { background: #4b58c8; }
-.rail-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; margin-bottom: 17px; padding: 3px; background: #f0ede5; border-radius: 5px; }
+.rail-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin-bottom: 17px; padding: 3px; background: #f0ede5; border-radius: 5px; }
 .rail-tabs button { min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 6px 3px; color: #92958d; background: transparent; border-radius: 3px; font-size: 9px; }
 .rail-tabs button.active { color: #3d4740; background: #fffefa; box-shadow: 0 1px 4px rgba(40,43,39,.08); }
 .rail-header-actions { display: flex; align-items: center; gap: 1px; }
@@ -699,6 +699,13 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .rail-entity-list > button > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .rail-entity-list strong { overflow: hidden; color: #4b514a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .rail-entity-list small { overflow: hidden; color: #999c94; font-size: 9px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.rail-file-list { display: flex; flex-direction: column; gap: 3px; }
+.rail-file-list > button { width: 100%; min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) 12px; align-items: center; gap: 7px; padding: 9px 6px; color: #738078; text-align: left; background: transparent; border-radius: 4px; }
+.rail-file-list > button:hover { color: #3f5f55; background: #e7ece8; }
+.rail-file-list > button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.rail-file-list strong, .rail-file-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-file-list strong { color: #4b514a; font-size: 10px; }
+.rail-file-list small { color: #929991; font-family: 'DM Mono', monospace; font-size: 8px; }
 .entity-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }.entity-dot.coral { background: #c57960; }.entity-dot.teal { background: #5e9b8d; }
 .rail-empty { padding: 18px 6px; color: #a0a29b; font-size: 10px; text-align: center; }
 .rail-empty-block { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 25px 7px; color: #a0a29b; text-align: center; }
@@ -1743,6 +1750,7 @@ body,
 .editor-page .chapter-list,
 .editor-page .rail-outline-list,
 .editor-page .rail-entity-list,
+.editor-page .rail-file-list,
 .editor-page .rail-memory-list,
 .editor-page .rail-foreshadow-list {
   min-height: 0;

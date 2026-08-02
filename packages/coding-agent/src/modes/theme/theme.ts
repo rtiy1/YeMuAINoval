@@ -326,7 +326,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.context": "◫",
 	"icon.cost": "💲",
 	"icon.time": "⏱",
-	"icon.yemu": "Y",
+	"icon.yemu": "YeYu",
 	"icon.ghost": "👻",
 	"icon.agents": "👥",
 	"icon.job": "⚙",
@@ -603,7 +603,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick:  | alt: ◷ ◴
 	"icon.time": "\uf017",
 	// pick:  | alt: Y ∏ ∑
-	"icon.yemu": "\ue22c",
+	"icon.yemu": "YeYu",
 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
 	"icon.ghost": "\u{f02a0}",
 	// pick:  | alt: 
@@ -846,7 +846,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.context": "ctx:",
 	"icon.cost": "$",
 	"icon.time": "t:",
-	"icon.yemu": "yemu",
+	"icon.yemu": "YeYu",
 	"icon.ghost": "@",
 	"icon.agents": "AG",
 	"icon.job": "bg",

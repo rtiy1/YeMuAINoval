@@ -58,6 +58,9 @@ test('story artifacts upsert project settings, cards, and chapter outlines idemp
   assert.equal(first.worldbuilding, 1)
   assert.equal(first.chapters, 2)
   assert.equal(first.documents, 1)
+  assert.deepEqual(first.fileChanges.map((item) => ({ path: item.path, action: item.action })), [
+    { path: '大纲/大纲.md', action: 'created' },
+  ])
   assert.equal(db.projects[0].genre, '无限流')
   assert.equal(db.projects[0].tone, '枫羽通过副本不断成长。')
   assert.equal(db.chapters['project-1'].length, 2)
@@ -77,6 +80,7 @@ test('story artifacts upsert project settings, cards, and chapter outlines idemp
     timestamp: '2026-07-28T00:01:00.000Z',
   })
   assert.equal(second.applied, true)
+  assert.equal(second.fileChanges[0].action, 'updated')
   assert.equal(db.chapters['project-1'].length, 2)
   assert.equal(db.ideas.length, 5)
   assert.equal(db.ideas.find((idea) => idea.title === '枫羽').body, '普通人，已经完成第一次系统绑定。')

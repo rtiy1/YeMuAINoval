@@ -218,8 +218,18 @@ export interface StoryAgentResponse {
 export interface StoryAgentCallbacks {
 	onDelta?: (delta: string) => void | Promise<void>;
 	onReasoningDelta?: (delta: string) => void | Promise<void>;
+	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	signal?: AbortSignal;
+}
+
+export interface StoryToolEvent {
+	phase: "start" | "update" | "end";
+	toolCallId: string;
+	toolName: string;
+	arguments: Record<string, unknown>;
+	details?: Record<string, unknown>;
+	isError?: boolean;
 }
 
 interface RuntimeRequest {
@@ -611,15 +621,56 @@ function aggregateUsage(messages: readonly unknown[]): StoryAgentUsage {
 	};
 }
 
-function enqueueCallback(
+function enqueueCallback<T>(
 	previous: Promise<void>,
-	callback: ((delta: string) => void | Promise<void>) | undefined,
-	delta: string,
+	callback: ((value: T) => void | Promise<void>) | undefined,
+	value: T,
 ): Promise<void> {
 	if (!callback) return previous;
 	return previous.then(async () => {
-		await callback(delta);
+		await callback(value);
 	});
+}
+
+function storyFileMutationRequirement(message: string, payload: Record<string, unknown>): number {
+	const explicit = Number(payload.required_story_files ?? payload.requiredStoryFiles);
+	const text = String(message || "").trim();
+	const mentionsFile = /(?:文件|文档|档案|资料|\.md\b|\.txt\b|\.json\b)/i.test(text);
+	const requestsMutation = /(?:创建|新建|建立|生成|写入|保存|落盘|补全|更新|修改|编辑|重写|整理成)/.test(text);
+	if (!mentionsFile || !requestsMutation) return 0;
+	if (Number.isFinite(explicit) && explicit > 0) return Math.min(12, Math.floor(explicit));
+	const countMatch = /([一二两三四五六七八九十\d]+)\s*(?:份|个|套|组)/.exec(text);
+	if (!countMatch) return 1;
+	if (/^\d+$/.test(countMatch[1])) return Math.min(12, Math.max(1, Number(countMatch[1])));
+	const digits: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+	if (countMatch[1] === "十") return 10;
+	if (countMatch[1].includes("十")) {
+		const [tens, ones] = countMatch[1].split("十");
+		return Math.min(12, Math.max(1, (digits[tens] || 1) * 10 + (digits[ones] || 0)));
+	}
+	return digits[countMatch[1]] || 1;
+}
+
+function compactToolArguments(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const args = value as Record<string, unknown>;
+	const compact: Record<string, unknown> = {};
+	for (const key of ["path", "prefix", "title", "category", "replace_all", "requestId", "count", "chars", "accepted"]) {
+		if (args[key] !== undefined) compact[key] = args[key];
+	}
+	for (const key of ["content", "old_text", "new_text"]) {
+		if (typeof args[key] === "string") compact[`${key}_chars`] = args[key].length;
+	}
+	if (Array.isArray(args.questions)) compact.questions = args.questions.length;
+	return compact;
+}
+
+function compactToolDetails(value: unknown): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const result = value as Record<string, unknown>;
+	const details = result.details;
+	if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
+	return compactToolArguments(details);
 }
 
 async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
@@ -657,6 +708,9 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.mutateStoryData ?? "deny"),
 			),
 	};
+	const requiredStoryFiles = toolState.canMutateStoryFiles
+		? storyFileMutationRequirement(request.message, request.payload)
+		: 0;
 	const agent = new Agent({
 		initialState: {
 			model,
@@ -671,13 +725,41 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 	});
 	let callbackQueue = Promise.resolve();
 	const unsubscribe = agent.subscribe((event: AgentEvent) => {
-		if (event.type !== "message_update") return;
-		const update = event.assistantMessageEvent;
-		if (update.type === "text_delta") {
-			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onDelta, update.delta);
+		if (event.type === "message_update") {
+			const update = event.assistantMessageEvent;
+			if (update.type === "text_delta") {
+				callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onDelta, update.delta);
+			}
+			if (update.type === "thinking_delta") {
+				callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onReasoningDelta, update.delta);
+			}
+			return;
 		}
-		if (update.type === "thinking_delta") {
-			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onReasoningDelta, update.delta);
+		if (event.type === "tool_execution_start") {
+			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onToolEvent, {
+				phase: "start",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				arguments: compactToolArguments(event.args),
+			});
+		}
+		if (event.type === "tool_execution_update") {
+			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onToolEvent, {
+				phase: "update",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				arguments: compactToolArguments(event.args),
+			});
+		}
+		if (event.type === "tool_execution_end") {
+			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onToolEvent, {
+				phase: "end",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				arguments: {},
+				details: compactToolDetails(event.result),
+				isError: event.isError === true,
+			});
 		}
 	});
 	const abort = (): void => {
@@ -687,7 +769,26 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 
 	try {
 		if (request.callbacks?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-		await agent.prompt(userPrompt);
+		await agent.prompt(
+			userPrompt,
+			requiredStoryFiles ? { toolChoice: { type: "function", name: "list_story_files" } } : undefined,
+		);
+		let validationAttempts = 0;
+		while (
+			requiredStoryFiles > toolState.storyFiles.written().length &&
+			!toolState.question &&
+			validationAttempts < requiredStoryFiles
+		) {
+			const before = toolState.storyFiles.written().length;
+			const remaining = requiredStoryFiles - before;
+			toolState.submission = undefined;
+			await agent.prompt(
+				`系统执行校验：用户要求实际创建或修改作品文件，但目前只成功写入 ${before} 份，至少还需 ${remaining} 份。现在必须调用 write_story_file 写入一份尚未完成的文件；不要只描述计划，也不要在达到数量前提交结果。`,
+				{ toolChoice: { type: "function", name: "write_story_file" } },
+			);
+			validationAttempts += 1;
+			if (toolState.storyFiles.written().length <= before) break;
+		}
 		await callbackQueue;
 		if (agent.state.error) {
 			throw new Error(agent.state.error);

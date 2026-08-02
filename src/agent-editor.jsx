@@ -5,7 +5,11 @@ import {
   ChevronRight,
   Code2,
   Copy,
+  FilePenLine,
+  FilePlus2,
+  FileSearch,
   FileText,
+  FolderSearch,
   LoaderCircle,
   RotateCcw,
   ShieldAlert,
@@ -63,7 +67,21 @@ function itemResponse(item) {
 function ToolItem({ item }) {
   const status = itemStatus(item)
   const failed = ['failed', 'interrupted', 'cancelled'].includes(status)
-  const Icon = item.type === 'collabAgentToolCall' ? UsersRound : item.type === 'dynamicToolCall' ? Code2 : Check
+  const args = item.arguments || item.meta?.arguments || {}
+  const details = item.meta?.details || {}
+  const path = args.path || details.path || ''
+  const toolIcons = {
+    list_story_files: FolderSearch,
+    read_story_file: FileSearch,
+    write_story_file: FilePlus2,
+    edit_story_file: FilePenLine,
+    read_story_skill: FileText,
+  }
+  const Icon = item.type === 'collabAgentToolCall'
+    ? UsersRound
+    : item.type === 'dynamicToolCall'
+      ? toolIcons[item.tool] || Code2
+      : Check
   const label = typeof item.summary === 'string' && item.summary.trim()
     ? item.summary
     : item.type === 'dynamicToolCall'
@@ -72,7 +90,7 @@ function ToolItem({ item }) {
         ? `协作任务${item.receiver ? ` · ${item.receiver}` : ''}`
         : 'Agent 正在处理'
   const meta = item.type === 'dynamicToolCall'
-    ? item.tool
+    ? path || (details.chars ? `${details.chars} 字符` : item.tool)
     : item.type === 'collabAgentToolCall'
       ? item.receiver
       : itemDuration(item)
@@ -294,7 +312,7 @@ export function AgentEditorTurn({
         {run.artifactPreview.characters > 0 && <span>{run.artifactPreview.characters} 张人物卡</span>}
         {run.artifactPreview.worldbuilding > 0 && <span>{run.artifactPreview.worldbuilding} 条世界观</span>}
         {run.artifactPreview.chapters > 0 && <span>{run.artifactPreview.chapters} 章大纲</span>}
-        {run.artifactPreview.documents > 0 && <span>{run.artifactPreview.documents} 份 Skill 资料</span>}
+        {run.artifactPreview.documents > 0 && <span>{run.artifactPreview.documents} 份作品文件</span>}
       </div>
       <button type="button" disabled={applyingArtifacts} onClick={async () => {
         setApplyingArtifacts(true)
@@ -311,7 +329,7 @@ export function AgentEditorTurn({
 
     {run.artifactApplication?.applied && <div className="agent-mutation-applied">
       <ShieldCheck size={13} />
-      <span>{run.artifactApplication.summary || '资料变更已确认'}</span>
+      <span>{run.artifactApplication.summary || '资料变更已确认'}{run.artifactApplication.fileChanges?.length ? ` · ${run.artifactApplication.fileChanges.map((item) => item.path).join('、')}` : ''}</span>
     </div>}
 
     {view.checks.length > 0 && <div className="agent-runtime-checks">

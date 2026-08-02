@@ -7,7 +7,6 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@yemu/tui";
-import { APP_NAME } from "@yemu/utils";
 import { theme } from "../../modes/theme/theme";
 import tipsText from "./tips.txt" with { type: "text" };
 
@@ -136,7 +135,7 @@ export interface LspServerInfo {
 }
 
 /**
- * Premium welcome screen with block-based YeMu logo and two-column layout.
+ * Premium welcome screen with block-based YeYu logo and two-column layout.
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
@@ -353,7 +352,7 @@ export class WelcomeComponent implements Component {
 		const lines: string[] = [];
 
 		// Top border with embedded title
-		const title = ` ${APP_NAME} v${this.version} `;
+		const title = ` YeYu v${this.version} `;
 		const titlePrefixRaw = hChar.repeat(3);
 		const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
 		const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
@@ -450,7 +449,13 @@ export class WelcomeComponent implements Component {
 	}
 }
 
-export const YEMU_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
+export const YEYU_LOGO = [
+	"█   █ ███ █   █ █   █",
+	" █ █  █    █ █  █   █",
+	"  █   ███   █   █   █",
+	"  █   █     █   █   █",
+	"  █   ███   █    ███ ",
+];
 
 /** Multi-stop palette for the diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
@@ -571,8 +576,8 @@ function introLogoFrame(progress: number): string[] {
 	const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
 	const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
 	const shineStrength = (1 - eased) ** 1.5;
-	return gradientLogo(YEMU_LOGO, phase, { strength: shineStrength, pos: shinePos });
+	return gradientLogo(YEYU_LOGO, phase, { strength: shineStrength, pos: shinePos });
 }
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
-const REST_FRAME = gradientLogo(YEMU_LOGO, 0);
+const REST_FRAME = gradientLogo(YEYU_LOGO, 0);

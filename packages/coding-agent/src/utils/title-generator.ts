@@ -21,7 +21,7 @@ import { tinyTitleClient } from "../tiny/title-client";
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
 
-const DEFAULT_TERMINAL_TITLE = "Y";
+const DEFAULT_TERMINAL_TITLE = "YeYu";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 interface WindowsConsoleTitleApi {
@@ -496,13 +496,13 @@ const terminalTitleRuntime: {
 };
 
 /**
- * Compose the terminal title from the `Y` brand, a state-carrying separator, and
+ * Compose the terminal title from the `YeYu` brand, a state-carrying separator, and
  * the session label. Pure (no I/O) so the state→separator contract is testable:
- *   - `idle` (user's turn):  `Y > label`;
- *   - `working`:             `Y ⠋ label` (`Y : label` on Windows);
- *   - `attention`:           `Y ! label`;
- *   - disabled:              `Y: label`.
- * Without a label the separator trails the brand (`Y >`) so the state stays visible.
+ *   - `idle` (user's turn):  `YeYu > label`;
+ *   - `working`:             `YeYu ⠋ label` (`YeYu : label` on Windows);
+ *   - `attention`:           `YeYu ! label`;
+ *   - disabled:              `YeYu: label`.
+ * Without a label the separator trails the brand (`YeYu >`) so the state stays visible.
  */
 export function buildTerminalTitleWithState(
 	label: string | undefined,

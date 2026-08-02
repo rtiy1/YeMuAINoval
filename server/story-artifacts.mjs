@@ -122,7 +122,7 @@ export function applyStoryArtifacts(db, {
 } = {}) {
   const project = db?.projects?.find((item) => item.id === projectId && item.userId === userId)
   if (!project || !artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)) {
-    return { applied: false, summary: '', characters: 0, worldbuilding: 0, chapters: 0, documents: 0, projectUpdated: false }
+    return { applied: false, summary: '', characters: 0, worldbuilding: 0, chapters: 0, documents: 0, fileChanges: [], projectUpdated: false }
   }
   db.ideas ||= []
   db.chapters ||= {}
@@ -230,10 +230,11 @@ export function applyStoryArtifacts(db, {
   }
 
   let documentCount = 0
+  const fileChanges = []
   for (const item of list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)) {
     const folder = text(item.category || item.path.split('/')[0] || '资料', 40)
     const label = text(folder === '大纲' ? '大纲文档' : `${folder}文档`, 20)
-    upsertIdea(db, {
+    const change = upsertIdea(db, {
       userId,
       projectId,
       label,
@@ -244,6 +245,13 @@ export function applyStoryArtifacts(db, {
       color: folder === '大纲' ? 'yellow' : folder === '人物' ? 'coral' : 'teal',
       sourcePath: item.path,
       timestamp,
+    })
+    fileChanges.push({
+      id: change.record.id,
+      path: item.path,
+      title: item.title,
+      category: folder,
+      action: change.created ? 'created' : 'updated',
     })
     documentCount += 1
   }
@@ -268,6 +276,7 @@ export function applyStoryArtifacts(db, {
     worldbuilding: worldbuildingCount,
     chapters: chapterCount,
     documents: documentCount,
+    fileChanges,
     projectUpdated,
   }
 }

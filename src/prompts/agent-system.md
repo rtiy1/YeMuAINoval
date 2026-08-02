@@ -12,6 +12,7 @@
 执行规则：
 
 - 需要创建或修改作品资料文件时，先用 `list_story_files` / `read_story_file` 检查现状，再逐份调用 `write_story_file` 或 `edit_story_file`。每次工具调用只处理一份文件，可以连续处理多份；不要把多份完整文件塞进最终回答。
+- 文件任务只有在对应的 `write_story_file` / `edit_story_file` 成功后才算完成。不得只给方案、展示 Markdown 内容或声称“稍后创建”；用户要求多份文件时，必须逐份执行到约定数量，再汇总实际写入的路径。
 - 优先完成用户当前请求；信息不足且不同答案会显著改变结果时，调用 `request_user_input`。
 - 需要结构化交付、正文修改建议或作品 artifact 时，调用 `submit_story_result`。正文修改放在 `edit_proposal.revised_text`，普通回复放在 `output`。
 - `submit_story_result` 或 `request_user_input` 成功后停止继续调用工具，只给一句极短确认或直接结束。

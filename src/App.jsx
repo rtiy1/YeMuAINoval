@@ -3515,7 +3515,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           reviewable_edit: editRequested,
           tool_policy: {
             externalSearch: agentWebSearch ? 'allow' : 'deny',
-            mutateStoryData: 'propose',
+            mutateStoryData: agentMode === 'build' ? 'allow' : 'propose',
             deleteStoryData: 'deny',
           },
         },
@@ -3566,6 +3566,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const artifactApplication = task.artifactApplication || response?.result?.artifacts_applied
     if (terminal && artifactApplication?.applied === true && !artifactSyncRef.current.has(task.id)) {
       artifactSyncRef.current.add(task.id)
+      if (artifactApplication.fileChanges?.length) setRailTab('文件')
       void onArtifactsApplied?.(artifactApplication)
     }
     setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.taskId === task.id) ? {
@@ -3778,6 +3779,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         artifactPreview: null,
         artifactApplication: response.application || response.task?.artifactApplication || null,
       } : item))
+      if (response.application?.fileChanges?.length) setRailTab('文件')
       await onArtifactsApplied?.(response.application)
       onNotify(response.application?.summary || '资料变更已写入')
     } catch (error) {
@@ -3816,9 +3818,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const saveBusy = draftStatus === 'saving'
   const matchedIdeas = ideas.filter((idea) => idea.projectId === project?.id || !idea.projectId)
   const projectForeshadows = foreshadows.filter((item) => item.projectId === project?.id)
-  const outlineIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '大纲' || /大纲/.test(`${idea.label}`)))
-  const characterIdeas = sortIdeas(matchedIdeas.filter((idea) => idea.folder === '人物' || /人物|角色|主角|配角/.test(`${idea.label}`)))
-  const termIdeas = sortIdeas(matchedIdeas.filter((idea) => !outlineIdeas.some((outline) => outline.id === idea.id)
+  const storyFilePath = (idea) => (idea.tags || []).find((tag) => String(tag).startsWith('文件:'))?.slice(3) || ''
+  const storyFileIdeas = sortIdeas(matchedIdeas.filter((idea) => storyFilePath(idea)))
+  const regularIdeas = matchedIdeas.filter((idea) => !storyFilePath(idea))
+  const outlineIdeas = sortIdeas(regularIdeas.filter((idea) => idea.folder === '大纲' || /大纲/.test(`${idea.label}`)))
+  const characterIdeas = sortIdeas(regularIdeas.filter((idea) => idea.folder === '人物' || /人物|角色|主角|配角/.test(`${idea.label}`)))
+  const termIdeas = sortIdeas(regularIdeas.filter((idea) => !outlineIdeas.some((outline) => outline.id === idea.id)
     && !characterIdeas.some((character) => character.id === idea.id)
     && (['世界观', '设定', '追踪'].includes(idea.folder) || /词条|设定|世界|地点|规则|关系|追踪|时间线/.test(`${idea.label}${idea.title}`))))
   const outlineEntries = [
@@ -3846,6 +3851,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         ? `人物 · ${characterIdeas.length}`
         : railTab === '词条'
           ? `词条 · ${termIdeas.length}`
+          : railTab === '文件'
+            ? `作品文件 · ${storyFileIdeas.length}`
           : railTab === '伏笔'
             ? `伏笔 · ${projectForeshadows.length}`
             : railTab === '记忆'
@@ -4022,6 +4029,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               { label: '大纲', icon: BookMarked },
               { label: '人物', icon: UsersRound },
               { label: '词条', icon: Tags },
+              { label: '文件', icon: FolderOpen },
               { label: '记忆', icon: BrainCircuit },
               { label: '伏笔', icon: Pin },
             ].map(({ label, icon: Icon }) => <button key={label} role="tab" aria-selected={railTab === label} className={railTab === label ? 'active' : ''} onClick={() => setRailTab(label)}><Icon size={13} /><span>{label}</span></button>)}
@@ -4044,6 +4052,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           {railTab === '大纲' && <div className="rail-outline-list">{outlineEntries.length ? outlineEntries.map((item, index) => <button key={item.id} onClick={() => setMaterialViewing(item)}><span>{String(index + 1).padStart(2, '0')}</span><strong>{item.title}</strong><small>{item.label || '大纲'}</small></button>) : <div className="rail-empty-block"><BookMarked size={22} /><p>还没有已落库的大纲</p><small>让 Agent 生成大纲并确认写入后会显示在这里。</small></div>}</div>}
           {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
           {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
+          {railTab === '文件' && <div className="rail-file-list">{storyFileIdeas.length ? storyFileIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><FileText size={14} /><span><strong>{idea.title}</strong><small>{storyFilePath(idea)}</small></span><ChevronRight size={12} /></button>) : <div className="rail-empty-block"><FolderOpen size={22} /><p>还没有作品文件</p><small>让 Agent 创建设定、大纲或资料文件后会显示在这里。</small></div>}</div>}
           {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={() => void extractMemories()} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
           {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}

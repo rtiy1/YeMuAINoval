@@ -7,10 +7,12 @@ test('task stream delivers model deltas directly to local SSE subscribers', () =
   const unsubscribe = subscribeTaskStream('task-live', (event) => received.push(event))
   publishTaskStreamEvent('task-live', { type: 'reasoning_delta', delta: '先检查上下文' })
   publishTaskStreamEvent('task-live', { type: 'output_delta', delta: '第一段' })
+  publishTaskStreamEvent('task-live', { type: 'tool_event', phase: 'start', toolName: 'write_story_file' })
   unsubscribe()
   publishTaskStreamEvent('task-live', { type: 'output_delta', delta: '不应收到' })
   assert.deepEqual(received.map((event) => [event.type, event.delta]), [
     ['reasoning_delta', '先检查上下文'],
     ['output_delta', '第一段'],
+    ['tool_event', undefined],
   ])
 })

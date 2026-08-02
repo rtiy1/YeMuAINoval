@@ -206,3 +206,46 @@ test("Story Agent can write multiple virtual files across independent tool turns
 		fetchSpy.mockRestore();
 	}
 });
+
+test("file requests are corrected when the model only describes a plan", async () => {
+	const responses = [
+		deepSeekSseResponse("我会创建设定文件。"),
+		deepSeekToolSseResponse("call-forced-write", "write_story_file", {
+			path: "设定/世界规则.md",
+			title: "世界规则",
+			category: "设定",
+			content: "# 世界规则\n\n能力必须遵守等价交换。",
+		}),
+		deepSeekSseResponse("已创建 `设定/世界规则.md`。"),
+	];
+	const toolEvents: Array<{ phase: string; toolName: string }> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("完成"),
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "创建一份世界规则文件",
+			skill: "story-setup",
+			payload: { tool_policy: { mutateStoryData: "allow" } },
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		}, {
+			onToolEvent: (event) => toolEvents.push(event),
+		});
+		const documents = response.result.artifacts?.documents as Array<{ path: string }>;
+		expect(documents.map(file => file.path)).toEqual(["设定/世界规则.md"]);
+		expect(toolEvents.map(event => `${event.phase}:${event.toolName}`)).toEqual([
+			"start:write_story_file",
+			"end:write_story_file",
+		]);
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});

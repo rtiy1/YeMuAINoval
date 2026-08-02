@@ -47,13 +47,14 @@ async function preparedStoryAgentBody(user, input) {
   }
 }
 
-export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null) {
+export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null, onToolEvent = null) {
   const body = await preparedStoryAgentBody(user, input)
   const projectId = body.payload?.project_id || body.payload?.projectId || null
   return await runStoryAgent(body, {
     signal,
     onDelta: onDelta || undefined,
     onReasoningDelta: onReasoningDelta || undefined,
+    onToolEvent: onToolEvent || undefined,
     readStoryFile: projectId
       ? async (path) => readStoryFileForAgent(await loadDb(), user.id, projectId, path)
       : undefined,

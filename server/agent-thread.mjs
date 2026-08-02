@@ -466,14 +466,15 @@ export function agentTurnItems(turn, task) {
   }
   for (const event of task?.events || []) {
     if (event.type === 'result') continue
+    const dynamicTool = event.type === 'skill' || event.type === 'tool'
     items.push({
       id: event.id,
-      type: event.type === 'skill' ? 'dynamicToolCall' : 'lifecycle',
+      type: dynamicTool ? 'dynamicToolCall' : 'lifecycle',
       status: itemStatus(event.status),
       summary: event.label,
-      ...(event.type === 'skill' ? {
-        tool: task.skill || 'story',
-        arguments: { message: task.message },
+      ...(dynamicTool ? {
+        tool: event.type === 'tool' ? event.meta?.toolName : task.skill || 'story',
+        arguments: event.type === 'tool' ? event.meta?.arguments || {} : { message: task.message },
       } : {}),
       meta: event.meta || {},
       createdAt: event.startedAt || task.createdAt || null,

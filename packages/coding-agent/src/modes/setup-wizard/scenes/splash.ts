@@ -1,12 +1,12 @@
 import { padding, truncateToWidth, visibleWidth } from "@yemu/tui";
-import { gradientEscape, gradientLogo, type ShineConfig, YEMU_LOGO } from "../../components/welcome";
+import { gradientEscape, gradientLogo, type ShineConfig, YEYU_LOGO } from "../../components/welcome";
 import { theme } from "../../theme/theme";
 
 export const SETUP_SPLASH_MS = 2600;
 export const SETUP_TICK_MS = 33;
 
 /** Brand mark at 2x: every glyph doubled horizontally, every row doubled vertically. */
-const LARGE_LOGO = YEMU_LOGO.flatMap(line => {
+const LARGE_LOGO = YEYU_LOGO.flatMap(line => {
 	let wide = "";
 	for (const char of line) {
 		wide += char === " " ? "  " : `${char}${char}`;
@@ -117,7 +117,7 @@ function waterAmplitude(
 }
 
 /**
- * Animated setup splash, in the spirit of the yemu landing page: the brand Y
+ * Animated setup splash, in the spirit of the YeYu landing page.
  * mark rendered with the live diagonal gradient + shine sweep, rising out of a
  * rippling, gradient-lit water surface, under a faint twinkling starfield. The
  * mark and water share one continuous gradient so the sweep reads across the
@@ -188,7 +188,7 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 
 /** Centered fallback for windows too small to hold the full scene. */
 function renderCompactSplash(width: number, height: number, phase: number, shine: ShineConfig): string[] {
-	const art = height >= 14 ? LARGE_LOGO : YEMU_LOGO;
+	const art = height >= 14 ? LARGE_LOGO : YEYU_LOGO;
 	const content = [...gradientLogo(art, phase, shine), "", theme.bold("O h   M y   P i")];
 	const start = Math.max(0, Math.floor((height - content.length) / 2));
 	const lines: string[] = [];

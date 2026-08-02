@@ -2338,6 +2338,31 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
     const interactionAttempt = Math.max(1, Number(event?.interactionAttempt) || 1)
     const executionGeneration = Math.max(1, Number(event?.executionGeneration) || 1)
     if (interactionAttempt !== lastInteractionAttempt || executionGeneration !== lastExecutionGeneration) return false
+    if (event.type === 'tool_event' && event.toolCallId && event.toolName) {
+      const completed = event.phase === 'end'
+      const item = {
+        id: `${initialTurn.id}:tool:${event.toolCallId}`,
+        type: 'dynamicToolCall',
+        status: completed ? (event.isError ? 'failed' : 'completed') : 'inProgress',
+        summary: event.label || `调用 ${event.toolName}`,
+        tool: event.toolName,
+        arguments: event.arguments || {},
+        meta: {
+          toolName: event.toolName,
+          arguments: event.arguments || {},
+          details: event.details || {},
+          ...(event.isError ? { error: '工具执行失败' } : {}),
+        },
+        ...(completed ? { completedAt: new Date().toISOString() } : {}),
+      }
+      res.write(`event: ${completed ? 'item/completed' : 'item/started'}\ndata: ${JSON.stringify({
+        threadId: initialThread.id,
+        turnId: initialTurn.id,
+        item,
+      })}\n\n`)
+      itemVersions.set(item.id, `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta)}`)
+      return true
+    }
     if (event.type === 'reasoning_delta' && typeof event.delta === 'string' && event.delta) {
       const room = Math.max(0, 12_000 - lastReasoningLength)
       const delta = event.delta.slice(0, room)

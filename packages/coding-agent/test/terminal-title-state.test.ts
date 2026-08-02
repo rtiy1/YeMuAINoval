@@ -12,46 +12,46 @@ const LABEL = "my-project";
 
 describe("buildTerminalTitleWithState", () => {
 	it("separates brand and label with '>' when idle/done (your turn)", () => {
-		expect(buildTerminalTitleWithState(LABEL, "idle", 0, true)).toBe(`Y > ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "idle", 0, true)).toBe(`YeYu > ${LABEL}`);
 	});
 
 	it("separates brand and label with '!' when the agent needs attention", () => {
-		expect(buildTerminalTitleWithState(LABEL, "attention", 0, true)).toBe(`Y ! ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "attention", 0, true)).toBe(`YeYu ! ${LABEL}`);
 	});
 
 	it("animates spinner frames in the separator slot while working outside Windows", () => {
 		const frame0 = buildTerminalTitleWithState(LABEL, "working", 0, true, "linux");
 		const frame1 = buildTerminalTitleWithState(LABEL, "working", 1, true, "linux");
-		// The brand stays a bare `Y`; only the separator between brand and label
+		// The brand stays `YeYu`; only the separator between brand and label
 		// carries the spinner glyph, and it advances per frame.
-		expect(frame0).toBe(`Y ⠋ ${LABEL}`);
-		expect(frame1).toBe(`Y ⠙ ${LABEL}`);
+		expect(frame0).toBe(`YeYu ⠋ ${LABEL}`);
+		expect(frame1).toBe(`YeYu ⠙ ${LABEL}`);
 		expect(frame1).not.toBe(frame0);
 		// The frame index is taken modulo the frame count, so it never throws or
 		// produces an "undefined" separator for a large counter.
 		const wrapped = buildTerminalTitleWithState(LABEL, "working", 9999, true, "linux");
-		expect(wrapped.startsWith("Y ")).toBe(true);
+		expect(wrapped.startsWith("YeYu ")).toBe(true);
 		expect(wrapped.endsWith(` ${LABEL}`)).toBe(true);
 		expect(wrapped).not.toContain("undefined");
 	});
 
 	it("uses a static colon while working on Windows", () => {
-		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "win32")).toBe(`Y : ${LABEL}`);
-		expect(buildTerminalTitleWithState(LABEL, "working", 1, true, "win32")).toBe(`Y : ${LABEL}`);
-		expect(buildTerminalTitleWithState(undefined, "working", 1, true, "win32")).toBe("Y :");
+		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "win32")).toBe(`YeYu : ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "working", 1, true, "win32")).toBe(`YeYu : ${LABEL}`);
+		expect(buildTerminalTitleWithState(undefined, "working", 1, true, "win32")).toBe("YeYu :");
 	});
 
 	it("keeps the state visible as a trailing separator when there is no label", () => {
-		expect(buildTerminalTitleWithState(undefined, "idle", 0, true)).toBe("Y >");
-		expect(buildTerminalTitleWithState(undefined, "attention", 0, true)).toBe("Y !");
-		expect(buildTerminalTitleWithState(undefined, "working", 0, true, "linux")).toBe("Y ⠋");
+		expect(buildTerminalTitleWithState(undefined, "idle", 0, true)).toBe("YeYu >");
+		expect(buildTerminalTitleWithState(undefined, "attention", 0, true)).toBe("YeYu !");
+		expect(buildTerminalTitleWithState(undefined, "working", 0, true, "linux")).toBe("YeYu ⠋");
 	});
 
-	it("renders the pre-state `Y: label` layout when disabled, regardless of state", () => {
-		expect(buildTerminalTitleWithState(LABEL, "working", 3, false)).toBe(`Y: ${LABEL}`);
-		expect(buildTerminalTitleWithState(LABEL, "idle", 0, false)).toBe(`Y: ${LABEL}`);
-		expect(buildTerminalTitleWithState(LABEL, "attention", 0, false)).toBe(`Y: ${LABEL}`);
-		expect(buildTerminalTitleWithState(undefined, "idle", 0, false)).toBe("Y");
+	it("renders the pre-state `YeYu: label` layout when disabled, regardless of state", () => {
+		expect(buildTerminalTitleWithState(LABEL, "working", 3, false)).toBe(`YeYu: ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "idle", 0, false)).toBe(`YeYu: ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "attention", 0, false)).toBe(`YeYu: ${LABEL}`);
+		expect(buildTerminalTitleWithState(undefined, "idle", 0, false)).toBe("YeYu");
 	});
 });
 
