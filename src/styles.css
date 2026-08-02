@@ -6061,21 +6061,21 @@ details[open] > summary .agent-trace-chevron {
 /* -------------------------------------------------------------------------- */
 
 .tui-agent-shell {
-  --tui-bg: #f4f2ed;
-  --tui-panel: #f8f6f0;
-  --tui-raised: #e9e6de;
-  --tui-user: #e9eee9;
-  --tui-line: #d8d4ca;
-  --tui-line-soft: #e5e1d8;
-  --tui-text: #30352f;
-  --tui-muted: #777d74;
-  --tui-faint: #999d95;
-  --tui-accent: #3d746a;
+  --tui-bg: var(--ide-paper);
+  --tui-panel: var(--ide-panel);
+  --tui-raised: var(--ide-hover);
+  --tui-user: var(--ide-active);
+  --tui-line: var(--ide-line-strong);
+  --tui-line-soft: var(--ide-line);
+  --tui-text: var(--ide-text);
+  --tui-muted: var(--ide-muted);
+  --tui-faint: #9ca2a8;
+  --tui-accent: var(--ide-purple);
   --tui-cyan: #527583;
   --tui-warm: #a16b55;
   --tui-danger: #a65e55;
   color: var(--tui-text);
-  color-scheme: light;
+  color-scheme: inherit;
   background: var(--tui-bg);
   border-left-color: #d5d1c8;
   font-family: 'DM Mono', 'Noto Sans SC', monospace;
@@ -7179,4 +7179,130 @@ details[open] > summary .agent-trace-chevron {
     background: var(--tui-accent);
     border-color: rgba(255, 255, 255, .2);
   }
+}
+
+/* Keep the embedded agent on the same palette as the surrounding editor. */
+.tui-agent-shell .tui-agent-header,
+.tui-agent-shell .agent-conversation,
+.tui-agent-shell .agent-composer-wrap,
+.tui-agent-shell .assistant-form.agent-composer,
+.tui-agent-shell .agent-choice-card {
+  background: var(--tui-bg);
+}
+
+.tui-agent-shell .agent-choice-options button:hover:not(:disabled),
+.tui-agent-shell .agent-choice-options button.selected {
+  color: var(--tui-accent);
+  background: color-mix(in srgb, var(--tui-accent) 10%, var(--tui-bg));
+  border-color: color-mix(in srgb, var(--tui-accent) 40%, var(--tui-line));
+}
+
+.tui-agent-shell .agent-choice-options button.selected > svg,
+.tui-agent-shell .agent-choice-options button:hover:not(:disabled) .agent-choice-copy small,
+.tui-agent-shell .agent-choice-options button.selected .agent-choice-copy small {
+  color: var(--tui-accent);
+}
+
+/* Unified night theme for the writing surface and its embedded agent. */
+html[data-theme='dark'] {
+  --ide-bg: #14171a;
+  --ide-panel: #191d21;
+  --ide-paper: #1e2227;
+  --ide-line: #2b3036;
+  --ide-line-strong: #383e46;
+  --ide-text: #e5e8ec;
+  --ide-muted: #969da6;
+  --ide-hover: #272c32;
+  --ide-active: #30363d;
+  --ide-green: #62c69d;
+  --ide-purple: #aa8ad7;
+  --ide-red: #ef7a7a;
+  --ide-blue: #67a9e8;
+  color-scheme: dark;
+}
+
+html[data-theme='dark'] body,
+html[data-theme='dark'] .app-shell,
+html[data-theme='dark'] .main-shell,
+html[data-theme='dark'] .content-wrap,
+html[data-theme='dark'] .editor-page {
+  color: var(--ide-text);
+  background: var(--ide-bg);
+}
+
+html[data-theme='dark'] .sidebar,
+html[data-theme='dark'] .topbar,
+html[data-theme='dark'] .editor-document-tabs,
+html[data-theme='dark'] .chapter-rail,
+html[data-theme='dark'] .writing-surface,
+html[data-theme='dark'] .writing-toolbar,
+html[data-theme='dark'] .agent-rail,
+html[data-theme='dark'] .agent-panel-heading,
+html[data-theme='dark'] .agent-conversation,
+html[data-theme='dark'] .agent-composer-wrap,
+html[data-theme='dark'] .assistant-form.agent-composer {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .nav-item,
+html[data-theme='dark'] .secondary-nav .nav-item,
+html[data-theme='dark'] .recent-project,
+html[data-theme='dark'] .profile-chip,
+html[data-theme='dark'] .assistant-title,
+html[data-theme='dark'] .assistant-title strong,
+html[data-theme='dark'] .agent-choice-card > header span,
+html[data-theme='dark'] .agent-choice-card > p,
+html[data-theme='dark'] .agent-choice-options button,
+html[data-theme='dark'] .tui-agent-shell .agent-user-turn p,
+html[data-theme='dark'] .writing-body textarea {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] .brand-name,
+html[data-theme='dark'] .profile-copy strong,
+html[data-theme='dark'] .breadcrumbs,
+html[data-theme='dark'] .editor-document-tab.active {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] .nav-item:hover,
+html[data-theme='dark'] .recent-project:hover,
+html[data-theme='dark'] .nav-item.active,
+html[data-theme='dark'] .secondary-nav .nav-item.active,
+html[data-theme='dark'] .project-shelf .recent-project.active,
+html[data-theme='dark'] .profile-more-button:hover,
+html[data-theme='dark'] .profile-more-button.active {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+
+html[data-theme='dark'] .brand-mark,
+html[data-theme='dark'] .search-button,
+html[data-theme='dark'] .profile-menu,
+html[data-theme='dark'] .agent-choice-card,
+html[data-theme='dark'] .agent-choice-options button,
+html[data-theme='dark'] .agent-choice-custom input {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-choice-options button:hover:not(:disabled),
+html[data-theme='dark'] .tui-agent-shell .agent-choice-options button.selected {
+  color: #d9caee;
+  background: color-mix(in srgb, var(--ide-purple) 18%, var(--ide-paper));
+  border-color: color-mix(in srgb, var(--ide-purple) 48%, var(--ide-line));
+}
+
+html[data-theme='dark'] .modal-backdrop {
+  background: rgba(5, 7, 9, .72);
+}
+
+html[data-theme='dark'] .modal,
+html[data-theme='dark'] .toast {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
 }

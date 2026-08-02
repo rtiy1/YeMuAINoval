@@ -46,6 +46,7 @@ import {
   Mail,
   Menu,
   Minimize2,
+  Moon,
   MoreHorizontal,
   PanelLeft,
   PanelRight,
@@ -65,6 +66,7 @@ import {
   Star,
   Split,
   Store,
+  Sun,
   Target,
   Tags,
   Trophy,
@@ -109,6 +111,7 @@ import {
 
 const ASSISTANT_NAME = '夜雨'
 const SIDEBAR_COLLAPSED_KEY = 'story-studio-sidebar-collapsed'
+const THEME_KEY = 'story-studio-theme'
 const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
 
@@ -359,6 +362,15 @@ function App() {
       return false
     }
   })
+  const [theme, setTheme] = useState(() => {
+    try {
+      const savedTheme = window.localStorage.getItem(THEME_KEY)
+      if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme
+      return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
   const [toast, setToast] = useState('')
   const [skillCatalog, setSkillCatalog] = useState([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -389,6 +401,16 @@ function App() {
   const savedDraftRef = useRef('')
   const activeDraftKeyRef = useRef('')
   const saveQueueRef = useRef(Promise.resolve())
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+    try {
+      window.localStorage.setItem(THEME_KEY, theme)
+    } catch {
+      // The selected theme still applies for this session when storage is unavailable.
+    }
+  }, [theme])
   const skillSubmissionRef = useRef(null)
   const profileMenuRef = useRef(null)
 
@@ -1272,6 +1294,10 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
+          <button className="nav-item theme-toggle" aria-label={theme === 'dark' ? '切换为日间模式' : '切换为夜间模式'} title={sidebarCollapsed ? (theme === 'dark' ? '日间模式' : '夜间模式') : undefined} onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>
+            {theme === 'dark' ? <Sun size={17} strokeWidth={1.8} /> : <Moon size={17} strokeWidth={1.8} />}
+            <span>{theme === 'dark' ? '日间模式' : '夜间模式'}</span>
+          </button>
           <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
           <button className="nav-item" aria-label="退出登录" title={sidebarCollapsed ? '退出登录' : undefined} onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
           <div className="profile-chip" ref={profileMenuRef}>
@@ -2385,7 +2411,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         return
       }
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submitAssistant(event)
+    if (
+      event.key === 'Enter'
+      && !event.shiftKey
+      && !event.isComposing
+      && !event.nativeEvent?.isComposing
+    ) {
+      event.preventDefault()
+      submitAssistant(event)
+    }
   }
 
   useEffect(() => {

@@ -337,7 +337,13 @@ function parseMarkdownTableChoices(lines) {
       }
     }
 
+    // Column-oriented choice tables must reserve the first column for row
+    // labels (for example `| | 方案 A | 方案 B |`). Without that explicit
+    // shape, ordinary status tables such as `环节 | 状态 | 说明` were being
+    // mistaken for three selectable answers whenever nearby copy mentioned a
+    // choice.
     const hasRowLabelColumn = headerCells[0] === ''
+    if (!hasRowLabelColumn) continue
     const optionLabels = (hasRowLabelColumn ? headerCells.slice(1) : headerCells).filter(Boolean)
     if (optionLabels.length < 2 || optionLabels.length > 6) continue
 

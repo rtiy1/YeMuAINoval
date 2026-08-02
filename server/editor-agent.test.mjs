@@ -182,6 +182,43 @@ test('editor agent converts row-oriented markdown option tables into selectable 
   assert.match(parsed.options[0].description, /适合你如果…：想把设定做扎实/)
 })
 
+test('editor agent skips status tables before row-oriented choices', () => {
+  const parsed = parseAgentChoicePrompt(`### 选择方向
+
+| 环节 | 状态 | 说明 |
+| --- | --- | --- |
+| 选题方向 | 已定 | 无限流 |
+| 大纲 | 未开始 | 无任何大纲 |
+
+建议下一步（选一个）
+
+| 选项 | 做什么 | 适合你如果… |
+| --- | --- | --- |
+| A. 补全核心设定 | 建主角卡和力量体系 | 想把设定做扎实 |
+| B. 直接搭大纲 | 出全书体量和前三卷章纲 | 想快速看到章节蓝图 |
+| C. 一步到位开写 | 补设定、搭大纲、写第一章 | 不想来回确认 |
+
+你选哪个？`)
+
+  assert.equal(parsed.question, '你选哪个？')
+  assert.deepEqual(parsed.options.map(({ key, label }) => ({ key, label })), [
+    { key: 'A', label: '补全核心设定' },
+    { key: 'B', label: '直接搭大纲' },
+    { key: 'C', label: '一步到位开写' },
+  ])
+})
+
+test('editor agent does not turn an ordinary status table into choices', () => {
+  const parsed = parseAgentChoicePrompt(`选择方向已经确定，接下来继续完善资料。
+
+| 环节 | 状态 | 说明 |
+| --- | --- | --- |
+| 选题方向 | 已定 | 无限流 |
+| 大纲 | 未开始 | 无任何大纲 |`)
+
+  assert.equal(parsed, null)
+})
+
 test('editor agent exposes completed markdown choices as non-blocking followups', () => {
   const output = `## 下一步
 
