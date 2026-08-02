@@ -118,11 +118,17 @@ const readStoryFileSchema = z.object({
 	path: z.string().min(1).max(240),
 });
 
+const storyFileContentSchema = z.union([
+	z.string().min(1).max(50_000),
+	z.array(z.unknown()).max(200),
+	z.record(z.string(), z.unknown()),
+]).describe("Markdown 文本；也接受可自动转换为 Markdown 的结构化内容");
+
 const writeStoryFileSchema = z.object({
 	path: z.string().min(1).max(240),
 	title: z.string().min(1).max(160).optional(),
 	category: z.string().min(1).max(40).optional(),
-	content: z.string().min(1).max(50_000),
+	content: storyFileContentSchema,
 });
 
 const editStoryFileSchema = z.object({
@@ -257,6 +263,43 @@ interface ToolState {
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
+}
+
+function structuredStoryFileText(value: unknown, depth = 0): string {
+	if (depth > 8 || value === null || value === undefined) return "";
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (Array.isArray(value)) {
+		return value.map(item => structuredStoryFileText(item, depth + 1)).filter(Boolean).join("\n\n");
+	}
+	if (typeof value !== "object") return "";
+	const record = value as Record<string, unknown>;
+	const heading = ["title", "heading", "name", "label"]
+		.map(key => structuredStoryFileText(record[key], depth + 1).trim())
+		.find(Boolean);
+	const bodyKey = ["markdown", "content", "body", "text"].find(key => record[key] !== undefined);
+	if (bodyKey) {
+		const body = structuredStoryFileText(record[bodyKey], depth + 1).trim();
+		return [heading ? `${depth <= 1 ? "#" : "##"} ${heading}` : "", body].filter(Boolean).join("\n\n");
+	}
+	const ignored = new Set(["title", "heading", "name", "label", "type"]);
+	const unwrappedCollections = new Set(["sections", "items", "entries", "blocks", "list"]);
+	const sections = Object.entries(record).flatMap(([key, entry]) => {
+		if (ignored.has(key)) return [];
+		const body = structuredStoryFileText(entry, depth + 1).trim();
+		if (!body) return [];
+		if (unwrappedCollections.has(key)) return [body];
+		const label = key.replace(/[_-]+/g, " ").trim();
+		return [`${depth <= 1 ? "##" : "###"} ${label}\n\n${body}`];
+	});
+	return [heading ? `${depth === 0 ? "#" : "##"} ${heading}` : "", ...sections].filter(Boolean).join("\n\n");
+}
+
+function normalizeStoryFileContent(value: unknown): string {
+	const content = structuredStoryFileText(value).replace(/\r\n?/g, "\n").trim();
+	if (!content) throw new Error("作品文件 content 不能为空");
+	if (content.length > 50_000) throw new Error("作品文件 content 不能超过 50000 字符");
+	return content;
 }
 
 interface Skill {
@@ -532,11 +575,12 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 			if (!state.canMutateStoryFiles) throw new Error("当前任务未授权修改作品文件");
 			const path = normalizeStoryFilePath(params.path);
 			const fallbackTitle = path.split("/").at(-1)?.replace(/\.[^.]+$/, "") || "作品文件";
+			const content = normalizeStoryFileContent(params.content);
 			const pendingFile = {
 				path,
 				title: params.title || fallbackTitle,
 				category: params.category || path.split("/")[0] || "资料",
-				content: params.content,
+				content,
 			};
 			await state.persistStoryFile?.(pendingFile);
 			const file = state.storyFiles.write(pendingFile);

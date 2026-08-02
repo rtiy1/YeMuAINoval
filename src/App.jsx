@@ -118,7 +118,7 @@ function artifactRailTab(application) {
   if (/正文/.test(categories)) return '目录'
   if (application?.chapters > 0 || /大纲/.test(categories)) return '大纲'
   if (application?.characters > 0 || /人物|角色/.test(categories)) return '人物'
-  if (application?.worldbuilding > 0 || /设定|世界|词条|追踪/.test(categories)) return '词条'
+  if (application?.worldbuilding > 0 || /设定|世界|词条|追踪/.test(categories)) return '设定'
   return '文件'
 }
 const THEME_KEY = 'story-studio-theme'
@@ -3858,8 +3858,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       ? `大纲 · ${outlineEntries.length}`
       : railTab === '人物'
         ? `人物 · ${characterIdeas.length}`
-        : railTab === '词条'
-          ? `词条 · ${termIdeas.length}`
+        : railTab === '设定'
+          ? `设定 · ${termIdeas.length}`
           : railTab === '文件'
             ? `作品文件 · ${storyFileIdeas.length}`
           : railTab === '伏笔'
@@ -4037,7 +4037,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               { label: '目录', icon: List },
               { label: '大纲', icon: BookMarked },
               { label: '人物', icon: UsersRound },
-              { label: '词条', icon: Tags },
+              { label: '设定', icon: Tags },
               { label: '文件', icon: FolderOpen },
               { label: '记忆', icon: BrainCircuit },
               { label: '伏笔', icon: Pin },
@@ -4060,7 +4060,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           </div>}
           {railTab === '大纲' && <div className="rail-outline-list">{outlineEntries.length ? outlineEntries.map((item, index) => <button key={item.id} onClick={() => setMaterialViewing(item)}><span>{String(index + 1).padStart(2, '0')}</span><strong>{item.title}</strong><small>{item.label || '大纲'}</small></button>) : <div className="rail-empty-block"><BookMarked size={22} /><p>还没有已落库的大纲</p><small>让 Agent 生成大纲并确认写入后会显示在这里。</small></div>}</div>}
           {railTab === '人物' && <div className="rail-entity-list">{characterIdeas.length ? characterIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot coral" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><UsersRound size={22} /><p>还没有人物卡</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
-          {railTab === '词条' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有设定词条</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
+          {railTab === '设定' && <div className="rail-entity-list">{termIdeas.length ? termIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><span className="entity-dot teal" /><span><strong>{idea.title}</strong><small>{idea.body.slice(0, 42)}</small></span></button>) : <div className="rail-empty-block"><Tags size={22} /><p>还没有作品设定</p><button onClick={() => setIdeaPickerOpen(true)}>从素材库添加</button></div>}</div>}
           {railTab === '文件' && <div className="rail-file-list">{storyFileIdeas.length ? storyFileIdeas.map((idea) => <button key={idea.id} onClick={() => setMaterialViewing(idea)}><FileText size={14} /><span><strong>{idea.title}</strong><small>{storyFilePath(idea)}</small></span><ChevronRight size={12} /></button>) : <div className="rail-empty-block"><FolderOpen size={22} /><p>还没有作品文件</p><small>让 Agent 创建设定、大纲或资料文件后会显示在这里。</small></div>}</div>}
           {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={() => void extractMemories()} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}

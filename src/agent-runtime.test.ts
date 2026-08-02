@@ -171,7 +171,13 @@ test("Story Agent can write multiple virtual files across independent tool turns
 			path: "设定/地点.md",
 			title: "地点",
 			category: "设定",
-			content: "旧港灯塔。",
+			content: {
+				title: "旧港",
+				sections: [
+					{ heading: "灯塔", content: "每晚会闪烁三次。" },
+					{ heading: "码头", content: "汽笛声只在雾天出现。" },
+				],
+			},
 		}),
 		deepSeekToolSseResponse("call-submit", "submit_story_result", {
 			status: "completed",
@@ -201,6 +207,8 @@ test("Story Agent can write multiple virtual files across independent tool turns
 		expect(calls).toBe(4);
 		expect(documents.map(file => file.path)).toEqual(["设定/人物.md", "设定/地点.md"]);
 		expect(documents[0]?.content).toBe("林默，失踪记者。");
+		expect(documents[1]?.content).toContain("# 旧港");
+		expect(documents[1]?.content).toContain("## 灯塔\n\n每晚会闪烁三次。");
 		expect(response.result.output).toBe("已创建两份设定文件。");
 	} finally {
 		fetchSpy.mockRestore();
