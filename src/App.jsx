@@ -3586,7 +3586,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       plan: turn?.plan || item.plan || [],
       progress: task.progress || 0,
       statusMessage: task.statusMessage || '',
-      reasoningSummary: typeof task.reasoningSummary === 'string' ? task.reasoningSummary : item.reasoningSummary || '',
+      reasoningSummary: terminal
+        ? typeof task.reasoningSummary === 'string' ? task.reasoningSummary : item.reasoningSummary || ''
+        : typeof task.reasoningSummary === 'string' && task.reasoningSummary.length >= String(item.reasoningSummary || '').length
+          ? task.reasoningSummary
+          : item.reasoningSummary || '',
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : item.reasoningHistory || [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : item.inputHistory || [],
       usage: task.usage || item.usage || null,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildWritingContext, enrichStoryAgentPayload, resolveStoryAttachments } from './writing-context.mjs'
+import { buildWritingContext, enrichStoryAgentPayload, readStoryFileForAgent, resolveStoryAttachments } from './writing-context.mjs'
 
 const now = '2026-07-28T00:00:00.000Z'
 const project = { id: 'project-1', userId: 'user-1', title: '旧港来信', type: '长篇', genre: '悬疑', style: '克制', tone: '追查失踪案' }
@@ -77,4 +77,12 @@ test('agent payload enforces a bounded permission policy', () => {
   assert.equal(payload.tool_policy.deleteStoryData, 'deny')
   assert.match(payload.attached_files[0].content, /灯塔每晚闪三次/)
   assert.equal(payload.writing_context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
+})
+
+test('agent file reads are scoped to the current user and project', () => {
+  const file = readStoryFileForAgent(db, 'user-1', project.id, '大纲/大纲.md')
+  assert.equal(file.path, '大纲/大纲.md')
+  assert.match(file.content, /旧港失踪案/)
+  assert.equal(readStoryFileForAgent(db, 'other-user', project.id, '大纲/大纲.md'), null)
+  assert.equal(readStoryFileForAgent(db, 'user-1', project.id, '../db.json'), null)
 })

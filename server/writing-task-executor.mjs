@@ -4,6 +4,7 @@ import { accumulateTaskUsage, archiveTaskReasoning } from './agent-thread.mjs'
 import { maybeCompactAgentThread } from './context-compaction.mjs'
 import { applyStoryArtifacts, summarizeStoryArtifacts } from './story-artifacts.mjs'
 import { updateDb } from './store.mjs'
+import { publishTaskStreamEvent } from './task-stream.mjs'
 
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
 const messageToolHistoryLimit = 6
@@ -212,6 +213,7 @@ export async function executeWritingTask(taskId, {
         input: task.input,
         user,
         executionGeneration,
+        interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
         subagents: Array.isArray(task.subagents) ? task.subagents : [],
       }
     })
@@ -230,25 +232,46 @@ export async function executeWritingTask(taskId, {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)])
     let partialOutput = ''
     let reasoningSummary = ''
-    let lastPartialFlush = 0
-    let lastPartialLength = 0
-    let lastReasoningFlush = 0
-    let lastReasoningLength = 0
-    const flushReasoningSummary = async (delta) => {
-      reasoningSummary += delta
-      const now = Date.now()
-      if (now - lastReasoningFlush < 30 && reasoningSummary.length - lastReasoningLength < 16) return
-      lastReasoningFlush = now
-      lastReasoningLength = reasoningSummary.length
-      const snapshot = reasoningSummary.slice(0, 12_000)
-      await updateDb((db) => {
+    let checkpointTimer = null
+    let checkpointDirty = false
+    let checkpointQueue = Promise.resolve()
+    const flushCheckpoint = () => {
+      if (checkpointTimer) clearTimeout(checkpointTimer)
+      checkpointTimer = null
+      if (!checkpointDirty) return checkpointQueue
+      checkpointDirty = false
+      const outputSnapshot = partialOutput
+      const reasoningSnapshot = reasoningSummary.slice(0, 12_000)
+      checkpointQueue = checkpointQueue.then(() => updateDb((db) => {
         const task = db.writingTasks.find((item) => item.id === taskId)
         if (!task || task.status !== 'running' || task.cancelRequested
           || !executionMatches(task, executionId, prepared.executionGeneration)) return
-        task.reasoningSummary = snapshot
+        task.partialOutput = outputSnapshot
+        task.reasoningSummary = reasoningSnapshot
+        task.progress = Math.max(45, Math.min(88, 45 + Math.floor(outputSnapshot.length / 120)))
+        task.statusMessage = '正在生成回复'
         task.updatedAt = new Date().toISOString()
         touchAgentThread(db, task)
+      }))
+      return checkpointQueue
+    }
+    const scheduleCheckpoint = () => {
+      checkpointDirty = true
+      if (checkpointTimer) return
+      checkpointTimer = setTimeout(() => {
+        void flushCheckpoint().catch(() => undefined)
+      }, 500)
+      checkpointTimer.unref?.()
+    }
+    const flushReasoningSummary = (delta) => {
+      reasoningSummary += delta
+      publishTaskStreamEvent(taskId, {
+        type: 'reasoning_delta',
+        delta,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
       })
+      scheduleCheckpoint()
     }
     let delegates = prepared.subagents
     const reusableDelegates = delegates.length > 0
@@ -296,24 +319,17 @@ export async function executeWritingTask(taskId, {
         ...(reports.length ? { _agent_reports: reports } : {}),
       },
     }
-    const result = await invokeStoryAgent(prepared.user, executionInput, signal, async (delta) => {
+    const result = await invokeStoryAgent(prepared.user, executionInput, signal, (delta) => {
       partialOutput += delta
-      const now = Date.now()
-      if (now - lastPartialFlush < 30 && partialOutput.length - lastPartialLength < 16) return
-      lastPartialFlush = now
-      lastPartialLength = partialOutput.length
-      const snapshot = partialOutput
-      await updateDb((db) => {
-        const task = db.writingTasks.find((item) => item.id === taskId)
-        if (!task || task.status !== 'running' || task.cancelRequested
-          || !executionMatches(task, executionId, prepared.executionGeneration)) return
-        task.partialOutput = snapshot
-        task.progress = Math.max(45, Math.min(88, 45 + Math.floor(snapshot.length / 120)))
-        task.statusMessage = '正在生成回复'
-        task.updatedAt = new Date().toISOString()
-        touchAgentThread(db, task)
+      publishTaskStreamEvent(taskId, {
+        type: 'output_delta',
+        delta,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
       })
+      scheduleCheckpoint()
     }, flushReasoningSummary)
+    await flushCheckpoint()
     const privateContinuation = responseContinuation(result)
     const resultContinuationMode = continuationMode(result, privateContinuation)
     if (result?.result && typeof result.result === 'object' && !Array.isArray(result.result)) {
@@ -406,6 +422,7 @@ export async function executeWritingTask(taskId, {
       task.updatedAt = timestamp
       touchAgentThread(db, task)
     })
+    publishTaskStreamEvent(taskId, { type: 'snapshot' })
     if (finalOutcome.status === 'requeued') return finalOutcome
     if (['superseded', 'cancelled', 'skipped'].includes(finalOutcome.status)) return finalOutcome
     await maybeCompactAgentThread(taskId).catch(() => undefined)
@@ -476,6 +493,7 @@ export async function executeWritingTask(taskId, {
       task.updatedAt = new Date().toISOString()
       touchAgentThread(db, task)
     }).catch(() => undefined)
+    publishTaskStreamEvent(taskId, { type: 'snapshot' })
     return { status: outcome, ...(reason ? { reason } : {}) }
   }
 }

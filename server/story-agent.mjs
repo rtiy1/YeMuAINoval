@@ -8,7 +8,7 @@ import {
 } from '../src/agent-runtime.ts'
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
-import { enrichStoryAgentPayload } from './writing-context.mjs'
+import { enrichStoryAgentPayload, readStoryFileForAgent } from './writing-context.mjs'
 import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
 
 const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
@@ -49,10 +49,14 @@ async function preparedStoryAgentBody(user, input) {
 
 export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null) {
   const body = await preparedStoryAgentBody(user, input)
+  const projectId = body.payload?.project_id || body.payload?.projectId || null
   return await runStoryAgent(body, {
     signal,
     onDelta: onDelta || undefined,
     onReasoningDelta: onReasoningDelta || undefined,
+    readStoryFile: projectId
+      ? async (path) => readStoryFileForAgent(await loadDb(), user.id, projectId, path)
+      : undefined,
   })
 }
 
@@ -67,6 +71,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
   const roles = delegateRoles(input)
   if (!roles.length) return []
   const body = await preparedStoryAgentBody(user, input)
+  const projectId = body.payload?.project_id || body.payload?.projectId || null
   const runs = roles.map(async (role, ordinal) => {
     const id = `${role}:${ordinal + 1}`
     const runId = crypto.randomUUID()
@@ -80,7 +85,12 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
       startedAt: new Date().toISOString(),
     })
     try {
-      const result = await runStoryDelegate({ ...body, role }, { signal })
+      const result = await runStoryDelegate({ ...body, role }, {
+        signal,
+        readStoryFile: projectId
+          ? async (path) => readStoryFileForAgent(await loadDb(), user.id, projectId, path)
+          : undefined,
+      })
       const completed = {
         id,
         runId,

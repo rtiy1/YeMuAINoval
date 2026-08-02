@@ -8,9 +8,20 @@ import { render } from "@yemu/utils/prompt";
 import agentRequestTemplate from "./prompts/agent-request.md" with { type: "text" };
 import agentSystemTemplate from "./prompts/agent-system.md" with { type: "text" };
 import compactRequestTemplate from "./prompts/compact-request.md" with { type: "text" };
+import editStoryFileDescription from "./prompts/tool-edit-story-file.md" with { type: "text" };
+import listStoryFilesDescription from "./prompts/tool-list-story-files.md" with { type: "text" };
+import readStoryFileDescription from "./prompts/tool-read-story-file.md" with { type: "text" };
 import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with { type: "text" };
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
+import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
+import {
+	createStoryFileWorkspace,
+	mergeStoryFileArtifacts,
+	normalizeStoryFilePath,
+	type StoryFileRecord,
+	type StoryFileWorkspace,
+} from "./story-file-workspace";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const skillsRoot = path.join(packageRoot, "skills");
@@ -99,6 +110,28 @@ const readStorySkillSchema = z.object({
 	path: z.string().min(1).max(500),
 });
 
+const listStoryFilesSchema = z.object({
+	prefix: z.string().max(240).optional(),
+});
+
+const readStoryFileSchema = z.object({
+	path: z.string().min(1).max(240),
+});
+
+const writeStoryFileSchema = z.object({
+	path: z.string().min(1).max(240),
+	title: z.string().min(1).max(160).optional(),
+	category: z.string().min(1).max(40).optional(),
+	content: z.string().min(1).max(50_000),
+});
+
+const editStoryFileSchema = z.object({
+	path: z.string().min(1).max(240),
+	old_text: z.string().min(1).max(50_000),
+	new_text: z.string().max(50_000),
+	replace_all: z.boolean().optional(),
+});
+
 type AgentMode = "story" | "delegate" | "compact";
 
 export interface YemuModelConfig {
@@ -185,6 +218,7 @@ export interface StoryAgentResponse {
 export interface StoryAgentCallbacks {
 	onDelta?: (delta: string) => void | Promise<void>;
 	onReasoningDelta?: (delta: string) => void | Promise<void>;
+	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	signal?: AbortSignal;
 }
 
@@ -209,6 +243,8 @@ interface ToolState {
 	question?: StoryQuestion;
 	submission?: StoryAgentResult;
 	referencesLoaded: Set<string>;
+	storyFiles: StoryFileWorkspace;
+	canMutateStoryFiles: boolean;
 }
 
 interface Skill {
@@ -441,6 +477,79 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
+	const listFilesTool: AgentTool<typeof listStoryFilesSchema, { count: number }> = {
+		name: "list_story_files",
+		label: "列出作品文件",
+		description: listStoryFilesDescription.trim(),
+		parameters: listStoryFilesSchema,
+		loadMode: "essential",
+		approval: "read",
+		async execute(_toolCallId, params) {
+			const files = state.storyFiles.list(params.prefix);
+			return {
+				content: [{ type: "text", text: JSON.stringify({ files }, null, 2) }],
+				details: { count: files.length },
+			};
+		},
+	};
+
+	const readFileTool: AgentTool<typeof readStoryFileSchema, { path: string }> = {
+		name: "read_story_file",
+		label: "读取作品文件",
+		description: readStoryFileDescription.trim(),
+		parameters: readStoryFileSchema,
+		loadMode: "essential",
+		approval: "read",
+		async execute(_toolCallId, params) {
+			const file = await state.storyFiles.read(params.path);
+			return {
+				content: [{ type: "text", text: file.content ?? "" }],
+				details: { path: file.path },
+			};
+		},
+	};
+
+	const writeFileTool: AgentTool<typeof writeStoryFileSchema, { path: string; chars: number }> = {
+		name: "write_story_file",
+		label: "暂存作品文件",
+		description: writeStoryFileDescription.trim(),
+		parameters: writeStoryFileSchema,
+		loadMode: "essential",
+		approval: "write",
+		async execute(_toolCallId, params) {
+			if (!state.canMutateStoryFiles) throw new Error("当前任务未授权修改作品文件");
+			const path = normalizeStoryFilePath(params.path);
+			const fallbackTitle = path.split("/").at(-1)?.replace(/\.[^.]+$/, "") || "作品文件";
+			const file = state.storyFiles.write({
+				path,
+				title: params.title || fallbackTitle,
+				category: params.category || path.split("/")[0] || "资料",
+				content: params.content,
+			});
+			return {
+				content: [{ type: "text", text: `已暂存 ${file.path}（${file.content?.length ?? 0} 字符）。可以继续处理其他文件。` }],
+				details: { path: file.path, chars: file.content?.length ?? 0 },
+			};
+		},
+	};
+
+	const editFileTool: AgentTool<typeof editStoryFileSchema, { path: string; chars: number }> = {
+		name: "edit_story_file",
+		label: "编辑作品文件",
+		description: editStoryFileDescription.trim(),
+		parameters: editStoryFileSchema,
+		loadMode: "essential",
+		approval: "write",
+		async execute(_toolCallId, params) {
+			if (!state.canMutateStoryFiles) throw new Error("当前任务未授权修改作品文件");
+			const file = await state.storyFiles.edit(params.path, params.old_text, params.new_text, params.replace_all);
+			return {
+				content: [{ type: "text", text: `已暂存对 ${file.path} 的修改（${file.content?.length ?? 0} 字符）。可以继续处理其他文件。` }],
+				details: { path: file.path, chars: file.content?.length ?? 0 },
+			};
+		},
+	};
+
 	const submitTool: AgentTool<typeof submitStoryResultSchema, { accepted: boolean }> = {
 		name: "submit_story_result",
 		label: "提交 Story 结果",
@@ -457,7 +566,14 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
-	return [readTool, inputTool, submitTool];
+	return [
+		readTool,
+		listFilesTool,
+		readFileTool,
+		...(state.canMutateStoryFiles ? [writeFileTool, editFileTool] : []),
+		inputTool,
+		submitTool,
+	];
 }
 
 function isAssistantMessage(value: unknown): value is AssistantMessage {
@@ -534,6 +650,12 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 	const toolState: ToolState = {
 		activeSkill: request.skillName,
 		referencesLoaded: new Set<string>(),
+		storyFiles: createStoryFileWorkspace(request.payload, request.callbacks?.readStoryFile),
+		canMutateStoryFiles:
+			request.mode === "story" &&
+			["allow", "propose"].includes(
+				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.mutateStoryData ?? "deny"),
+			),
 	};
 	const agent = new Agent({
 		initialState: {
@@ -579,6 +701,8 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			submission.status = "needs_input";
 			submission.question = toolState.question;
 		}
+		const mergedArtifacts = mergeStoryFileArtifacts(submission.artifacts, toolState.storyFiles.written());
+		if (mergedArtifacts) submission.artifacts = mergedArtifacts;
 		const references = new Set([...(submission.references_loaded ?? []), ...toolState.referencesLoaded]);
 		if (references.size) submission.references_loaded = [...references];
 		if (

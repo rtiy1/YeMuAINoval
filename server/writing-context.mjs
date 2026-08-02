@@ -15,6 +15,27 @@ function storyFilePath(idea) {
   return tag ? String(tag).slice(3).trim() : ''
 }
 
+export function readStoryFileForAgent(db, userId, projectId, requestedPath) {
+  const rawPath = String(requestedPath || '').replaceAll('\\', '/').trim().slice(0, 240)
+  if (!rawPath || rawPath.startsWith('/') || /^[A-Za-z]:\//.test(rawPath)) return null
+  const parts = rawPath.split('/').filter(Boolean)
+  if (!parts.length || parts.some((part) => part === '.' || part === '..' || part.includes('\0'))) return null
+  const path = parts.join('/')
+  const project = db.projects.find((item) => item.id === projectId && item.userId === userId)
+  if (!project) return null
+  const idea = (db.ideas || []).find((item) => item.userId === userId
+    && item.projectId === projectId
+    && storyFilePath(item) === path)
+  if (!idea) return null
+  return {
+    path,
+    title: String(idea.title || path.split('/').at(-1) || '作品文件').slice(0, 160),
+    category: String(idea.folder || idea.label || path.split('/')[0] || '资料').slice(0, 40),
+    content: String(idea.body || '').replace(/\r\n?/g, '\n').slice(0, 50_000),
+    updatedAt: idea.updatedAt || idea.createdAt || '',
+  }
+}
+
 function buildStoryFiles(db, project, chapter, instruction = '') {
   const cue = String(instruction || '')
   const chapterNumber = Number(chapter?.id)

@@ -33,6 +33,39 @@ function deepSeekSseResponse(text: string): Response {
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function deepSeekToolSseResponse(id: string, name: string, args: Record<string, unknown>): Response {
+	const events = [
+		{
+			id: "chatcmpl-yemu-tool-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{
+				index: 0,
+				delta: {
+					role: "assistant",
+					tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }],
+				},
+				finish_reason: null,
+			}],
+			usage: null,
+		},
+		{
+			id: "chatcmpl-yemu-tool-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{ index: 0, delta: { content: "" }, finish_reason: "tool_calls" }],
+			usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+		},
+		"[DONE]",
+	];
+	const body = `${events
+		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
+		.join("\n\n")}\n\n`;
+	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 test("web agent runtime discovers Story Skills and validates model credentials", async () => {
 	const previousOpenAIKey = Bun.env.OPENAI_API_KEY;
 	const previousAnthropicKey = Bun.env.ANTHROPIC_API_KEY;
@@ -76,6 +109,7 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 		const response = await runStoryAgent({
 			message: "回答正常",
 			skill: "story-setup",
+			payload: { tool_policy: { mutateStoryData: "propose" } },
 			model_config: {
 				provider: "openai",
 				api_base_url: "https://api.deepseek.com/v1",
@@ -87,6 +121,12 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 		expect(response.result.output).toBe("正常");
 		const messages = capturedPayload?.messages;
 		expect(Array.isArray(messages) ? messages[0]?.role : null).toBe("system");
+		const tools = Array.isArray(capturedPayload?.tools) ? capturedPayload.tools : [];
+		const toolNames = tools.map(tool => tool?.function?.name ?? tool?.name);
+		expect(toolNames).toContain("list_story_files");
+		expect(toolNames).toContain("read_story_file");
+		expect(toolNames).toContain("write_story_file");
+		expect(toolNames).toContain("edit_story_file");
 	} finally {
 		successSpy.mockRestore();
 	}
@@ -116,5 +156,53 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 		).rejects.toThrow("synthetic upstream failure");
 	} finally {
 		failureSpy.mockRestore();
+	}
+});
+
+test("Story Agent can write multiple virtual files across independent tool turns", async () => {
+	const responses = [
+		deepSeekToolSseResponse("call-write-1", "write_story_file", {
+			path: "设定/人物.md",
+			title: "人物",
+			category: "设定",
+			content: "林默，失踪记者。",
+		}),
+		deepSeekToolSseResponse("call-write-2", "write_story_file", {
+			path: "设定/地点.md",
+			title: "地点",
+			category: "设定",
+			content: "旧港灯塔。",
+		}),
+		deepSeekToolSseResponse("call-submit", "submit_story_result", {
+			status: "completed",
+			output: "已创建两份设定文件。",
+		}),
+		deepSeekSseResponse("完成"),
+	];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("完成"),
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "分别创建人物和地点文件",
+			skill: "story-setup",
+			payload: { tool_policy: { mutateStoryData: "propose" } },
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		});
+		const documents = response.result.artifacts?.documents as Array<{ path: string; content: string }>;
+		expect(calls).toBe(4);
+		expect(documents.map(file => file.path)).toEqual(["设定/人物.md", "设定/地点.md"]);
+		expect(documents[0]?.content).toBe("林默，失踪记者。");
+		expect(response.result.output).toBe("已创建两份设定文件。");
+	} finally {
+		fetchSpy.mockRestore();
 	}
 });

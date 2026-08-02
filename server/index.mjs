@@ -31,6 +31,7 @@ import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, up
 import * as chatMemory from './chat-memory.mjs'
 import { invokeStoryAgent, listStoryAgentSkills, storyAgentRuntimeInfo } from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
+import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './task-stream.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
 import { applyStoryArtifacts } from './story-artifacts.mjs'
@@ -2326,9 +2327,86 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
   let reasoningItemStarted = false
   let reasoningItemCompleted = false
   let lastInteractionAttempt = null
+  let lastExecutionGeneration = Math.max(1, Number(initialTask.executionGeneration) || 1)
   let lastSteerRevision = null
   let lastHeartbeat = Date.now()
   const itemVersions = new Map()
+  let liveStreamReady = false
+  const pendingLiveEvents = []
+  const emitLiveEvent = (event) => {
+    if (!liveStreamReady || req.destroyed || res.writableEnded) return false
+    const interactionAttempt = Math.max(1, Number(event?.interactionAttempt) || 1)
+    const executionGeneration = Math.max(1, Number(event?.executionGeneration) || 1)
+    if (interactionAttempt !== lastInteractionAttempt || executionGeneration !== lastExecutionGeneration) return false
+    if (event.type === 'reasoning_delta' && typeof event.delta === 'string' && event.delta) {
+      const room = Math.max(0, 12_000 - lastReasoningLength)
+      const delta = event.delta.slice(0, room)
+      if (!delta) return true
+      const itemId = reasoningItemId(initialTask, initialTurn.id, interactionAttempt)
+      if (!reasoningItemStarted) {
+        reasoningItemStarted = true
+        res.write(`event: item/started\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: {
+            id: itemId,
+            type: 'reasoning',
+            status: 'inProgress',
+            summary: [],
+            meta: { modelReasoning: true, interactionAttempt },
+          },
+        })}\n\n`)
+        res.write(`event: item/reasoning/summaryPartAdded\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          itemId,
+          summaryIndex: 0,
+        })}\n\n`)
+      }
+      lastReasoningLength += delta.length
+      res.write(`event: item/reasoning/summaryTextDelta\ndata: ${JSON.stringify({
+        threadId: initialThread.id,
+        turnId: initialTurn.id,
+        itemId,
+        summaryIndex: 0,
+        delta,
+      })}\n\n`)
+      return true
+    }
+    if (event.type === 'output_delta' && typeof event.delta === 'string' && event.delta) {
+      const itemId = `${initialTurn.id}:agent:${interactionAttempt}`
+      const planMode = initialTask.input?.payload?.collaboration_mode === 'plan'
+      const outputItemType = planMode ? 'plan' : 'agentMessage'
+      if (!outputItemStarted) {
+        outputItemStarted = true
+        res.write(`event: item/started\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: { id: itemId, type: outputItemType, status: 'inProgress', text: '' },
+        })}\n\n`)
+      }
+      lastOutputLength += event.delta.length
+      const deltaEvent = planMode ? 'item/plan/delta' : 'item/agentMessage/delta'
+      res.write(`event: ${deltaEvent}\ndata: ${JSON.stringify({
+        threadId: initialThread.id,
+        turnId: initialTurn.id,
+        itemId,
+        delta: event.delta,
+      })}\n\n`)
+      return true
+    }
+    return event.type === 'snapshot'
+  }
+  const drainLiveEvents = () => {
+    for (let index = 0; index < pendingLiveEvents.length;) {
+      if (emitLiveEvent(pendingLiveEvents[index])) pendingLiveEvents.splice(index, 1)
+      else index += 1
+    }
+    if (pendingLiveEvents.length > 2_000) pendingLiveEvents.splice(0, pendingLiveEvents.length - 2_000)
+  }
+  const unsubscribeLiveStream = subscribeTaskStream(initialTask.id, (event) => {
+    if (!emitLiveEvent(event)) pendingLiveEvents.push(event)
+  })
   try {
     while (!req.destroyed) {
       const db = await loadDb()
@@ -2341,6 +2419,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       }
       const publicTurn = agentTurnPublic(thread, turn, task, writingTaskPublic)
       const interactionAttempt = Math.max(1, Number(publicTurn.task?.interactionAttempt) || 1)
+      lastExecutionGeneration = Math.max(1, Number(task.executionGeneration) || 1)
       const steerRevision = Math.max(0, Number(publicTurn.task?.steerRevision) || 0)
       const turnVersion = `${publicTurn.status}:${interactionAttempt}:${steerRevision}:${publicTurn.updatedAt || ''}`
       if (!turnStarted) {
@@ -2368,6 +2447,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           lastReasoningLength = String(publicTurn.task?.reasoningSummary || '').length
         }
         res.write(`event: turn/started\ndata: ${JSON.stringify({ threadId: thread.id, turn: streamTurn })}\n\n`)
+        liveStreamReady = true
       }
       if (steerRevision > (lastSteerRevision ?? steerRevision)) {
         for (const input of (publicTurn.task?.steeringHistory || []).filter((item) => item.revision > lastSteerRevision)) {
@@ -2500,6 +2580,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           delta,
         })}\n\n`)
       }
+      drainLiveEvents()
       for (const item of publicTurn.items) {
         if (item.meta?.modelReasoning === true) continue
         const version = `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta || {})}`
@@ -2520,11 +2601,12 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         res.write(': keep-alive\n\n')
         lastHeartbeat = Date.now()
       }
-      if (!(await streamDelay(req, 150))) break
+      if (!(await streamDelay(req, 500))) break
     }
   } catch (error) {
     if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '轮次事件流读取失败' })}\n\n`)
   } finally {
+    unsubscribeLiveStream()
     if (!res.writableEnded) res.end()
   }
 })
@@ -2637,7 +2719,7 @@ app.get('/api/ai/tasks/:taskId/stream', async (req, res) => {
         res.write(': keep-alive\n\n')
         lastHeartbeat = Date.now()
       }
-      if (!(await streamDelay(req, 150))) break
+      if (!(await streamDelay(req, 500))) break
     }
   } catch (error) {
     if (!req.destroyed) res.write(`event: error\ndata: ${JSON.stringify({ error: error.message || '任务流读取失败' })}\n\n`)
@@ -3495,6 +3577,10 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: status >= 500 ? '服务器内部错误' : error.message })
 })
 
+await startTaskStreamBridge().catch((error) => {
+  console.error(`AI task progress bridge unavailable: ${error.message}`)
+})
+
 const interruptedTaskIds = await updateDb((db) => {
   const timestamp = new Date().toISOString()
   const interrupted = []
@@ -3539,7 +3625,7 @@ async function shutdown(signal) {
   const forceClose = setTimeout(() => server.closeAllConnections(), 8_000)
   await closed
   clearTimeout(forceClose)
-  await Promise.allSettled([chatMemory.closeClient(), closeTaskQueue(), closeStore()])
+  await Promise.allSettled([chatMemory.closeClient(), closeTaskStream(), closeTaskQueue(), closeStore()])
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
