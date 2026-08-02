@@ -5,6 +5,11 @@ const codespacesHost = process.env.CODESPACE_NAME
   : null
 
 export default defineConfig({
+  resolve: {
+    // The app reuses collab-web source directly. Force both workspaces to use
+    // the root React runtime or hooks crash when the TUI transcript mounts.
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     allowedHosts: codespacesHost ? [codespacesHost] : [],
     proxy: {
