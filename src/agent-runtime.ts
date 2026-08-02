@@ -28,6 +28,14 @@ const skillsRoot = path.join(packageRoot, "skills");
 const MAX_SKILL_FILE_CHARS = 200_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
+const DEFAULT_THINKING_BUDGETS = {
+	minimal: 1_024,
+	low: 2_048,
+	medium: 8_192,
+	high: 16_384,
+	xhigh: 32_768,
+	max: 32_768,
+} satisfies Record<Effort, number>;
 
 const questionOptionSchema = z.object({
 	label: z.string().min(1).max(100),
@@ -146,6 +154,7 @@ export interface YemuModelConfig {
 	api_key?: string;
 	model?: string;
 	reasoning_effort?: Effort;
+	thinking_budgets?: Partial<Record<Effort, number>>;
 	temperature?: number;
 	max_tokens?: number;
 	context_window?: number;
@@ -660,6 +669,14 @@ function assistantText(messages: readonly unknown[]): string {
 		.trim();
 }
 
+function latestAssistantMessage(messages: readonly unknown[]): AssistantMessage | undefined {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (isAssistantMessage(message)) return message;
+	}
+	return undefined;
+}
+
 function aggregateUsage(messages: readonly unknown[]): StoryAgentUsage {
 	const usage = messages.filter(isAssistantMessage).reduce(
 		(total, message) => {
@@ -766,6 +783,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		request.mode === "compact"
 			? render(compactRequestTemplate, {
 					existingSummary: String(request.payload.existingSummary ?? ""),
+					instructions: String(request.payload.instructions ?? ""),
 					messagesJson: safePayloadJson({ messages: request.payload.messages }),
 				})
 			: render(agentRequestTemplate, {
@@ -806,6 +824,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			messages: [],
 		},
 		getApiKey: () => apiKey,
+		thinkingBudgets: { ...DEFAULT_THINKING_BUDGETS, ...(request.modelConfig?.thinking_budgets ?? {}) },
 		temperature,
 		deadline: request.callbacks?.signal ? undefined : Date.now() + 300_000,
 	});
@@ -859,6 +878,42 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			userPrompt,
 			requiredStoryFiles ? { toolChoice: { type: "function", name: "list_story_files" } } : undefined,
 		);
+		request.callbacks?.signal?.throwIfAborted();
+
+		const configuredThinkingLevel = agent.state.thinkingLevel;
+		const configuredDisableReasoning = agent.state.disableReasoning;
+		let outputLimitRecoveries = 0;
+		const recoverOutputLimit = async (): Promise<void> => {
+			while (
+				!toolState.question &&
+				!toolState.submission &&
+				latestAssistantMessage(agent.state.messages)?.stopReason === "length" &&
+				outputLimitRecoveries < 2
+			) {
+				outputLimitRecoveries += 1;
+				const remainingFiles = Math.max(0, requiredStoryFiles - toolState.storyFiles.written().length);
+				const forceTool = outputLimitRecoveries >= 2
+					? remainingFiles > 0
+						? "write_story_file"
+						: "submit_story_result"
+					: undefined;
+				agent.setThinkingLevel(undefined);
+				agent.setDisableReasoning(true);
+				try {
+					await agent.prompt(
+						outputLimitRecoveries === 1
+							? "系统续跑：上一轮因达到单次输出 Token 上限而被截断。沿用已经完成的分析，不要从头重复思考；立即完成尚未执行的工具调用，并给出可见的最终答复。"
+							: "系统强制收尾：输出额度已再次耗尽。停止继续展开分析，立即完成必要的文件工具调用；若工作已完成，调用 submit_story_result 提交当前最佳结果。",
+						forceTool ? { toolChoice: { type: "function", name: forceTool } } : undefined,
+					);
+					request.callbacks?.signal?.throwIfAborted();
+				} finally {
+					agent.setThinkingLevel(configuredThinkingLevel);
+					agent.setDisableReasoning(configuredDisableReasoning === true);
+				}
+			}
+		};
+		await recoverOutputLimit();
 		let validationAttempts = 0;
 		while (
 			requiredStoryFiles > toolState.storyFiles.written().length &&
@@ -872,14 +927,19 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				`系统执行校验：用户要求实际创建或修改作品文件，但目前只成功写入 ${before} 份，至少还需 ${remaining} 份。现在必须调用 write_story_file 写入一份尚未完成的文件；不要只描述计划，也不要在达到数量前提交结果。`,
 				{ toolChoice: { type: "function", name: "write_story_file" } },
 			);
+			request.callbacks?.signal?.throwIfAborted();
 			validationAttempts += 1;
 			if (toolState.storyFiles.written().length <= before) break;
 		}
+		await recoverOutputLimit();
 		await callbackQueue;
 		if (agent.state.error) {
 			throw new Error(agent.state.error);
 		}
 		const messages = agent.state.messages;
+		if (!toolState.question && !toolState.submission && latestAssistantMessage(messages)?.stopReason === "length") {
+			throw new Error("模型已连续两次达到输出 Token 上限，仍未生成完整结果；请提高最大输出 Tokens 或降低思考强度后重试。");
+		}
 		const fallbackText = assistantText(messages);
 		const submission: StoryAgentResult = toolState.submission
 			? { ...toolState.submission }
@@ -984,7 +1044,7 @@ export async function runStoryDelegate(
 
 export async function runContextCompaction(
 	modelConfig: YemuModelConfig | null | undefined,
-	input: { existingSummary?: string; messages?: unknown[] },
+	input: { existingSummary?: string; messages?: unknown[]; instructions?: string },
 	callbacks: StoryAgentCallbacks = {},
 ): Promise<{ status: "completed"; summary: string }> {
 	const result = await runRuntime({
@@ -994,6 +1054,7 @@ export async function runContextCompaction(
 		payload: {
 			existingSummary: input.existingSummary ?? "",
 			messages: input.messages ?? [],
+			instructions: input.instructions ?? "",
 		},
 		modelConfig,
 		callbacks,

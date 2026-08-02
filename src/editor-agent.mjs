@@ -639,8 +639,11 @@ export function reconcileAgentTurnItems(currentItems, nextItems) {
 export function resolveEditorAgentCommand(rawMessage, project) {
   const message = String(rawMessage || '').trim()
   if (!message.startsWith('/')) return { message, skill: 'story' }
-  const [command, ...rest] = message.slice(1).split(/\s+/)
-  const argument = rest.join(' ').trim()
+  const body = message.slice(1)
+  const separator = body.search(/[\s:]/)
+  const command = (separator === -1 ? body : body.slice(0, separator)).toLowerCase()
+  const argument = separator === -1 ? '' : body.slice(separator + 1).trim()
+  const rest = argument ? argument.split(/\s+/) : []
   const length = project?.type === '短篇' ? 'short' : 'long'
   const commands = {
     review: { skill: 'story-review', message: argument || '审查当前章节，重点检查人物动机、节奏和章末钩子。' },

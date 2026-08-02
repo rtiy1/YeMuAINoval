@@ -29,6 +29,7 @@ function userModelConfig(user) {
     api_key: decryptSecret(settings.apiKeyEnc) || undefined,
     model: settings.model || undefined,
     reasoning_effort: settings.reasoningEffort || undefined,
+    thinking_budgets: settings.thinkingBudgets || undefined,
     temperature: settings.temperature ?? undefined,
     max_tokens: settings.maxTokens ?? undefined,
     context_window: settings.contextWindow ?? undefined,
@@ -136,6 +137,7 @@ export async function invokeContextCompaction(user, input, signal = AbortSignal.
   return await runContextCompaction(userModelConfig(user), {
     existingSummary: typeof input?.existingSummary === 'string' ? input.existingSummary : '',
     messages: Array.isArray(input?.messages) ? input.messages : [],
+    instructions: typeof input?.instructions === 'string' ? input.instructions : '',
   }, { signal })
 }
 

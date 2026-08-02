@@ -1,40 +1,77 @@
+const command = (name, usage, description, options = {}) => ({
+  name,
+  usage,
+  description,
+  aliases: options.aliases || [],
+  group: options.group || 'tui',
+})
+
 export const EDITOR_AGENT_COMMANDS = [
-  ['/help', '查看夜雨命令'],
-  ['/status', '查看模型、作品和章节状态'],
-  ['/projects', '列出作品'],
-  ['/use <序号|名称|ID>', '切换作品'],
-  ['/chapters', '列出当前作品章节'],
-  ['/chapter <序号|名称|ID>', '切换章节'],
-  ['/draft', '预览当前章节正文'],
-  ['/write [要求]', '续写或重写当前章节'],
-  ['/review [要求]', '审查当前章节'],
-  ['/polish [要求]', '对当前章节去 AI 味'],
-  ['/analyze [要求]', '分析当前作品结构'],
-  ['/scan [要求]', '扫描当前作品问题'],
-  ['/search <关键词>', '联网查写作资料'],
-  ['/skill <名称> <要求>', '直接调用一个 Story Skill'],
-  ['/apply', '确认应用最近一次正文建议'],
-  ['/undo', '恢复当前章节最近一份历史正文'],
-  ['/history', '查看最近对话'],
-  ['/new', '新建工作台 Agent 会话'],
-  ['/confirm', '确认当前建书方案'],
-  ['/skills', '列出可用 Story Skills'],
-  ['/tasks', '列出最近的 Agent 任务'],
-  ['/task [ID]', '查看并恢复跟踪最近任务'],
-  ['/cancel [ID]', '取消正在运行或最近的任务'],
-  ['/retry [ID]', '重试失败或已取消的任务'],
-  ['/quit', '关闭夜雨面板'],
+  command('help', '/help', '查看当前 Web 工作区支持的命令'),
+  command('settings', '/settings', '打开模型与上下文设置'),
+  command('status', '/status', '查看模型、作品和章节状态'),
+  command('context', '/context', '查看当前上下文、阈值与压缩摘要'),
+  command('compact', '/compact [soft|remote] [重点]', '立即压缩较早对话；参数语义对齐 TUI'),
+  command('plan', '/plan [要求]', '以 Plan 模式分析并给出执行方案'),
+  command('model', '/model [名称]', '查看或切换当前模型'),
+  command('models', '/models', '列出当前连接提供的模型'),
+  command('tools', '/tools', '列出 Web 工作区可用工具'),
+  command('memory', '/memory', '打开并统计当前作品记忆'),
+  command('new', '/new', '新建 Agent 会话', { aliases: ['clear'] }),
+  command('rename', '/rename <标题>', '重命名当前会话'),
+  command('retry', '/retry [ID]', '重试指定任务或最近失败任务'),
+  command('queue', '/queue <追加指令>', '向正在运行的轮次追加指令'),
+  command('quit', '/quit', '关闭夜雨面板', { aliases: ['q'] }),
+  command('projects', '/projects', '列出作品', { group: 'story' }),
+  command('use', '/use <序号|名称|ID>', '切换作品', { group: 'story' }),
+  command('chapters', '/chapters', '列出当前作品章节', { group: 'story' }),
+  command('chapter', '/chapter <序号|名称|ID>', '切换章节', { group: 'story' }),
+  command('draft', '/draft', '预览当前章节正文', { group: 'story' }),
+  command('write', '/write [要求]', '续写或重写当前章节', { group: 'story' }),
+  command('review', '/review [要求]', '审查当前章节', { group: 'story' }),
+  command('polish', '/polish [要求]', '对当前章节去 AI 味', { group: 'story' }),
+  command('analyze', '/analyze [要求]', '分析当前作品结构', { group: 'story' }),
+  command('scan', '/scan [要求]', '扫描当前作品问题', { group: 'story' }),
+  command('search', '/search <关键词>', '联网查写作资料', { group: 'story' }),
+  command('skill', '/skill <名称> <要求>', '直接调用一个 Story Skill', { group: 'story' }),
+  command('apply', '/apply', '应用最近一次正文建议', { group: 'story' }),
+  command('undo', '/undo', '恢复最近一份历史正文', { group: 'story' }),
+  command('history', '/history', '查看最近对话', { group: 'story' }),
+  command('confirm', '/confirm', '确认当前建书方案', { group: 'story' }),
+  command('skills', '/skills', '列出可用 Story Skills', { group: 'story' }),
+  command('tasks', '/tasks', '列出最近的 Agent 任务', { group: 'story' }),
+  command('task', '/task [ID]', '查看最近任务', { group: 'story' }),
+  command('cancel', '/cancel [ID]', '取消正在运行或最近的任务', { group: 'story' }),
 ]
+
+const COMMAND_ALIASES = new Map(EDITOR_AGENT_COMMANDS.flatMap((item) => (
+  item.aliases.map((alias) => [alias, item.name])
+)))
 
 export function parseSlashCommand(input) {
   const text = String(input || '').trim()
   if (!text.startsWith('/')) return null
-  const firstSpace = text.search(/\s/)
-  if (firstSpace === -1) return { name: text.slice(1).toLowerCase(), argument: '' }
+  const body = text.slice(1)
+  const separator = body.search(/[\s:]/)
+  const rawName = (separator === -1 ? body : body.slice(0, separator)).toLowerCase()
+  const name = COMMAND_ALIASES.get(rawName) || rawName
   return {
-    name: text.slice(1, firstSpace).toLowerCase(),
-    argument: text.slice(firstSpace).trim(),
+    name,
+    argument: separator === -1 ? '' : body.slice(separator + 1).trim(),
   }
+}
+
+export function parseCompactCommandArgs(input) {
+  const text = String(input || '').trim()
+  if (!text) return { mode: '', instructions: '' }
+  const [first, ...rest] = text.split(/\s+/)
+  const mode = first.toLowerCase()
+  if (!['soft', 'remote', 'snapcompact'].includes(mode)) return { mode: '', instructions: text }
+  const instructions = rest.join(' ').trim()
+  if (mode === 'snapcompact' && instructions) {
+    throw new Error('/compact snapcompact 不接受压缩重点参数')
+  }
+  return { mode, instructions }
 }
 
 export function resolveSelection(items, selector, label = '项目') {

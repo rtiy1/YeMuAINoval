@@ -4736,8 +4736,79 @@ details[open] > summary .agent-trace-chevron {
   font-size: 8px;
 }
 
+.settings-thinking-budgets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px;
+  background: #f7f8f8;
+  border: 1px solid #e3e6e7;
+  border-radius: 9px;
+}
+
+.settings-thinking-budgets-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #555c62;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.settings-thinking-budgets-heading small,
+.settings-thinking-budget-note {
+  color: #969ca0;
+  font-size: 8px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.settings-thinking-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.settings-thinking-budget-grid .settings-field {
+  gap: 4px;
+}
+
+.settings-thinking-budget-grid .settings-field input {
+  height: 34px;
+  padding: 0 9px;
+  font-size: 10px;
+}
+
 .settings-number-row {
   gap: 12px;
+}
+
+.settings-threshold-preview {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  color: #356b5b;
+  background: #edf7f2;
+  border: 1px solid #cfe3da;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.settings-context-note {
+  display: block;
+  margin-top: 11px;
+  color: #8e9499;
+  font-size: 9px;
+  line-height: 1.65;
+}
+
+.settings-context-note code {
+  padding: 1px 4px;
+  color: #326555;
+  background: #eef5f2;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 8px;
 }
 
 .settings-actions {
@@ -4826,6 +4897,10 @@ details[open] > summary .agent-trace-chevron {
   .settings-provider-picker,
   .settings-number-row {
     grid-template-columns: 1fr;
+  }
+
+  .settings-thinking-budget-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .settings-model-row {
@@ -7655,6 +7730,26 @@ html[data-theme='dark'] .material-picker-search {
   color: var(--ide-text);
   background: var(--ide-paper);
   border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .settings-thinking-budgets {
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .settings-threshold-preview {
+  color: #9bcab9;
+  background: #22362f;
+  border-color: #345448;
+}
+
+html[data-theme='dark'] .settings-context-note {
+  color: #858e97;
+}
+
+html[data-theme='dark'] .settings-context-note code {
+  color: #9bcab9;
+  background: #263a33;
 }
 
 html[data-theme='dark'] .chapter-menu button,

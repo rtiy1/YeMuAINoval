@@ -85,7 +85,7 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
-import { EDITOR_AGENT_COMMANDS, parseSlashCommand, resolveSelection } from './agent-commands.mjs'
+import { EDITOR_AGENT_COMMANDS, parseCompactCommandArgs, parseSlashCommand, resolveSelection } from './agent-commands.mjs'
 import {
   agentResponseText,
   agentTaskDurationMs,
@@ -169,19 +169,38 @@ const primaryNavItems = [
 
 const navItems = primaryNavItems
 
-const editorAgentCommands = EDITOR_AGENT_COMMANDS
-  .map(([usage, description]) => {
-    const name = usage.match(/^\/([a-z]+)/)?.[1] || ''
-    return { name, usage, description, insertText: `/${name} `, kind: 'command' }
-  })
+const editorAgentCommands = EDITOR_AGENT_COMMANDS.map((item) => ({
+  ...item,
+  insertText: `/${item.name} `,
+  kind: 'command',
+}))
+
+const localAgentCommands = new Set(['help', 'settings', 'status', 'context', 'compact', 'model', 'models', 'tools', 'memory', 'projects', 'use', 'chapters', 'chapter', 'draft', 'history', 'new', 'rename', 'undo', 'apply', 'skills', 'tasks', 'task', 'cancel', 'retry', 'confirm', 'queue', 'quit'])
+
+function resolveWebCompactionThreshold(contextWindow, compaction) {
+  const windowTokens = Math.max(2, Number(contextWindow) || 100000)
+  const fixed = Number(compaction?.thresholdTokens)
+  if (fixed > 0) return Math.min(windowTokens - 1, Math.max(1, Math.floor(fixed)))
+  const percent = Number(compaction?.thresholdPercent)
+  if (percent > 0) return Math.floor(windowTokens * (Math.min(99, Math.max(1, percent)) / 100))
+  const proportional = Math.max(1, Math.floor(windowTokens * 0.15))
+  const explicitReserve = compaction?.reserveTokens
+  const reserve = explicitReserve == null
+    ? Math.max(proportional, 16384)
+    : Math.max(proportional, Number(explicitReserve) || 0)
+  const effectiveReserve = (explicitReserve == null && reserve >= windowTokens - proportional) || reserve >= windowTokens
+    ? proportional
+    : reserve
+  return Math.max(0, Math.min(windowTokens - 1, windowTokens - effectiveReserve))
+}
 
 const agentReasoningOptions = [
-  { value: '', label: '自动', description: '由模型根据当前任务自行决定', badge: '推荐' },
-  { value: 'minimal', label: '最低', description: '几乎不推理，优先获得最快响应' },
-  { value: 'low', label: '低', description: '适合改写、摘要等轻量任务' },
-  { value: 'medium', label: '中', description: '平衡响应速度与创作质量' },
-  { value: 'high', label: '高', description: '适合结构、人物与复杂修改' },
-  { value: 'xhigh', label: '极高', description: '更深入地推演长篇上下文' },
+  { value: '', label: 'Auto', description: '由模型根据当前任务自行决定', badge: '推荐' },
+  { value: 'minimal', label: 'Minimal', description: '几乎不推理，优先获得最快响应' },
+  { value: 'low', label: 'Low', description: '适合改写、摘要等轻量任务' },
+  { value: 'medium', label: 'Medium', description: '平衡响应速度与创作质量' },
+  { value: 'high', label: 'High', description: '适合结构、人物与复杂修改' },
+  { value: 'xhigh', label: 'XHigh', description: '更深入地推演长篇上下文' },
   { value: 'max', label: 'Max', description: '使用模型支持的最高推理强度', badge: '最深' },
 ]
 
@@ -2213,6 +2232,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentModelsLoading, setAgentModelsLoading] = useState(false)
   const [agentReasoningEffort, setAgentReasoningEffort] = useState('')
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
+  const [agentCompaction, setAgentCompaction] = useState({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000 })
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
   const [agentWebSearch, setAgentWebSearch] = useState(false)
   const [agentMultiAgent, setAgentMultiAgent] = useState(false)
@@ -2253,6 +2273,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       setAgentModel(settings?.model || '')
       setAgentReasoningEffort(settings?.reasoningEffort || '')
       setAgentContextWindow(Math.max(100, Number(settings?.contextWindow) || 100000))
+      setAgentCompaction({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000, ...(settings?.compaction || {}) })
       setAgentModels(Array.isArray(settings?.availableModels) ? settings.availableModels : [])
     }
     api.getSettings()
@@ -2313,10 +2334,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     try {
       const response = await api.updateSettings({ [field]: value })
       window.dispatchEvent(new CustomEvent('story:model-settings-updated', { detail: response.settings }))
+      return true
     } catch (error) {
       if (field === 'model') setAgentModel(previous)
       else setAgentReasoningEffort(previous)
       onNotify?.(error.message || '模型设置保存失败')
+      return false
     } finally {
       setAgentSettingSaving(false)
     }
@@ -3099,6 +3122,14 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       if (isCurrentChapter && !draft.trim()) onNotify('先写一点正文，再整理本章记忆')
       return
     }
+    if (isCurrentChapter && draftStatus !== 'saved' && !automatic) {
+      try {
+        await onSave?.({ silent: true })
+      } catch {
+        onNotify('正文保存失败，尚未整理本章记忆')
+        return
+      }
+    }
     setMemoryLoading(true)
     try {
       const response = await api.extractChapterMemories(project.id, chapter.id)
@@ -3201,11 +3232,17 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
 
   async function runLocalAssistantCommand(message) {
     const command = parseSlashCommand(message)
-    if (!command || !['help', 'status', 'projects', 'use', 'chapters', 'chapter', 'draft', 'history', 'new', 'undo', 'apply', 'skills', 'tasks', 'task', 'cancel', 'retry', 'confirm', 'quit'].includes(command.name)) return false
+    if (!command || !localAgentCommands.has(command.name)) return false
     if (command.name === 'quit') {
       setAssistantOpen(false)
       setAssistantInput('')
       setAssistantSuggestion(null)
+      return true
+    }
+    if (command.name === 'settings') {
+      setAssistantInput('')
+      setAssistantSuggestion(null)
+      onOpenSettings?.()
       return true
     }
     if (command.name === 'new') {
@@ -3249,8 +3286,63 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       appendLocalCommandResult(message, editorAgentCommands.map((item) => `${item.usage}　${item.description}`).join('\n'))
       return true
     }
+    if (command.name === 'context') {
+      const threshold = resolveWebCompactionThreshold(agentContextWindow, agentCompaction)
+      const state = agentCompaction.enabled !== false && agentCompaction.strategy !== 'off' ? 'Auto-compact on' : 'Auto-compact off'
+      const summary = assistantThread?.contextSummary
+        ? `${assistantThread.contextSummary.slice(0, 1200)}${assistantThread.contextSummary.length > 1200 ? '\n…' : ''}`
+        : '尚未生成滚动摘要。'
+      appendLocalCommandResult(message, `${agentContextLabel}\n${state} · Context-full\n触发阈值：${compactTokenCount(threshold)} Tokens\n最近原文保留：${compactTokenCount(agentCompaction.keepRecentTokens || 20000)} Tokens\n已压缩：${assistantThread?.compactedTurnCount || 0} 轮\n\n${summary}`)
+      return true
+    }
+    if (command.name === 'compact') {
+      if (!assistantThread?.id) throw new Error('当前会话还没有可压缩的对话')
+      const options = parseCompactCommandArgs(command.argument)
+      const response = await api.compactAgentThread(assistantThread.id, options)
+      setAssistantThread(response.thread)
+      const result = response.result || {}
+      appendLocalCommandResult(message, result.status === 'compacted'
+        ? `Context compacted · ${result.compactedTurns} 轮已写入滚动摘要，保留 ${result.keptTurnCount} 轮最近对话。`
+        : result.reason || '当前没有可压缩的较早对话。')
+      return true
+    }
+    if (command.name === 'model') {
+      if (command.argument) {
+        const updated = await updateAgentSetting('model', command.argument)
+        if (updated) appendLocalCommandResult(message, `Model switched · ${command.argument}`)
+        else setAssistantInput('')
+      } else {
+        appendLocalCommandResult(message, `当前模型：${agentModel || 'default'}\n使用 /models 查看可用模型，或 /model <名称> 切换。`)
+      }
+      return true
+    }
+    if (command.name === 'models') {
+      const response = await api.getModels()
+      const models = response.models || []
+      setAgentModels(models)
+      appendLocalCommandResult(message, models.length ? models.map((model) => `${model === agentModel ? '●' : '○'} ${model}`).join('\n') : '当前连接没有返回可用模型。')
+      return true
+    }
+    if (command.name === 'tools') {
+      appendLocalCommandResult(message, [
+        'read_story_skill　读取 Story Skill 与参考文件',
+        'list_story_files　浏览 PostgreSQL 作品工作区',
+        'read_story_file　读取 PostgreSQL 作品文件',
+        'write_story_file　创建或更新作品文件',
+        'edit_story_file　精确修改一份作品文件',
+        'request_user_input　渲染可选择问题',
+        'submit_story_result　提交最终结果',
+      ].join('\n'))
+      return true
+    }
+    if (command.name === 'memory') {
+      setRailTab('记忆')
+      const activeMemories = storyMemories.filter((item) => item.status !== 'archived')
+      appendLocalCommandResult(message, `已打开作品记忆 · ${activeMemories.length} 条\n这些记忆会由写作上下文分层读取；候选记忆仍需你确认后才会持久化。`)
+      return true
+    }
     if (command.name === 'status') {
-      const effort = agentReasoningOptions.find((item) => item.value === agentReasoningEffort)?.label || '自动'
+      const effort = agentReasoningOptions.find((item) => item.value === agentReasoningEffort)?.label || 'Auto'
       appendLocalCommandResult(message, `作品：${project.title}\n章节：${displayChapter.title}\n正文：${wordCount.toLocaleString()} 字\n模型：${agentModel || '默认模型'}\n思考强度：${effort}`)
       return true
     }
@@ -3288,10 +3380,23 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       return true
     }
     if (command.name === 'retry') {
-      if (!command.argument) throw new Error('请提供任务 ID')
-      const response = await api.retryAiTask(command.argument)
+      const fallbackTask = [...assistantMessages].reverse().find((item) => item.role === 'agent' && ['failed', 'cancelled'].includes(item.status) && item.taskId)
+      const taskId = command.argument || fallbackTask?.taskId
+      if (!taskId) throw new Error('没有可重试的失败任务，请提供任务 ID')
+      const response = await api.retryAiTask(taskId)
       appendLocalCommandResult(message, `任务已重新排队：${response.task.id}`)
       return true
+    }
+    if (command.name === 'rename') {
+      if (!assistantThread?.id) throw new Error('当前还没有可重命名的会话')
+      if (!command.argument) throw new Error('请提供新的会话标题')
+      const response = await api.updateAgentThread(assistantThread.id, { title: command.argument })
+      setAssistantThread(response.thread)
+      appendLocalCommandResult(message, `Session renamed · ${response.thread.title}`)
+      return true
+    }
+    if (command.name === 'queue') {
+      throw new Error('当前没有正在运行的轮次；/queue 仅用于追加运行中的指令')
     }
     if (command.name === 'confirm') {
       const response = await api.getWritingAssistantSession()
@@ -3495,6 +3600,21 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       return
     }
     if (assistantRunning) {
+      const runningCommand = parseSlashCommand(message)
+      if (runningCommand?.name === 'cancel') {
+        stopAssistant()
+        setAssistantInput('')
+        setAssistantSuggestion(null)
+        return
+      }
+      if (runningCommand?.name === 'queue') {
+        if (!runningCommand.argument) {
+          onNotify('请在 /queue 后提供追加指令')
+          return
+        }
+        await submitAssistantSteer(runningCommand.argument)
+        return
+      }
       await submitAssistantSteer(message)
       return
     }
@@ -3504,9 +3624,18 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       onNotify(error.message || '命令执行失败')
       return
     }
-    const command = resolveEditorAgentCommand(message, project)
+    const slashCommand = parseSlashCommand(message)
+    const requestMode = slashCommand?.name === 'plan' ? 'plan' : agentMode
+    const command = slashCommand?.name === 'plan'
+      ? {
+        message: slashCommand.argument || '分析当前章节与作品工作区，给出分步骤执行方案，暂不写入或修改数据。',
+        skill: `story-${project?.type === '短篇' ? 'short' : 'long'}-analyze`,
+      }
+      : resolveEditorAgentCommand(message, project)
     const explicitCommand = message.startsWith('/')
-    const modeSkill = !explicitCommand && agentMode === 'review'
+    const modeSkill = slashCommand?.name === 'plan'
+      ? command.skill
+      : !explicitCommand && agentMode === 'review'
       ? 'story-review'
       : !explicitCommand && agentMode === 'plan'
         ? `story-${project?.type === '短篇' ? 'short' : 'long'}-analyze`
@@ -3523,7 +3652,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const source = {
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
-      mode: agentMode,
+      mode: requestMode,
       multiAgent: agentMultiAgent,
       sourceText: draft,
       selectionStart,
@@ -3532,7 +3661,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       attachedFiles: attachedFiles.map(({ name, kind }) => ({ name, kind })),
     }
     const userMessage = { id: `${requestId}-user`, role: 'user', text: message }
-    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, mode: agentMode, editRequested, requestedSkill: effectiveSkill }
+    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, mode: requestMode, editRequested, requestedSkill: effectiveSkill }
     setAssistantMessages((current) => [...current.slice(-18), userMessage, runMessage])
     setAssistantInput('')
     setAssistantAttachments([])
@@ -3564,14 +3693,14 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           source_text: draft,
           selected_text: selectedText,
           attached_files: attachedFiles,
-          collaboration_mode: agentMode,
+          collaboration_mode: requestMode,
           multi_agent: agentMultiAgent,
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
           tool_policy: {
             externalSearch: agentWebSearch ? 'allow' : 'deny',
-            mutateStoryData: agentMode === 'build' ? 'allow' : 'propose',
+            mutateStoryData: requestMode === 'build' ? 'allow' : 'propose',
             deleteStoryData: 'deny',
           },
         },
@@ -3988,7 +4117,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       status: skill.status,
     }))
   const filteredAgentCommands = [...editorAgentCommands, ...agentSkillCommands]
-    .filter((command) => !suggestionQuery || command.name.includes(suggestionQuery) || command.description.includes(suggestionQuery))
+    .filter((command) => !suggestionQuery || command.name.includes(suggestionQuery) || command.description.includes(suggestionQuery) || command.aliases?.some((alias) => alias.includes(suggestionQuery)))
     .slice(0, 40)
   const filteredAgentFiles = agentFileOptions
     .filter((file) => !suggestionQuery || `${file.name} ${file.kind} ${file.description}`.toLowerCase().includes(suggestionQuery))
@@ -4300,7 +4429,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
                     </button>
                     <button type="button" className={`agent-control-trigger reasoning ${agentPickerOpen === 'reasoning' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'reasoning'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('reasoning')} title="选择思考强度">
-                      <span>{agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || '自动'}</span>
+                      <span>{agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || 'Auto'}</span>
                     </button>
                     {agentPickerOpen === 'model' && <AgentComposerMenu
                       title="选择模型"
@@ -4349,7 +4478,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   </svg>
                   <span>{agentContextPercent}% ctx</span>
                 </button>
-                <span className="tui-status-model" title={agentModel || '默认模型'}>{agentModel || 'default'} · {agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || '自动'}</span>
+                <span className="tui-status-model" title={agentModel || '默认模型'}>{agentModel || 'default'} · {agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || 'Auto'}</span>
               </div>
             </div>
             </>}
@@ -5274,6 +5403,26 @@ function SkillResultPanel({ result, originalText = '', canApplyToDraft = false, 
   </section>
 }
 
+const TUI_THINKING_BUDGETS = Object.freeze({
+  minimal: 1024,
+  low: 2048,
+  medium: 8192,
+  high: 16384,
+  xhigh: 32768,
+  max: 32768,
+})
+
+const THINKING_BUDGET_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+const TUI_COMPACTION_DEFAULTS = Object.freeze({
+  enabled: true,
+  strategy: 'context-full',
+  thresholdPercent: -1,
+  thresholdTokens: -1,
+  reserveTokens: null,
+  keepRecentTokens: 20000,
+})
+
 function SettingsModal({ onClose, onNotify }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -5282,7 +5431,7 @@ function SettingsModal({ onClose, onNotify }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [activePane, setActivePane] = useState('connection')
   const [connectionStatus, setConnectionStatus] = useState('idle')
-  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', temperature: 0.7, maxTokens: 4096, contextWindow: 100000 })
+  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', thinkingBudgets: { ...TUI_THINKING_BUDGETS }, temperature: 0.7, maxTokens: 16384, contextWindow: 100000, compaction: { ...TUI_COMPACTION_DEFAULTS } })
 
   useEffect(() => {
     let mounted = true
@@ -5297,9 +5446,11 @@ function SettingsModal({ onClose, onNotify }) {
           apiKey: '',
           model: s.model || '',
           reasoningEffort: s.reasoningEffort || '',
+          thinkingBudgets: { ...TUI_THINKING_BUDGETS, ...(s.thinkingBudgets || {}) },
           temperature: s.temperature ?? 0.7,
-          maxTokens: s.maxTokens ?? 4096,
+          maxTokens: s.maxTokens ?? 16384,
           contextWindow: s.contextWindow ?? 100000,
+          compaction: { ...TUI_COMPACTION_DEFAULTS, ...(s.compaction || {}) },
         })
       })
       .catch(() => { if (mounted) onNotify('读取设置失败') })
@@ -5374,6 +5525,20 @@ function SettingsModal({ onClose, onNotify }) {
     }
   }
 
+  function updateThinkingBudget(level, value) {
+    setForm((current) => ({
+      ...current,
+      thinkingBudgets: { ...current.thinkingBudgets, [level]: value },
+    }))
+  }
+
+  function updateCompaction(field, value) {
+    setForm((current) => ({
+      ...current,
+      compaction: { ...current.compaction, [field]: value },
+    }))
+  }
+
   const apiKeyPlaceholder = settings?.apiKeyMask ? `已配置 ${settings.apiKeyMask}，留空不修改` : '输入 API Key'
   const connectionCopy = {
     idle: settings?.apiKeyMask ? '已保存凭据' : '等待配置',
@@ -5381,6 +5546,7 @@ function SettingsModal({ onClose, onNotify }) {
     connected: `连接正常${modelList.length ? ` · ${modelList.length} 个模型` : ''}`,
     error: '连接失败',
   }[connectionStatus]
+  const compactionThreshold = resolveWebCompactionThreshold(form.contextWindow, form.compaction)
 
   return <div className="modal-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -5403,6 +5569,7 @@ function SettingsModal({ onClose, onNotify }) {
             <nav className="settings-nav" aria-label="设置分类">
               <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>连接与模型</strong><small>服务商、地址和密钥</small></span></button>
               <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>思考强度与上下文</small></span></button>
+              <button type="button" className={activePane === 'context' ? 'active' : ''} onClick={() => setActivePane('context')}><Archive size={16} /><span><strong>上下文维护</strong><small>阈值、保留窗口与压缩</small></span></button>
               <div className={`settings-connection-state ${connectionStatus}`}>
                 <span />
                 <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
@@ -5445,22 +5612,36 @@ function SettingsModal({ onClose, onNotify }) {
                   </div>
                   {modelList.length > 0 && <datalist id="model-list">{modelList.map((model) => <option key={model} value={model} />)}</datalist>}
                 </section>
-              </> : <>
+              </> : activePane === 'generation' ? <>
                 <section className="settings-section">
                   <div className="settings-section-heading"><div><h3>推理与输出</h3><p>模型不支持某项参数时，服务端会自动忽略。</p></div></div>
                   <label className="settings-field">
                     <span>思考强度</span>
                     <div className="settings-select-wrap"><BrainCircuit size={16} /><select value={form.reasoningEffort} onChange={(e) => updateField('reasoningEffort', e.target.value)}>
-                      <option value="">自动（使用模型默认值）</option>
-                      <option value="minimal">最低 · 最快响应</option>
-                      <option value="low">低 · 简单编辑</option>
-                      <option value="medium">中 · 日常创作</option>
-                      <option value="high">高 · 复杂推演</option>
-                      <option value="xhigh">极高 · 最深度思考</option>
-                      <option value="max">MAX · 模型支持的最高强度</option>
+                      <option value="">Auto (Model default)</option>
+                      <option value="minimal">Minimal</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="xhigh">XHigh</option>
+                      <option value="max">Max</option>
                     </select><ChevronDown size={14} /></div>
                     <small>强度越高通常耗时越长、使用的 token 越多。</small>
                   </label>
+
+                  <div className="settings-thinking-budgets">
+                    <div className="settings-thinking-budgets-heading">
+                      <span>Thinking budgets</span>
+                      <small>TUI defaults · tokens</small>
+                    </div>
+                    <div className="settings-thinking-budget-grid">
+                      {THINKING_BUDGET_LEVELS.map((level) => <label className="settings-field" key={level}>
+                        <span>{level === 'xhigh' ? 'XHigh' : `${level[0].toUpperCase()}${level.slice(1)}`}</span>
+                        <input type="number" min="0" max="128000" step="1" value={form.thinkingBudgets[level]} onChange={(event) => updateThinkingBudget(level, Number(event.target.value))} />
+                      </label>)}
+                    </div>
+                    <small className="settings-thinking-budget-note">精确预算仅对 Anthropic、Gemini 等 token-budget 模型生效；DeepSeek / OpenAI 等 effort 模型由厂商按强度控制。</small>
+                  </div>
 
                   <label className="settings-field">
                     <span>采样温度 <strong>{Number(form.temperature).toFixed(1)}</strong></span>
@@ -5476,12 +5657,53 @@ function SettingsModal({ onClose, onNotify }) {
                     <label className="settings-field">
                       <span>最大输出 Tokens</span>
                       <input type="number" min="1" max="128000" step="1" value={form.maxTokens} onChange={(e) => updateField('maxTokens', Number(e.target.value))} />
-                      <small>单次回复的最大输出预算。</small>
+                      <small>思考与正文共享此预算；长思考建议至少 16384，触顶后助手会自动收尾。</small>
                     </label>
                     <label className="settings-field">
                       <span>上下文窗口 Tokens</span>
                       <input type="number" min="100" max="1000000" step="1" value={form.contextWindow} onChange={(e) => updateField('contextWindow', Number(e.target.value))} />
                       <small>可直接填写 100000 等整值。</small>
+                    </label>
+                  </div>
+                </section>
+              </> : <>
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>Context compaction</h3><p>使用与 TUI 相同的触发顺序：固定 Tokens → 百分比 → Reserve。</p></div><strong className="settings-threshold-preview">{compactTokenCount(compactionThreshold)} threshold</strong></div>
+                  <div className="settings-provider-picker">
+                    <button type="button" className={form.compaction.enabled && form.compaction.strategy !== 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: true, strategy: 'context-full' } }))}><Archive size={17} /><span><strong>Auto-compact</strong><small>Context-full · 保持当前会话</small></span><Check size={15} /></button>
+                    <button type="button" className={!form.compaction.enabled || form.compaction.strategy === 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: false, strategy: 'off' } }))}><X size={17} /><span><strong>Off</strong><small>仅保留手动 /compact</small></span><Check size={15} /></button>
+                  </div>
+                  <small className="settings-context-note">Web 工作区采用 TUI 的 Context-full 滚动摘要。TUI 的 Snapcompact 位图归档依赖图像回读传输，当前 Web 模型通道不伪装支持；可用 <code>/compact soft</code> 手动压缩。</small>
+                </section>
+
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>触发阈值</h3><p>设为 -1 表示 Default；固定 token 值优先于百分比。</p></div></div>
+                  <div className="settings-number-row">
+                    <label className="settings-field">
+                      <span>Threshold Tokens</span>
+                      <input type="number" min="-1" max="1000000" step="1" value={form.compaction.thresholdTokens} onChange={(event) => updateCompaction('thresholdTokens', Number(event.target.value))} />
+                      <small>-1 时继续使用百分比或 Reserve 规则。</small>
+                    </label>
+                    <label className="settings-field">
+                      <span>Threshold Percent</span>
+                      <input type="number" min="-1" max="99" step="1" value={form.compaction.thresholdPercent} onChange={(event) => updateCompaction('thresholdPercent', Number(event.target.value))} />
+                      <small>-1 时使用 Context window − Reserve。</small>
+                    </label>
+                  </div>
+                </section>
+
+                <section className="settings-section">
+                  <div className="settings-section-heading"><div><h3>保留预算</h3><p>压缩以完整会话轮次为边界，不会从一句话中间截断。</p></div></div>
+                  <div className="settings-number-row">
+                    <label className="settings-field">
+                      <span>Reserve Tokens</span>
+                      <input type="number" min="0" max="1000000" step="1" value={form.compaction.reserveTokens ?? ''} placeholder="Default · 16384" onChange={(event) => updateCompaction('reserveTokens', event.target.value === '' ? null : Number(event.target.value))} />
+                      <small>留空使用 TUI 默认值，并至少保留窗口的 15%。</small>
+                    </label>
+                    <label className="settings-field">
+                      <span>Keep Recent Tokens</span>
+                      <input type="number" min="1" max="1000000" step="1" value={form.compaction.keepRecentTokens} onChange={(event) => updateCompaction('keepRecentTokens', Number(event.target.value))} />
+                      <small>默认 20000；最近内容原样参与后续请求。</small>
                     </label>
                   </div>
                 </section>

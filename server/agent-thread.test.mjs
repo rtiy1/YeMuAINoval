@@ -14,6 +14,7 @@ import {
   taskSubagents,
   threadCompactionPlan,
   threadConversation,
+  resolveThreadCompactionThreshold,
 } from './agent-thread.mjs'
 
 test('normalizes legacy databases without agent threads', () => {
@@ -150,7 +151,7 @@ test('thread conversation excludes turns already represented by the rolling summ
   ])
 })
 
-test('context compaction keeps six recent turns raw and selects older turns', () => {
+test('context compaction uses TUI thresholds and keeps a recent token budget', () => {
   const turns = Array.from({ length: 10 }, (_, index) => ({
     id: `turn-${index + 1}`,
     taskId: `task-${index + 1}`,
@@ -161,10 +162,22 @@ test('context compaction keeps six recent turns raw and selects older turns', ()
     status: 'completed',
     result: { result: { output: `第 ${index + 1} 次结果 ${'剧情事实'.repeat(160)}` } },
   }))
-  const plan = threadCompactionPlan({ turns }, tasks, { contextWindow: 4000, maxTokens: 800 })
+  const plan = threadCompactionPlan({ turns }, tasks, {
+    contextWindow: 4000,
+    compaction: { thresholdTokens: 2000, keepRecentTokens: 1800 },
+  })
   assert.ok(plan)
-  assert.deepEqual(plan.turnIds, ['turn-1', 'turn-2', 'turn-3', 'turn-4'])
-  assert.equal(plan.messages.length, 8)
+  assert.ok(plan.turnIds.length > 0)
+  assert.ok(plan.keptTurnCount > 0)
+  assert.equal(plan.messages.length, plan.turnIds.length * 2)
+  assert.equal(plan.thresholdTokens, 2000)
+})
+
+test('context compaction threshold matches TUI fixed, percentage and reserve precedence', () => {
+  assert.equal(resolveThreadCompactionThreshold(100000, { thresholdTokens: 50000, thresholdPercent: 80 }), 50000)
+  assert.equal(resolveThreadCompactionThreshold(100000, { thresholdTokens: -1, thresholdPercent: 80 }), 80000)
+  assert.equal(resolveThreadCompactionThreshold(100000, { thresholdTokens: -1, thresholdPercent: -1 }), 83616)
+  assert.equal(resolveThreadCompactionThreshold(4000, { thresholdTokens: -1, thresholdPercent: -1 }), 3400)
 })
 
 test('turn plan only exposes an explicit runtime plan', () => {

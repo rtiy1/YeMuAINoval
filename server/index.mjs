@@ -33,6 +33,7 @@ import { invokeStoryAgent, listStoryAgentSkills, storyAgentRuntimeInfo } from '.
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './task-stream.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
+import { compactAgentThread } from './context-compaction.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
 import { applyStoryArtifacts } from './story-artifacts.mjs'
 import {
@@ -40,6 +41,7 @@ import {
   agentTurnPublic,
   archiveTaskReasoning,
   normalizeAgentInputAnswers,
+  normalizeThreadCompactionSettings,
   reasoningItemId,
   taskInputHistory,
   taskReasoningHistory,
@@ -1081,6 +1083,42 @@ function sanitizeSettings(input, existing) {
     if (allowed.has(effort)) settings.reasoningEffort = effort
     else delete settings.reasoningEffort
   }
+  if (input.thinkingBudgets !== undefined) {
+    const budgets = input.thinkingBudgets && typeof input.thinkingBudgets === 'object' && !Array.isArray(input.thinkingBudgets)
+      ? input.thinkingBudgets
+      : {}
+    settings.thinkingBudgets = {}
+    for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      const budget = Number(budgets[level])
+      if (Number.isFinite(budget) && budget >= 0) settings.thinkingBudgets[level] = Math.min(128000, Math.round(budget))
+    }
+  }
+  if (input.compaction !== undefined) {
+    const incoming = input.compaction && typeof input.compaction === 'object' && !Array.isArray(input.compaction)
+      ? input.compaction
+      : {}
+    const previous = settings.compaction && typeof settings.compaction === 'object' && !Array.isArray(settings.compaction)
+      ? settings.compaction
+      : {}
+    const compaction = { ...previous }
+    if (incoming.enabled !== undefined) compaction.enabled = incoming.enabled !== false
+    if (incoming.strategy !== undefined) compaction.strategy = incoming.strategy === 'off' ? 'off' : 'context-full'
+    for (const [field, minimum, maximum] of [
+      ['thresholdPercent', -1, 99],
+      ['thresholdTokens', -1, 1000000],
+      ['reserveTokens', 0, 1000000],
+      ['keepRecentTokens', 1, 1000000],
+    ]) {
+      if (incoming[field] === undefined) continue
+      if (field === 'reserveTokens' && (incoming[field] === null || incoming[field] === '')) {
+        compaction[field] = null
+        continue
+      }
+      const number = Number(incoming[field])
+      if (Number.isFinite(number)) compaction[field] = Math.min(maximum, Math.max(minimum, Math.round(number)))
+    }
+    settings.compaction = normalizeThreadCompactionSettings(compaction)
+  }
   if (input.temperature !== undefined) {
     const temp = Number(input.temperature)
     if (Number.isFinite(temp)) settings.temperature = Math.min(2, Math.max(0, temp))
@@ -1100,16 +1138,18 @@ function sanitizeSettings(input, existing) {
 }
 
 function publicSettings(settings) {
-  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', reasoningEffort: '', temperature: null, maxTokens: null, contextWindow: null }
+  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', reasoningEffort: '', thinkingBudgets: null, temperature: null, maxTokens: null, contextWindow: null, compaction: normalizeThreadCompactionSettings(null) }
   return {
     provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
     apiBaseUrl: settings.apiBaseUrl || '',
     apiKeyMask: maskKey(decryptSecret(settings.apiKeyEnc)),
     model: settings.model || '',
     reasoningEffort: settings.reasoningEffort || '',
+    thinkingBudgets: settings.thinkingBudgets ?? null,
     temperature: settings.temperature ?? null,
     maxTokens: settings.maxTokens ?? null,
     contextWindow: settings.contextWindow ?? null,
+    compaction: normalizeThreadCompactionSettings(settings.compaction),
   }
 }
 
@@ -2174,6 +2214,27 @@ app.post('/api/ai/threads/:threadId/resume', async (req, res, next) => {
     })
     const db = await loadDb()
     res.json({ thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/ai/threads/:threadId/compact', async (req, res, next) => {
+  try {
+    const mode = cleanOptionalText(req.body?.mode, '压缩模式', 40).toLowerCase()
+    if (mode && !['soft', 'remote'].includes(mode)) {
+      throw Object.assign(new Error(mode === 'snapcompact'
+        ? 'Web 工作区暂不支持把会话归档为位图；请使用 /compact soft'
+        : '压缩模式仅支持 soft 或 remote'), { status: 400 })
+    }
+    const instructions = cleanOptionalText(req.body?.instructions, '压缩重点', 2000)
+    const result = await compactAgentThread(req.params.threadId, req.user.id, { instructions, mode })
+    const db = await loadDb()
+    const thread = findAgentThread(db, req.params.threadId, req.user.id)
+    res.json({
+      result: result || { status: 'unchanged', threadId: thread.id, reason: '当前没有可压缩的较早对话。' },
+      thread: agentThreadPublic(thread, db.writingTasks, writingTaskPublic),
+    })
   } catch (error) {
     next(error)
   }

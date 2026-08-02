@@ -175,6 +175,7 @@ export const api = {
   updateAgentThread: (threadId, updates) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'PATCH', body: JSON.stringify(updates) }),
   archiveAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
   resumeAgentThread: (threadId) => request(`/ai/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' }),
+  compactAgentThread: (threadId, input = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/compact`, { method: 'POST', body: JSON.stringify(input) }),
   createAgentTurn: (threadId, input, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns`, { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   answerAgentTurn: (threadId, turnId, answers, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/input`, { method: 'POST', body: JSON.stringify({ answers }), signal: options.signal }),
   regenerateAgentTurn: (threadId, turnId, options = {}) => request(`/ai/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/regenerate`, { method: 'POST', signal: options.signal }),

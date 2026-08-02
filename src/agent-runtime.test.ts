@@ -33,6 +33,37 @@ function deepSeekSseResponse(text: string): Response {
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function deepSeekReasoningLimitResponse(reasoning: string): Response {
+	const events = [
+		{
+			id: "chatcmpl-yemu-length-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{ index: 0, delta: { role: "assistant", reasoning_content: reasoning }, finish_reason: null }],
+			usage: null,
+		},
+		{
+			id: "chatcmpl-yemu-length-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{ index: 0, delta: { content: "" }, finish_reason: "length" }],
+			usage: {
+				prompt_tokens: 20,
+				completion_tokens: 4096,
+				total_tokens: 4116,
+				completion_tokens_details: { reasoning_tokens: 4096 },
+			},
+		},
+		"[DONE]",
+	];
+	const body = `${events
+		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
+		.join("\n\n")}\n\n`;
+	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 function deepSeekToolSseResponse(id: string, name: string, args: Record<string, unknown>): Response {
 	const events = [
 		{
@@ -156,6 +187,52 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 		).rejects.toThrow("synthetic upstream failure");
 	} finally {
 		failureSpy.mockRestore();
+	}
+});
+
+test("reasoning-only length stops automatically continue to a visible answer", async () => {
+	const responses = [
+		deepSeekReasoningLimitResponse("先完整分析问题，但这一轮的额度只够思考。"),
+		deepSeekSseResponse("这是自动续跑后提交的最终答复。"),
+	];
+	const reasoningDeltas: string[] = [];
+	const textDeltas: string[] = [];
+	const payloads: Array<Record<string, unknown>> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			payloads.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>);
+			return responses[calls++] ?? deepSeekSseResponse("完成");
+		},
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "完成一个需要深入推理的创作任务",
+			skill: "story-setup",
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+				reasoning_effort: "high",
+				max_tokens: 4096,
+			},
+		}, {
+			onReasoningDelta: (delta) => reasoningDeltas.push(delta),
+			onDelta: (delta) => textDeltas.push(delta),
+		});
+
+		expect(calls).toBe(2);
+		expect(reasoningDeltas.join("")).toContain("这一轮的额度只够思考");
+		expect(textDeltas.join("")).toBe("这是自动续跑后提交的最终答复。");
+		expect(response.result.output).toBe("这是自动续跑后提交的最终答复。");
+		expect(payloads[1]?.reasoning_effort).toBe("high");
+		const recoveryMessages = payloads[1]?.messages;
+		expect(JSON.stringify(recoveryMessages)).toContain("系统续跑");
+	} finally {
+		fetchSpy.mockRestore();
 	}
 });
 

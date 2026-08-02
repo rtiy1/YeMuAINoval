@@ -341,37 +341,105 @@ export function threadConversation(thread, tasks) {
   return selected.flat()
 }
 
-export function threadCompactionPlan(thread, tasks, { contextWindow = 100000, maxTokens = 4096 } = {}) {
+const DEFAULT_COMPACTION_RESERVE_TOKENS = 16384
+
+export const DEFAULT_THREAD_COMPACTION_SETTINGS = Object.freeze({
+  enabled: true,
+  strategy: 'context-full',
+  thresholdPercent: -1,
+  thresholdTokens: -1,
+  reserveTokens: null,
+  keepRecentTokens: 20000,
+})
+
+function finiteNumber(value, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
+export function normalizeThreadCompactionSettings(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return {
+    enabled: input.enabled !== false,
+    strategy: input.strategy === 'off' ? 'off' : 'context-full',
+    thresholdPercent: finiteNumber(input.thresholdPercent, -1),
+    thresholdTokens: finiteNumber(input.thresholdTokens, -1),
+    reserveTokens: input.reserveTokens == null ? null : Math.max(0, finiteNumber(input.reserveTokens, 0)),
+    keepRecentTokens: Math.max(1, finiteNumber(input.keepRecentTokens, DEFAULT_THREAD_COMPACTION_SETTINGS.keepRecentTokens)),
+  }
+}
+
+export function resolveThreadCompactionThreshold(contextWindow, value) {
+  const settings = normalizeThreadCompactionSettings(value)
+  const safeWindow = Math.max(2, finiteNumber(contextWindow, 100000))
+  if (settings.thresholdTokens > 0) {
+    return Math.min(safeWindow - 1, Math.max(1, Math.floor(settings.thresholdTokens)))
+  }
+  if (settings.thresholdPercent > 0) {
+    const percent = Math.min(99, Math.max(1, settings.thresholdPercent))
+    return Math.floor(safeWindow * (percent / 100))
+  }
+  const proportionalReserve = Math.max(1, Math.floor(safeWindow * 0.15))
+  const configuredReserve = settings.reserveTokens == null
+    ? Math.max(proportionalReserve, DEFAULT_COMPACTION_RESERVE_TOKENS)
+    : Math.max(proportionalReserve, settings.reserveTokens)
+  const defaultReserveIsImpossible = settings.reserveTokens == null
+    && configuredReserve >= safeWindow - proportionalReserve
+  const reserve = defaultReserveIsImpossible || configuredReserve >= safeWindow
+    ? proportionalReserve
+    : configuredReserve
+  return Math.max(0, Math.min(safeWindow - 1, safeWindow - reserve))
+}
+
+function estimateConversationTokens(messages) {
+  return Math.max(1, Math.ceil(JSON.stringify(messages || []).length / 2.2))
+}
+
+export function threadCompactionPlan(thread, tasks, {
+  contextWindow = 100000,
+  compaction = DEFAULT_THREAD_COMPACTION_SETTINGS,
+  force = false,
+} = {}) {
+  const settings = normalizeThreadCompactionSettings(compaction)
+  if (!force && (!settings.enabled || settings.strategy === 'off')) return null
   const taskMap = new Map((tasks || []).map((task) => [task.id, task]))
   const compactedTurnIds = new Set(thread?.compactedTurnIds || [])
   const completedTurns = (thread?.turns || [])
     .filter((turn) => taskMap.get(turn.taskId)?.status === 'completed' && !compactedTurnIds.has(turn.id))
-  if (completedTurns.length <= 8) return null
+  if (completedTurns.length < 2) return null
 
-  const messages = []
-  for (const turn of completedTurns) {
+  const turnBatches = completedTurns.map((turn) => {
     const task = taskMap.get(turn.taskId)
-    messages.push(...turnConversationMessages(turn, task))
-  }
-  const safeWindow = Math.max(500, Number(contextWindow) || 100000)
-  const reservedOutput = Math.min(Math.max(0, Number(maxTokens) || 4096), safeWindow * 0.4)
-  const transcriptBudget = Math.max(500, Math.floor((safeWindow - reservedOutput) * 0.3))
-  const estimatedTokens = Math.ceil((text(thread?.contextSummary).length + JSON.stringify(messages).length) / 2.2)
-  if (estimatedTokens < transcriptBudget) return null
+    const messages = turnConversationMessages(turn, task)
+    return { turn, messages, tokens: estimateConversationTokens(messages) }
+  })
+  const messages = turnBatches.flatMap((batch) => batch.messages)
+  const safeWindow = Math.max(2, finiteNumber(contextWindow, 100000))
+  const thresholdTokens = resolveThreadCompactionThreshold(safeWindow, settings)
+  const summaryTokens = text(thread?.contextSummary) ? Math.ceil(text(thread.contextSummary).length / 2.2) : 0
+  const estimatedTokens = summaryTokens + estimateConversationTokens(messages)
+  if (!force && estimatedTokens <= thresholdTokens) return null
 
-  const turnsToCompact = completedTurns.slice(0, -6)
-  if (turnsToCompact.length < 2) return null
+  let keepStart = turnBatches.length
+  let keptTokens = 0
+  while (keepStart > 0 && (keptTokens < settings.keepRecentTokens || keepStart === turnBatches.length)) {
+    keepStart -= 1
+    keptTokens += turnBatches[keepStart].tokens
+  }
+  if (keepStart === 0 && turnBatches.length > 1 && (force || estimatedTokens > thresholdTokens)) keepStart = 1
+  const batchesToCompact = turnBatches.slice(0, keepStart)
+  if (!batchesToCompact.length) return null
+  const turnsToCompact = batchesToCompact.map((batch) => batch.turn)
   const turnIds = turnsToCompact.map((turn) => turn.id)
-  const messagesToCompact = []
-  for (const turn of turnsToCompact) {
-    const task = taskMap.get(turn.taskId)
-    messagesToCompact.push(...turnConversationMessages(turn, task))
-  }
+  const messagesToCompact = batchesToCompact.flatMap((batch) => batch.messages)
   return {
     turnIds,
     messages: messagesToCompact,
     estimatedTokens,
-    transcriptBudget,
+    thresholdTokens,
+    keepRecentTokens: settings.keepRecentTokens,
+    keptTurnCount: completedTurns.length - turnsToCompact.length,
+    forced: force,
   }
 }
 

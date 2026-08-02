@@ -5,6 +5,9 @@
 已有摘要：
 {{existingSummary}}
 
+本次压缩重点（为空时按默认要求处理）：
+{{instructions}}
+
 待压缩消息：
 {{messagesJson}}
 
