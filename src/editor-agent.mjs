@@ -628,12 +628,25 @@ export function applyAgentItemStreamEvent(items, event, payload) {
 export function reconcileAgentTurnItems(currentItems, nextItems) {
   const next = Array.isArray(nextItems) ? nextItems.filter(Boolean) : []
   if (!next.length) return Array.isArray(currentItems) ? currentItems.filter(Boolean) : []
+  const current = Array.isArray(currentItems) ? currentItems.filter(Boolean) : []
+  const currentById = new Map(current.map((item) => [item.id, item]))
+  const reconciled = next.map((item) => {
+    const existing = currentById.get(item.id)
+    if (!existing) return item
+    if (item.type === 'reasoning' && agentReasoningText(existing).length > agentReasoningText(item).length) {
+      return { ...item, summary: existing.summary }
+    }
+    if (['agentMessage', 'plan'].includes(item.type) && agentItemText(existing).length > agentItemText(item).length) {
+      return { ...item, content: existing.content }
+    }
+    return item
+  })
   const nextIds = new Set(next.map((item) => item.id))
-  const transient = (Array.isArray(currentItems) ? currentItems : [])
+  const transient = current
     .filter((item) => ['agentMessage', 'plan'].includes(item?.type)
       && item.status === 'inProgress'
       && !nextIds.has(item.id))
-  return [...next, ...transient]
+  return [...reconciled, ...transient]
 }
 
 export function resolveEditorAgentCommand(rawMessage, project) {

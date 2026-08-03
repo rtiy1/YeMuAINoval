@@ -9,6 +9,14 @@ import { publishTaskStreamEvent } from './task-stream.mjs'
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
 const messageToolHistoryLimit = 6
 const steeringHistoryLimit = 8
+const defaultWritingTaskTimeoutMs = 15 * 60 * 1000
+const reasoningSegmentMaxChars = 200_000
+
+export function writingTaskTimeoutMs(value = process.env.AI_TASK_TIMEOUT_MS) {
+  const configured = Number(value)
+  if (!Number.isFinite(configured) || configured <= 0) return defaultWritingTaskTimeoutMs
+  return Math.min(60 * 60 * 1000, Math.max(60_000, Math.floor(configured)))
+}
 
 function positiveInteger(value) {
   const number = Number(value)
@@ -165,7 +173,8 @@ function appendEvent(task, type, label, status = 'completed', meta = {}) {
 }
 
 function finishRunningEvent(task, status = 'completed', updates = {}) {
-  const event = [...(task.events || [])].reverse().find((item) => item.status === 'running')
+  const event = [...(task.events || [])].reverse().find((item) => item.status === 'running'
+    && !['tool', 'reasoning'].includes(item.type))
   if (!event) return null
   event.status = status
   event.completedAt = new Date().toISOString()
@@ -279,6 +288,7 @@ export async function executeWritingTask(taskId, {
       return {
         input: task.input,
         user,
+        turnId: task.turnId || task.id,
         executionGeneration,
         interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
         subagents: Array.isArray(task.subagents) ? task.subagents : [],
@@ -296,9 +306,17 @@ export async function executeWritingTask(taskId, {
         task.updatedAt = new Date().toISOString()
       }
     })
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)])
+    // A Story Skill can make several sequential model and file-tool turns. The old
+    // five-minute deadline covered the whole task, so healthy long-form work was
+    // routinely aborted halfway through and then mislabeled as a user cancel.
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(writingTaskTimeoutMs()),
+    ])
     let partialOutput = ''
     let reasoningSummary = ''
+    let reasoningSegmentOrdinal = 0
+    const reasoningSegments = new Map()
     let checkpointTimer = null
     let checkpointDirty = false
     let checkpointQueue = Promise.resolve()
@@ -309,12 +327,22 @@ export async function executeWritingTask(taskId, {
       checkpointDirty = false
       const outputSnapshot = partialOutput
       const reasoningSnapshot = reasoningSummary.slice(0, 12_000)
+      const reasoningSegmentSnapshots = [...reasoningSegments.values()].map((segment) => ({
+        ...segment,
+        meta: { ...segment.meta },
+      }))
       checkpointQueue = checkpointQueue.then(() => updateDb((db) => {
         const task = db.writingTasks.find((item) => item.id === taskId)
         if (!task || task.status !== 'running' || task.cancelRequested
           || !executionMatches(task, executionId, prepared.executionGeneration)) return
         task.partialOutput = outputSnapshot
         task.reasoningSummary = reasoningSnapshot
+        task.events ||= []
+        for (const segment of reasoningSegmentSnapshots) {
+          const existing = task.events.find((event) => event.id === segment.id)
+          if (existing) Object.assign(existing, segment)
+          else task.events.push(segment)
+        }
         task.progress = Math.max(45, Math.min(88, 45 + Math.floor(outputSnapshot.length / 120)))
         task.statusMessage = '正在生成回复'
         task.updatedAt = new Date().toISOString()
@@ -330,15 +358,76 @@ export async function executeWritingTask(taskId, {
       }, 500)
       checkpointTimer.unref?.()
     }
-    const flushReasoningSummary = (delta) => {
-      reasoningSummary += delta
+    const ensureReasoningSegment = (messageId) => {
+      const key = String(messageId || `assistant-${reasoningSegmentOrdinal + 1}`)
+      const existing = reasoningSegments.get(key)
+      if (existing) return existing
+      reasoningSegmentOrdinal += 1
+      const timestamp = new Date().toISOString()
+      const segment = {
+        id: `${prepared.turnId}:reasoning:${prepared.interactionAttempt}:${reasoningSegmentOrdinal}`,
+        type: 'reasoning',
+        label: '模型思考',
+        status: 'running',
+        meta: {
+          modelReasoning: true,
+          reasoningSegment: true,
+          messageId: key,
+          interactionAttempt: prepared.interactionAttempt,
+          summary: '',
+        },
+        startedAt: timestamp,
+      }
+      reasoningSegments.set(key, segment)
       publishTaskStreamEvent(taskId, {
-        type: 'reasoning_delta',
-        delta,
+        type: 'reasoning_event',
+        phase: 'start',
+        itemId: segment.id,
+        messageId: key,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
+      })
+      return segment
+    }
+    const flushReasoningSummary = (delta, context = {}) => {
+      const segment = ensureReasoningSegment(context.messageId)
+      const previousLength = segment.meta.summary.length
+      segment.meta.summary = `${segment.meta.summary}${delta}`.slice(0, reasoningSegmentMaxChars)
+      const acceptedDelta = segment.meta.summary.slice(previousLength)
+      reasoningSummary = `${reasoningSummary}${acceptedDelta}`.slice(0, reasoningSegmentMaxChars)
+      if (acceptedDelta) {
+        publishTaskStreamEvent(taskId, {
+          type: 'reasoning_event',
+          phase: 'delta',
+          itemId: segment.id,
+          messageId: segment.meta.messageId,
+          delta: acceptedDelta,
+          interactionAttempt: prepared.interactionAttempt,
+          executionGeneration: prepared.executionGeneration,
+        })
+      }
+      scheduleCheckpoint()
+    }
+    const completeReasoningSegment = async (event) => {
+      const segment = reasoningSegments.get(String(event?.messageId || ''))
+      if (!segment || segment.status !== 'running') return
+      const timestamp = new Date().toISOString()
+      segment.status = event?.stopReason === 'aborted' ? 'interrupted' : event?.stopReason === 'error' ? 'failed' : 'completed'
+      segment.completedAt = timestamp
+      segment.meta.stopReason = event?.stopReason || 'stop'
+      publishTaskStreamEvent(taskId, {
+        type: 'reasoning_event',
+        phase: 'end',
+        itemId: segment.id,
+        messageId: segment.meta.messageId,
+        status: segment.status,
+        summary: segment.meta.summary,
+        completedAt: timestamp,
         interactionAttempt: prepared.interactionAttempt,
         executionGeneration: prepared.executionGeneration,
       })
       scheduleCheckpoint()
+      await flushCheckpoint()
     }
     let delegates = prepared.subagents
     const reusableDelegates = delegates.length > 0
@@ -395,12 +484,21 @@ export async function executeWritingTask(taskId, {
         executionGeneration: prepared.executionGeneration,
       })
       scheduleCheckpoint()
-    }, flushReasoningSummary, (event) => recordStoryToolEvent(
-      taskId,
-      executionId,
-      prepared.executionGeneration,
-      event,
-    ))
+    }, flushReasoningSummary, async (event) => {
+      if (event?.phase === 'start') {
+        for (const segment of reasoningSegments.values()) {
+          if (segment.status === 'running') {
+            await completeReasoningSegment({ messageId: segment.meta.messageId, stopReason: 'toolUse' })
+          }
+        }
+      }
+      await recordStoryToolEvent(
+        taskId,
+        executionId,
+        prepared.executionGeneration,
+        event,
+      )
+    }, completeReasoningSegment)
     await flushCheckpoint()
     const privateContinuation = responseContinuation(result)
     const resultContinuationMode = continuationMode(result, privateContinuation)
@@ -546,7 +644,9 @@ export async function executeWritingTask(taskId, {
         reason = 'worker'
         return
       }
-      const classified = classifyTaskError(error, controller.signal.aborted || task.cancelRequested)
+      // Only an explicit task cancellation is a user cancel. AbortSignal.timeout()
+      // also aborts the combined signal, but must remain a retryable timeout.
+      const classified = classifyTaskError(error, task.cancelRequested === true)
       const eventStatus = classified.errorCode === 'cancelled' ? 'cancelled' : 'failed'
       finishRunningEvent(task, eventStatus)
       appendEvent(task, 'lifecycle', classified.message, eventStatus, { errorCode: classified.errorCode })

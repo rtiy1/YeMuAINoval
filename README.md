@@ -210,6 +210,7 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 | `AI_TASK_QUEUE_ENABLED` | — | 配置 Redis 时是否启用独立任务队列；默认 `true`，启用时还需要 PostgreSQL 和 worker |
 | `AI_TASK_CLAIM_IDLE_MS` | — | worker 接管失联任务前的等待时间，最小且默认 180000 ms |
 | `AI_TASK_CLAIM_INTERVAL_MS` | — | worker 扫描失联任务的间隔，最小 10000 ms、默认 30000 ms |
+| `AI_TASK_TIMEOUT_MS` | `900000` | 单个 Story Agent 任务的总时限；允许 60000–3600000 ms，超时会标记为可重试失败，不会伪装成用户取消 |
 | `ALLOW_SHARED_MODEL_KEY` | — | 是否允许用户回退服务端模型 Key；BYOK 部署保持 `false` |
 | `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed`；生产默认 `owner-only` |
 | `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |

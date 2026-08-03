@@ -149,6 +149,51 @@ function deepSeekToolSseResponse(id: string, name: string, args: Record<string, 
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function deepSeekReasoningToolSseResponse(
+	reasoning: string,
+	id: string,
+	name: string,
+	args: Record<string, unknown>,
+): Response {
+	const events = [
+		{
+			id: "chatcmpl-yemu-reasoning-tool-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{ index: 0, delta: { role: "assistant", reasoning_content: reasoning }, finish_reason: null }],
+			usage: null,
+		},
+		{
+			id: "chatcmpl-yemu-reasoning-tool-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{
+				index: 0,
+				delta: {
+					tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }],
+				},
+				finish_reason: null,
+			}],
+			usage: null,
+		},
+		{
+			id: "chatcmpl-yemu-reasoning-tool-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model: "deepseek-v4-flash",
+			choices: [{ index: 0, delta: { content: "" }, finish_reason: "tool_calls" }],
+			usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+		},
+		"[DONE]",
+	];
+	const body = `${events
+		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
+		.join("\n\n")}\n\n`;
+	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 function providerErrorResponse(status: number, message: string): Response {
 	return new Response(
 		JSON.stringify({ error: { message, type: "server_error" } }),
@@ -212,6 +257,9 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 		expect(capturedPayload?.reasoning_effort).toBe("high");
 		const messages = capturedPayload?.messages;
 		expect(Array.isArray(messages) ? messages[0]?.role : null).toBe("system");
+		expect(JSON.stringify(Array.isArray(messages) ? messages[0] : null)).toContain(
+			"隐藏思考只用于确定“下一次动作”",
+		);
 		const tools = Array.isArray(capturedPayload?.tools) ? capturedPayload.tools : [];
 		const toolNames = tools.map(tool => tool?.function?.name ?? tool?.name);
 		expect(toolNames).toContain("list_story_files");
@@ -291,6 +339,58 @@ test("reasoning-only length stops automatically continue to a visible answer", a
 		expect(payloads[1]?.reasoning_effort).toBe("high");
 		const recoveryMessages = payloads[1]?.messages;
 		expect(JSON.stringify(recoveryMessages)).toContain("系统续跑");
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("assistant message boundaries preserve reasoning-tool-reasoning order", async () => {
+	const responses = [
+		deepSeekReasoningToolSseResponse("先读取现有设定。", "call-read", "read_story_file", { path: "设定/世界.md" }),
+		deepSeekReasoningToolSseResponse("读取完成，再提交结果。", "call-submit", "submit_story_result", {
+			status: "completed",
+			output: "大纲已完成。",
+		}),
+		deepSeekSseResponse("完成"),
+	];
+	const timeline: string[] = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("完成"),
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		await runStoryAgent({
+			message: "读取设定后完成大纲",
+			skill: "story-long-write",
+			payload: { project_id: "project-1", tool_policy: { mutateStoryData: "propose" } },
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		}, {
+			readStoryFile: async () => ({ path: "设定/世界.md", content: "既有世界设定" }),
+			onAssistantMessageEvent: (event) => timeline.push(`${event.phase}:${event.messageId}`),
+			onReasoningDelta: (delta, context) => timeline.push(`reasoning:${context.messageId}:${delta}`),
+			onToolEvent: (event) => timeline.push(`tool:${event.phase}:${event.toolName}`),
+		});
+		expect(timeline).toEqual([
+			"start:assistant-1",
+			"reasoning:assistant-1:先读取现有设定。",
+			"end:assistant-1",
+			"tool:start:read_story_file",
+			"tool:end:read_story_file",
+			"start:assistant-2",
+			"reasoning:assistant-2:读取完成，再提交结果。",
+			"end:assistant-2",
+			"tool:start:submit_story_result",
+			"tool:end:submit_story_result",
+			"start:assistant-3",
+			"end:assistant-3",
+		]);
 	} finally {
 		fetchSpy.mockRestore();
 	}

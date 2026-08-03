@@ -532,8 +532,25 @@ export function agentTurnItems(turn, task) {
       completedAt: subagent.completedAt,
     })
   }
+  const segmentedReasoningAttempts = new Set(
+    (task?.events || [])
+      .filter((event) => event?.type === 'reasoning' && event?.meta?.reasoningSegment === true)
+      .map((event) => Math.max(1, positiveInteger(event?.meta?.interactionAttempt) || 1)),
+  )
   for (const event of task?.events || []) {
     if (event.type === 'result') continue
+    if (event.type === 'reasoning') {
+      items.push({
+        id: event.id,
+        type: 'reasoning',
+        status: itemStatus(event.status),
+        summary: [{ type: 'summary_text', text: String(event.meta?.summary || '') }],
+        meta: event.meta || {},
+        createdAt: event.startedAt || task.createdAt || null,
+        completedAt: event.completedAt || null,
+      })
+      continue
+    }
     const dynamicTool = event.type === 'tool'
     items.push({
       id: event.id,
@@ -550,6 +567,7 @@ export function agentTurnItems(turn, task) {
     })
   }
   for (const reasoning of taskReasoningHistory(task)) {
+    if (segmentedReasoningAttempts.has(reasoning.interactionAttempt)) continue
     items.push({
       id: reasoning.id,
       type: 'reasoning',
@@ -585,8 +603,8 @@ export function agentTurnItems(turn, task) {
     }
   }
   const reasoningSummary = String(task?.reasoningSummary || '').trim()
-  if (reasoningSummary) {
-    const interactionAttempt = Math.max(1, positiveInteger(task?.interactionAttempt) || 1)
+  const interactionAttempt = Math.max(1, positiveInteger(task?.interactionAttempt) || 1)
+  if (reasoningSummary && !segmentedReasoningAttempts.has(interactionAttempt)) {
     items.push({
       id: reasoningItemId(task, turn.id, interactionAttempt),
       type: 'reasoning',

@@ -2410,6 +2410,9 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
   let lastReasoningLength = 0
   let reasoningItemStarted = false
   let reasoningItemCompleted = false
+  let segmentedReasoning = (initialTask.events || []).some((event) => event?.type === 'reasoning'
+    && event?.meta?.reasoningSegment === true
+    && Math.max(1, Number(event?.meta?.interactionAttempt) || 1) === Math.max(1, Number(initialTask.interactionAttempt) || 1))
   let lastInteractionAttempt = null
   let lastExecutionGeneration = Math.max(1, Number(initialTask.executionGeneration) || 1)
   let lastSteerRevision = null
@@ -2447,7 +2450,58 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       itemVersions.set(item.id, `${item.status}:${item.completedAt || ''}:${JSON.stringify(item.meta)}`)
       return true
     }
+    if (event.type === 'reasoning_event' && event.itemId) {
+      segmentedReasoning = true
+      const baseItem = {
+        id: event.itemId,
+        type: 'reasoning',
+        status: event.status || (event.phase === 'end' ? 'completed' : 'inProgress'),
+        summary: event.phase === 'end' ? [{ type: 'summary_text', text: event.summary || '' }] : [],
+        meta: {
+          modelReasoning: true,
+          reasoningSegment: true,
+          messageId: event.messageId || null,
+          interactionAttempt,
+        },
+        ...(event.completedAt ? { completedAt: event.completedAt } : {}),
+      }
+      if (event.phase === 'start') {
+        res.write(`event: item/started\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: baseItem,
+        })}\n\n`)
+        res.write(`event: item/reasoning/summaryPartAdded\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          itemId: event.itemId,
+          summaryIndex: 0,
+        })}\n\n`)
+        return true
+      }
+      if (event.phase === 'delta' && typeof event.delta === 'string' && event.delta) {
+        res.write(`event: item/reasoning/summaryTextDelta\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          itemId: event.itemId,
+          summaryIndex: 0,
+          delta: event.delta,
+        })}\n\n`)
+        return true
+      }
+      if (event.phase === 'end') {
+        res.write(`event: item/completed\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: baseItem,
+        })}\n\n`)
+        itemVersions.set(baseItem.id, `${baseItem.status}:${baseItem.completedAt || ''}:${JSON.stringify(baseItem.meta)}`)
+        return true
+      }
+      return true
+    }
     if (event.type === 'reasoning_delta' && typeof event.delta === 'string' && event.delta) {
+      if (segmentedReasoning) return true
       const room = Math.max(0, 12_000 - lastReasoningLength)
       const delta = event.delta.slice(0, room)
       if (!delta) return true
@@ -2601,6 +2655,9 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         lastReasoningLength = 0
         reasoningItemStarted = false
         reasoningItemCompleted = false
+        segmentedReasoning = (task.events || []).some((event) => event?.type === 'reasoning'
+          && event?.meta?.reasoningSegment === true
+          && Math.max(1, Number(event?.meta?.interactionAttempt) || 1) === interactionAttempt)
         lastInteractionAttempt = interactionAttempt
         res.write(`event: turn/steered\ndata: ${JSON.stringify({
           threadId: thread.id,
@@ -2620,9 +2677,12 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       }
       const partialOutput = String(publicTurn.task?.partialOutput || '')
       const reasoningSummary = String(publicTurn.task?.reasoningSummary || '')
+      const hasSegmentedReasoning = segmentedReasoning || publicTurn.items.some((item) => item?.type === 'reasoning'
+        && item?.meta?.reasoningSegment === true
+        && Math.max(1, Number(item?.meta?.interactionAttempt) || 1) === interactionAttempt)
       const currentReasoningItemId = publicTurn.task?.reasoningItemId || reasoningItemId(task, turn.id)
       const currentAgentItemId = `${turn.id}:agent:${interactionAttempt}`
-      if (reasoningSummary.length > lastReasoningLength) {
+      if (!hasSegmentedReasoning && reasoningSummary.length > lastReasoningLength) {
         const delta = reasoningSummary.slice(lastReasoningLength)
         lastReasoningLength = reasoningSummary.length
         if (!reasoningItemStarted) {
@@ -2653,7 +2713,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           delta,
         })}\n\n`)
       }
-      if (reasoningItemStarted && !reasoningItemCompleted && !['queued', 'running'].includes(task.status)) {
+      if (!hasSegmentedReasoning && reasoningItemStarted && !reasoningItemCompleted && !['queued', 'running'].includes(task.status)) {
         reasoningItemCompleted = true
         res.write(`event: item/completed\ndata: ${JSON.stringify({
           threadId: thread.id,

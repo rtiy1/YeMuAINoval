@@ -30,6 +30,7 @@ import {
   AgentDiffReview,
 } from './agent-interactions.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
+import { formatThinkingForDisplay } from '../packages/coding-agent/src/utils/thinking-display.ts'
 import { Transcript as YemuTranscript } from '../packages/collab-web/src/components/transcript/Transcript.tsx'
 
 const turnStatusLabels = {
@@ -90,7 +91,9 @@ function tuiAssistantMessage(run) {
   const content = []
   for (const item of view.items || []) {
     if (item.type === 'reasoning') {
-      const thinking = agentReasoningText(item)
+      // Keep the browser transcript aligned with the native TUI: remove provider
+      // comment sentinels and collapse fenced implementation detail to prose.
+      const thinking = formatThinkingForDisplay(agentReasoningText(item), true)
       if (thinking) content.push({ type: 'thinking', thinking })
       continue
     }

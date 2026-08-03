@@ -256,12 +256,23 @@ export interface StoryAgentResponse {
 
 export interface StoryAgentCallbacks {
 	onDelta?: (delta: string) => void | Promise<void>;
-	onReasoningDelta?: (delta: string) => void | Promise<void>;
+	onReasoningDelta?: (delta: string, context: StoryReasoningContext) => void | Promise<void>;
+	onAssistantMessageEvent?: (event: StoryAssistantMessageEvent) => void | Promise<void>;
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	searchWeb?: (params: SearchQueryParams, signal?: AbortSignal) => Promise<StoryWebSearchResult>;
 	signal?: AbortSignal;
+}
+
+export interface StoryReasoningContext {
+	messageId: string;
+}
+
+export interface StoryAssistantMessageEvent {
+	phase: "start" | "end";
+	messageId: string;
+	stopReason?: AssistantMessage["stopReason"];
 }
 
 export interface StoryWebSearchResult {
@@ -981,14 +992,14 @@ function aggregateUsage(messages: readonly unknown[]): StoryAgentUsage {
 	};
 }
 
-function enqueueCallback<T>(
+function enqueueCallback<Args extends unknown[]>(
 	previous: Promise<void>,
-	callback: ((value: T) => void | Promise<void>) | undefined,
-	value: T,
+	callback: ((...args: Args) => void | Promise<void>) | undefined,
+	...args: Args
 ): Promise<void> {
 	if (!callback) return previous;
 	return previous.then(async () => {
-		await callback(value);
+		await callback(...args);
 	});
 }
 
@@ -1158,15 +1169,42 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		deadline: request.callbacks?.signal ? undefined : Date.now() + 300_000,
 	});
 	let callbackQueue = Promise.resolve();
+	let assistantMessageOrdinal = 0;
+	let activeAssistantMessageId: string | undefined;
 	const unsubscribe = agent.subscribe((event: AgentEvent) => {
+		if (event.type === "message_start" && event.message.role === "assistant") {
+			assistantMessageOrdinal += 1;
+			activeAssistantMessageId = `assistant-${assistantMessageOrdinal}`;
+			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onAssistantMessageEvent, {
+				phase: "start",
+				messageId: activeAssistantMessageId,
+			});
+			return;
+		}
 		if (event.type === "message_update") {
 			const update = event.assistantMessageEvent;
 			if (update.type === "text_delta") {
 				callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onDelta, update.delta);
 			}
 			if (update.type === "thinking_delta") {
-				callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onReasoningDelta, update.delta);
+				const messageId = activeAssistantMessageId ?? `assistant-${Math.max(1, assistantMessageOrdinal)}`;
+				callbackQueue = enqueueCallback(
+					callbackQueue,
+					request.callbacks?.onReasoningDelta,
+					update.delta,
+					{ messageId },
+				);
 			}
+			return;
+		}
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const messageId = activeAssistantMessageId ?? `assistant-${Math.max(1, assistantMessageOrdinal)}`;
+			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onAssistantMessageEvent, {
+				phase: "end",
+				messageId,
+				stopReason: event.message.stopReason,
+			});
+			activeAssistantMessageId = undefined;
 			return;
 		}
 		if (event.type === "tool_execution_start") {
@@ -1320,6 +1358,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			usage: aggregateUsage(messages),
 		};
 	} finally {
+		await callbackQueue.catch(() => undefined);
 		request.callbacks?.signal?.removeEventListener("abort", abort);
 		unsubscribe();
 		agent.abort();

@@ -59,7 +59,15 @@ async function preparedStoryAgentBody(user, input) {
   }
 }
 
-export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout(300_000), onDelta = null, onReasoningDelta = null, onToolEvent = null) {
+export async function invokeStoryAgent(
+  user,
+  input,
+  signal = AbortSignal.timeout(300_000),
+  onDelta = null,
+  onReasoningDelta = null,
+  onToolEvent = null,
+  onAssistantMessageEvent = null,
+) {
   const body = await preparedStoryAgentBody(user, input)
   const projectId = body.payload?.project_id || body.payload?.projectId || null
   const canPersistStoryFiles = body.payload?.tool_policy?.mutateStoryData === 'allow'
@@ -68,6 +76,7 @@ export async function invokeStoryAgent(user, input, signal = AbortSignal.timeout
     onDelta: onDelta || undefined,
     onReasoningDelta: onReasoningDelta || undefined,
     onToolEvent: onToolEvent || undefined,
+    onAssistantMessageEvent: onAssistantMessageEvent || undefined,
     readStoryFile: projectId
       ? async (path) => readStoryDocument(user.id, projectId, path)
       : undefined,

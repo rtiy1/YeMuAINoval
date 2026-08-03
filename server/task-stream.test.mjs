@@ -16,3 +16,19 @@ test('task stream delivers model deltas directly to local SSE subscribers', () =
     ['tool_event', undefined],
   ])
 })
+
+test('task stream keeps segmented reasoning lifecycle events in order', () => {
+  const received = []
+  const unsubscribe = subscribeTaskStream('task-reasoning-segments', (event) => received.push(event))
+  publishTaskStreamEvent('task-reasoning-segments', { type: 'reasoning_event', phase: 'start', itemId: 'reasoning-1' })
+  publishTaskStreamEvent('task-reasoning-segments', { type: 'reasoning_event', phase: 'delta', itemId: 'reasoning-1', delta: '先读取文件' })
+  publishTaskStreamEvent('task-reasoning-segments', { type: 'reasoning_event', phase: 'end', itemId: 'reasoning-1' })
+  publishTaskStreamEvent('task-reasoning-segments', { type: 'tool_event', phase: 'start', toolName: 'read_story_file' })
+  unsubscribe()
+  assert.deepEqual(received.map((event) => `${event.type}:${event.phase || ''}`), [
+    'reasoning_event:start',
+    'reasoning_event:delta',
+    'reasoning_event:end',
+    'tool_event:start',
+  ])
+})

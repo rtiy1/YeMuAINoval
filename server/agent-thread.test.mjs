@@ -266,6 +266,64 @@ test('turn items expose steer input, bounded subagents, and attempt-aware output
   assert.deepEqual(taskSubagents(task).map((item) => item.role), ['continuity_guard', 'scene_planner'])
 })
 
+test('turn items preserve TUI reasoning-tool-reasoning order', () => {
+  const items = agentTurnItems(
+    { id: 'turn-segments', taskId: 'task-segments', message: '先读文件再写大纲' },
+    {
+      id: 'task-segments',
+      turnId: 'turn-segments',
+      status: 'completed',
+      interactionAttempt: 1,
+      events: [
+        {
+          id: 'turn-segments:reasoning:1:1',
+          type: 'reasoning',
+          status: 'completed',
+          meta: { modelReasoning: true, reasoningSegment: true, interactionAttempt: 1, summary: '先定位已有设定。' },
+          startedAt: '2026-01-01T00:00:01.000Z',
+          completedAt: '2026-01-01T00:00:02.000Z',
+        },
+        {
+          id: 'turn-segments:tool:read-1',
+          type: 'tool',
+          label: '读取作品文件 · 设定/世界.md',
+          status: 'completed',
+          meta: { toolName: 'read_story_file', arguments: { path: '设定/世界.md' } },
+          startedAt: '2026-01-01T00:00:02.000Z',
+          completedAt: '2026-01-01T00:00:03.000Z',
+        },
+        {
+          id: 'turn-segments:reasoning:1:2',
+          type: 'reasoning',
+          status: 'completed',
+          meta: { modelReasoning: true, reasoningSegment: true, interactionAttempt: 1, summary: '根据读取结果开始落盘。' },
+          startedAt: '2026-01-01T00:00:04.000Z',
+          completedAt: '2026-01-01T00:00:05.000Z',
+        },
+      ],
+      reasoningSummary: '旧的聚合思考不应重复显示。',
+      reasoningHistory: [{
+        id: 'turn-segments:reasoning:legacy',
+        interactionAttempt: 1,
+        summary: '旧的聚合思考不应重复显示。',
+      }],
+      result: { result: { output: '大纲已完成。' } },
+      updatedAt: '2026-01-01T00:00:06.000Z',
+    },
+  )
+  assert.deepEqual(items.map((item) => item.type), [
+    'userMessage',
+    'reasoning',
+    'dynamicToolCall',
+    'reasoning',
+    'agentMessage',
+  ])
+  assert.deepEqual(
+    items.filter((item) => item.type === 'reasoning').map((item) => item.summary[0].text),
+    ['先定位已有设定。', '根据读取结果开始落盘。'],
+  )
+})
+
 test('normalization keeps private steer idempotency without exposing it', () => {
   const db = {
     agentThreads: [],

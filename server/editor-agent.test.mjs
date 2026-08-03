@@ -366,6 +366,21 @@ test('editor agent applies Item SSE deltas and reconciles transient output', () 
     },
   })
   assert.equal(buildAgentTurnView({ status: 'completed', items: completed }).answerText, '最终计划')
+
+  let reasoning = applyAgentItemStreamEvent([], 'item/started', {
+    item: { id: 'reasoning-1', type: 'reasoning', status: 'inProgress', summary: [] },
+  })
+  reasoning = applyAgentItemStreamEvent(reasoning, 'item/reasoning/summaryTextDelta', {
+    itemId: 'reasoning-1',
+    delta: '先读取文件，再执行写入。',
+  })
+  const nonRegressing = reconcileAgentTurnItems(reasoning, [{
+    id: 'reasoning-1',
+    type: 'reasoning',
+    status: 'inProgress',
+    summary: [{ type: 'summary_text', text: '先读取文件' }],
+  }])
+  assert.equal(nonRegressing[0].summary[0].text, '先读取文件，再执行写入。')
 })
 
 test('editor agent compacts repeated execution cycles and drops queue noise', () => {
