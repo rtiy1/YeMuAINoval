@@ -3529,9 +3529,15 @@ details[open] > summary .agent-trace-chevron {
   }
 
   .editor-page .agent-rail.collapsed {
-    position: static;
-    width: auto;
-    display: none;
+    position: absolute;
+    inset: 8px 8px auto auto;
+    width: 42px;
+    height: auto;
+    min-height: 0;
+    display: flex;
+    padding: 0;
+    border: 1px solid var(--ide-line);
+    box-shadow: 0 6px 18px rgba(35, 39, 43, .12);
   }
 }
 
@@ -7815,6 +7821,291 @@ html[data-theme='dark'] :is(
   .assistant-chat-bubble
 ) :is(p, small, span) {
   border-color: var(--ide-line);
+}
+
+/* The assistant owns denser UI than the editor, so map every remaining
+   light-only TUI surface back onto the shared night palette. */
+html[data-theme='dark'] .tui-agent-shell {
+  --tui-faint: #747d87;
+  --tui-cyan: #76aabd;
+  --tui-warm: #d6a06f;
+  --tui-danger: #e27d77;
+  border-left-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .tui-agent-session,
+  .agent-history-toolbar,
+  .agent-history-search,
+  .agent-diff-hunk-heading,
+  .agent-diff > footer,
+  .agent-suggestion-footer,
+  .tui-agent-statusline
+) {
+  background: var(--tui-panel);
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-compaction-note,
+  .agent-history-item:hover,
+  .agent-history-item.current,
+  .agent-history-actions button:hover:not(:disabled),
+  .agent-history-actions button.active,
+  .agent-attachment-chip,
+  .agent-composer-controls .agent-mode-trigger:hover,
+  .agent-composer-controls .agent-mode-trigger.open,
+  .agent-composer-controls .agent-tool-button:hover,
+  .agent-composer-controls .agent-tool-button.active,
+  .agent-composer-controls .agent-control-trigger:hover:not(:disabled),
+  .agent-composer-controls .agent-control-trigger.open,
+  .agent-control-option-mark,
+  .agent-markdown blockquote,
+  .agent-markdown th,
+  .agent-mutation-applied
+) {
+  background: var(--tui-raised);
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-choice-card,
+  .agent-diff,
+  .assistant-form.agent-composer,
+  .agent-composer-suggestions,
+  .agent-control-popover,
+  .agent-choice-custom input
+) {
+  color: var(--tui-text);
+  background: var(--tui-bg);
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-transcript-output > header > strong,
+  .agent-markdown,
+  .agent-markdown h1,
+  .agent-markdown h2,
+  .agent-markdown h3,
+  .agent-markdown h4,
+  .agent-finding-list p,
+  .agent-choice-card > header span,
+  .agent-choice-card > p,
+  .agent-diff > header > div,
+  .agent-diff > header strong,
+  .assistant-form.agent-composer .tui-composer-input textarea,
+  .agent-history-toolbar strong,
+  .agent-history-search input,
+  .agent-history-item-main > button > span
+) {
+  color: var(--tui-text);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .tui-agent-location strong,
+  .tui-agent-state,
+  .agent-transcript-tool,
+  .agent-transcript-input,
+  .agent-transcript-reasoning > summary,
+  .agent-transcript-plan > summary,
+  .agent-transcript-reasoning > .agent-markdown,
+  .agent-transcript-plan > ol,
+  .agent-transcript-plan li,
+  .agent-choice-options button,
+  .agent-choice-options button .agent-choice-copy small,
+  .agent-diff-hunk-heading > span,
+  .agent-context-line,
+  .agent-composer-controls .agent-mode-trigger,
+  .agent-composer-controls .agent-tool-button,
+  .agent-composer-controls .agent-control-trigger,
+  .agent-model-glyph,
+  .agent-suggestion-list > button,
+  .agent-control-option,
+  .agent-suggestion-list > button small,
+  .agent-suggestion-list > button em,
+  .agent-suggestion-footer,
+  .tui-agent-statusline,
+  .tui-agent-statusline .agent-token-usage,
+  .tui-agent-statusline .agent-token-usage span:first-child,
+  .tui-context-status span,
+  .tui-status-model,
+  .agent-history-toolbar small,
+  .agent-history-item-main > button > small,
+  .agent-history-meta,
+  .agent-history-empty,
+  .agent-history-actions button
+) {
+  color: var(--tui-muted);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .tui-trace-branch,
+  .agent-trace-chevron,
+  .agent-transcript-plan li > span:first-child,
+  .agent-diff-hunk-heading > small,
+  .agent-diff > footer span,
+  .agent-suggestion-section-label,
+  .agent-control-popover-heading small,
+  .agent-control-option-copy small
+) {
+  color: var(--tui-faint);
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .assistant-form.agent-composer textarea::placeholder {
+  color: var(--tui-faint);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-panel-heading .icon-button,
+  .agent-markdown blockquote,
+  .agent-answer-actions button,
+  .agent-attachment-chip,
+  .agent-mutation-preview header small,
+  .agent-diff-hunk-heading button
+) {
+  color: var(--tui-muted);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-compaction-note,
+  .agent-transcript-tool > svg,
+  .agent-transcript-input > svg,
+  .agent-transcript-tool.running,
+  .agent-transcript-plan li.completed,
+  .agent-transcript-plan li.inProgress,
+  .agent-runtime-checks,
+  .agent-mutation-applied
+) {
+  color: color-mix(in srgb, var(--ide-green) 74%, var(--tui-text));
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-markdown th,
+  .agent-composer-controls .agent-mode-trigger:hover,
+  .agent-composer-controls .agent-mode-trigger.open,
+  .agent-composer-controls .agent-tool-button:hover,
+  .agent-composer-controls .agent-control-trigger:hover:not(:disabled),
+  .agent-composer-controls .agent-control-trigger.open
+) {
+  color: var(--tui-text);
+}
+
+html[data-theme='dark'] .tui-agent-shell :is(
+  .agent-choice-options button:hover:not(:disabled),
+  .agent-choice-options button.selected,
+  .agent-suggestion-list > button.active,
+  .agent-suggestion-list > button:hover,
+  .agent-control-option:hover,
+  .agent-control-option:focus-visible,
+  .agent-control-option.selected
+) {
+  color: color-mix(in srgb, var(--tui-accent) 78%, var(--tui-text));
+  background: color-mix(in srgb, var(--tui-accent) 14%, var(--tui-bg));
+  border-color: color-mix(in srgb, var(--tui-accent) 42%, var(--tui-line));
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-markdown code {
+  color: #a9d2c2;
+  background: var(--tui-raised);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-conversation {
+  scrollbar-color: var(--tui-line) transparent;
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-conversation::-webkit-scrollbar-thumb {
+  background: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .tui-agent-sigil {
+  background: color-mix(in srgb, var(--tui-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tui-accent) 34%, var(--tui-line));
+}
+
+html[data-theme='dark'] .tui-agent-shell .tui-agent-wordmark {
+  border-color: color-mix(in srgb, var(--tui-accent) 44%, var(--tui-line));
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-transcript-reasoning > .agent-markdown,
+html[data-theme='dark'] .tui-agent-shell .agent-transcript-plan > ol,
+html[data-theme='dark'] .tui-agent-shell .agent-choice-options button strong {
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-control-divider {
+  background: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-context-track {
+  stroke: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-mutation-counts span {
+  color: var(--tui-warm);
+  background: color-mix(in srgb, var(--tui-warm) 16%, var(--tui-bg));
+}
+
+html[data-theme='dark'] .tui-agent-shell .assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tui-accent) 78%, #000);
+}
+
+html[data-theme='dark'] .tui-agent-shell .assistant-form.agent-composer .assistant-send:disabled {
+  color: var(--tui-faint);
+  background: var(--tui-raised);
+}
+
+html[data-theme='dark'] .tui-agent-shell .assistant-form.agent-composer.waiting-input textarea:disabled {
+  color: var(--tui-faint);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-suggestion-footer kbd {
+  color: var(--tui-muted);
+  background: var(--tui-raised);
+  border-color: var(--tui-line);
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-history-item.current {
+  border-color: color-mix(in srgb, var(--tui-accent) 46%, var(--tui-line));
+}
+
+html[data-theme='dark'] .tui-agent-shell .agent-mutation-preview,
+html[data-theme='dark'] .tui-agent-shell .agent-composer-blocked,
+html[data-theme='dark'] .tui-agent-shell .assistant-form.agent-composer.waiting-input {
+  color: var(--tui-warm);
+  background: color-mix(in srgb, var(--tui-warm) 12%, var(--tui-bg));
+  border-color: color-mix(in srgb, var(--tui-warm) 38%, var(--tui-line));
+}
+
+html[data-theme='dark'] .tui-agent-shell .diff-line.removed {
+  color: #efaaa5;
+  background: color-mix(in srgb, var(--tui-danger) 14%, var(--tui-bg));
+}
+
+html[data-theme='dark'] .tui-agent-shell .diff-line.added {
+  color: #9bd0b8;
+  background: color-mix(in srgb, var(--ide-green) 14%, var(--tui-bg));
+}
+
+html[data-theme='dark'] .tui-agent-shell.collapsed .assistant-reopen {
+  color: var(--tui-accent);
+  background: var(--tui-raised);
+  border-color: var(--tui-line);
+}
+
+@media (max-width: 1050px) and (min-width: 761px) {
+  html[data-theme='dark'] .editor-page .tui-agent-shell.collapsed {
+    border-color: var(--tui-line);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+  }
+}
+
+@media (max-width: 760px) {
+  html[data-theme='dark'] .editor-page .tui-agent-shell.collapsed .assistant-reopen {
+    color: #111613;
+    background: var(--tui-accent);
+    border-color: rgba(255, 255, 255, .2);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

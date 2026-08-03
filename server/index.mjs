@@ -29,7 +29,12 @@ import { refreshCookieOptions } from './auth-cookie.mjs'
 import { emailConfig, sendPasswordResetEmail, sendRegistrationVerificationEmail } from './email.mjs'
 import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 import * as chatMemory from './chat-memory.mjs'
-import { invokeStoryAgent, listStoryAgentSkills, storyAgentRuntimeInfo } from './story-agent.mjs'
+import {
+  invokeStoryAgent,
+  listStoryAgentSkills,
+  storyAgentModelCapabilities,
+  storyAgentRuntimeInfo,
+} from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './task-stream.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
@@ -1079,7 +1084,7 @@ function sanitizeSettings(input, existing) {
   }
   if (input.reasoningEffort !== undefined) {
     const effort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim().toLowerCase() : ''
-    const allowed = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    const allowed = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     if (allowed.has(effort)) settings.reasoningEffort = effort
     else delete settings.reasoningEffort
   }
@@ -1138,18 +1143,27 @@ function sanitizeSettings(input, existing) {
 }
 
 function publicSettings(settings) {
-  if (!settings) return { provider: 'openai', apiBaseUrl: '', apiKeyMask: null, model: '', reasoningEffort: '', thinkingBudgets: null, temperature: null, maxTokens: null, contextWindow: null, compaction: normalizeThreadCompactionSettings(null) }
+  if (!settings) {
+    const defaults = { provider: 'openai', apiBaseUrl: '', model: '', reasoningEffort: '' }
+    return { ...defaults, apiKeyMask: null, thinkingBudgets: null, temperature: null, maxTokens: null, contextWindow: null, compaction: normalizeThreadCompactionSettings(null), modelCapabilities: storyAgentModelCapabilities(defaults) }
+  }
+  const modelCapabilities = storyAgentModelCapabilities(settings)
+  const configuredEffort = settings.reasoningEffort || ''
+  const effectiveReasoningEffort = configuredEffort && configuredEffort !== 'off'
+    ? modelCapabilities.effectiveEffort || ''
+    : configuredEffort
   return {
     provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
     apiBaseUrl: settings.apiBaseUrl || '',
     apiKeyMask: maskKey(decryptSecret(settings.apiKeyEnc)),
     model: settings.model || '',
-    reasoningEffort: settings.reasoningEffort || '',
+    reasoningEffort: effectiveReasoningEffort,
     thinkingBudgets: settings.thinkingBudgets ?? null,
     temperature: settings.temperature ?? null,
     maxTokens: settings.maxTokens ?? null,
     contextWindow: settings.contextWindow ?? null,
     compaction: normalizeThreadCompactionSettings(settings.compaction),
+    modelCapabilities,
   }
 }
 
@@ -1810,7 +1824,16 @@ app.post('/api/ai/models', async (req, res, next) => {
       const data = await response.json().catch(() => null)
       models = Array.isArray(data?.data) ? data.data.map((item) => item.id).filter(Boolean).sort() : []
     }
-    res.json({ models, connected: true })
+    const modelCapabilities = Object.fromEntries(models.map((model) => [
+      model,
+      storyAgentModelCapabilities({
+        ...s,
+        provider,
+        apiBaseUrl: requestedBaseUrl || '',
+        model,
+      }),
+    ]))
+    res.json({ models, modelCapabilities, connected: true })
   } catch (error) {
     if (isNetworkError(error)) {
       next(Object.assign(new Error('模型服务暂不可用'), { status: 503 }))

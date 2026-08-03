@@ -4,12 +4,53 @@ import {
 	STORY_AGENT_RUNTIME_INFO,
 	listStorySkills,
 	runStoryAgent,
+	storyAgentModelCapabilities,
 } from "./agent-runtime";
 
 test("Web prompt token estimation stays lightweight and handles CJK text", () => {
 	expect(estimateWebTextTokens("一二三四")).toBe(4);
 	expect(estimateWebTextTokens("12345678")).toBe(2);
 	expect(estimateWebTextTokens("小说 draft")).toBe(4);
+});
+
+test("Web reasoning controls follow the TUI model capability ladder", () => {
+	const deepSeekLow = storyAgentModelCapabilities({
+		provider: "openai",
+		api_base_url: "https://api.deepseek.com/v1",
+		model: "deepseek-v4-flash",
+		reasoning_effort: "low",
+	});
+	expect(deepSeekLow.reasoning).toBe(true);
+	expect(deepSeekLow.supportedEfforts).toEqual(["high", "max"]);
+	expect(deepSeekLow.effectiveEffort).toBe("high");
+	expect(deepSeekLow.maxTokens).toBe(128_000);
+
+	const deepSeekOff = storyAgentModelCapabilities({
+		provider: "openai",
+		api_base_url: "https://api.deepseek.com/v1",
+		model: "deepseek-v4-flash",
+		reasoning_effort: "off",
+	});
+	expect(deepSeekOff.disableReasoning).toBe(true);
+	expect(deepSeekOff.effectiveEffort).toBeUndefined();
+
+	const claudeMinimal = storyAgentModelCapabilities({
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		reasoning_effort: "minimal",
+	});
+	expect(claudeMinimal.reasoning).toBe(true);
+	expect(claudeMinimal.effectiveEffort).toBe("minimal");
+	expect(claudeMinimal.disableReasoning).toBe(false);
+
+	const nonReasoning = storyAgentModelCapabilities({
+		provider: "openai",
+		model: "gpt-4o-mini",
+		reasoning_effort: "high",
+	});
+	expect(nonReasoning.reasoning).toBe(false);
+	expect(nonReasoning.supportedEfforts).toEqual([]);
+	expect(nonReasoning.effectiveEffort).toBeUndefined();
 });
 
 function deepSeekSseResponse(text: string): Response {
@@ -164,10 +205,11 @@ test("DeepSeek-compatible settings use system messages and preserve upstream err
 				api_base_url: "https://api.deepseek.com/v1",
 				api_key: "test-key",
 				model: "deepseek-v4-flash",
-				reasoning_effort: "high",
+				reasoning_effort: "low",
 			},
 		});
 		expect(response.result.output).toBe("正常");
+		expect(capturedPayload?.reasoning_effort).toBe("high");
 		const messages = capturedPayload?.messages;
 		expect(Array.isArray(messages) ? messages[0]?.role : null).toBe("system");
 		const tools = Array.isArray(capturedPayload?.tools) ? capturedPayload.tools : [];

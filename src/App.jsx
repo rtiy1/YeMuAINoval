@@ -195,7 +195,8 @@ function resolveWebCompactionThreshold(contextWindow, compaction) {
 }
 
 const agentReasoningOptions = [
-  { value: '', label: 'Auto', description: '由模型根据当前任务自行决定', badge: '推荐' },
+  { value: '', label: 'Auto', description: '按模型能力使用默认档位', badge: '推荐' },
+  { value: 'off', label: 'Off', description: '关闭可选思考；强制推理模型会使用最低档' },
   { value: 'minimal', label: 'Minimal', description: '几乎不推理，优先获得最快响应' },
   { value: 'low', label: 'Low', description: '适合改写、摘要等轻量任务' },
   { value: 'medium', label: 'Medium', description: '平衡响应速度与创作质量' },
@@ -203,6 +204,16 @@ const agentReasoningOptions = [
   { value: 'xhigh', label: 'XHigh', description: '更深入地推演长篇上下文' },
   { value: 'max', label: 'Max', description: '使用模型支持的最高推理强度', badge: '最深' },
 ]
+
+function reasoningOptionsForCapabilities(capabilities) {
+  if (!Array.isArray(capabilities?.supportedEfforts)) return agentReasoningOptions
+  const supported = new Set(['', 'off', ...capabilities.supportedEfforts])
+  return agentReasoningOptions.filter((option) => supported.has(option.value))
+}
+
+function reasoningOptionLabel(value) {
+  return agentReasoningOptions.find((option) => option.value === value)?.label || 'Auto'
+}
 
 const agentTeamOptions = [
   { value: 'solo', label: '单智能体', description: '由夜雨直接完成，响应更快、消耗更低', badge: '默认' },
@@ -2231,6 +2242,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentModels, setAgentModels] = useState([])
   const [agentModelsLoading, setAgentModelsLoading] = useState(false)
   const [agentReasoningEffort, setAgentReasoningEffort] = useState('')
+  const [agentModelCapabilities, setAgentModelCapabilities] = useState(null)
+  const [agentModelCapabilitiesById, setAgentModelCapabilitiesById] = useState({})
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
   const [agentCompaction, setAgentCompaction] = useState({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000 })
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
@@ -2272,6 +2285,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       if (!mounted) return
       setAgentModel(settings?.model || '')
       setAgentReasoningEffort(settings?.reasoningEffort || '')
+      setAgentModelCapabilities(settings?.modelCapabilities || null)
       setAgentContextWindow(Math.max(100, Number(settings?.contextWindow) || 100000))
       setAgentCompaction({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000, ...(settings?.compaction || {}) })
       setAgentModels(Array.isArray(settings?.availableModels) ? settings.availableModels : [])
@@ -2319,6 +2333,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     try {
       const response = await api.getModels()
       setAgentModels(response.models || [])
+      setAgentModelCapabilitiesById(response.modelCapabilities || {})
+      if (response.modelCapabilities?.[agentModel]) setAgentModelCapabilities(response.modelCapabilities[agentModel])
     } catch (error) {
       onNotify?.(error.message || '模型列表获取失败，请检查连接设置')
     } finally {
@@ -2328,7 +2344,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
 
   async function updateAgentSetting(field, value) {
     const previous = field === 'model' ? agentModel : agentReasoningEffort
-    if (field === 'model') setAgentModel(value)
+    const previousCapabilities = agentModelCapabilities
+    if (field === 'model') {
+      setAgentModel(value)
+      setAgentModelCapabilities(agentModelCapabilitiesById[value] || null)
+    }
     else setAgentReasoningEffort(value)
     setAgentSettingSaving(true)
     try {
@@ -2336,7 +2356,10 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       window.dispatchEvent(new CustomEvent('story:model-settings-updated', { detail: response.settings }))
       return true
     } catch (error) {
-      if (field === 'model') setAgentModel(previous)
+      if (field === 'model') {
+        setAgentModel(previous)
+        setAgentModelCapabilities(previousCapabilities)
+      }
       else setAgentReasoningEffort(previous)
       onNotify?.(error.message || '模型设置保存失败')
       return false
@@ -3343,7 +3366,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       return true
     }
     if (command.name === 'status') {
-      const effort = agentReasoningOptions.find((item) => item.value === agentReasoningEffort)?.label || 'Auto'
+      const effort = reasoningOptionLabel(agentReasoningEffort)
       appendLocalCommandResult(message, `作品：${project.title}\n章节：${displayChapter.title}\n正文：${wordCount.toLocaleString()} 字\n模型：${agentModel || '默认模型'}\n思考强度：${effort}`)
       return true
     }
@@ -4049,6 +4072,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     { value: '', label: '默认模型', description: '使用连接设置中的默认模型', badge: '默认' },
     ...availableAgentModels.map((model) => ({ value: model, label: model, description: '通过当前 API 连接提供' })),
   ]
+  const availableAgentReasoningOptions = reasoningOptionsForCapabilities(agentModelCapabilities)
   const agentSessionUsage = assistantMessages
     .filter((message) => message.role === 'agent')
     .reduce((total, run) => {
@@ -4431,7 +4455,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
                     </button>
                     <button type="button" className={`agent-control-trigger reasoning ${agentPickerOpen === 'reasoning' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'reasoning'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('reasoning')} title="选择思考强度">
-                      <span>{agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || 'Auto'}</span>
+                      <span>{reasoningOptionLabel(agentReasoningEffort)}</span>
                     </button>
                     {agentPickerOpen === 'model' && <AgentComposerMenu
                       title="选择模型"
@@ -4444,7 +4468,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                     {agentPickerOpen === 'reasoning' && <AgentComposerMenu
                       title="思考强度"
                       description="强度越高，通常耗时和 token 越多"
-                      options={agentReasoningOptions}
+                      options={availableAgentReasoningOptions}
                       value={agentReasoningEffort}
                       loading={false}
                       onSelect={(value) => { setAgentPickerOpen(null); updateAgentSetting('reasoningEffort', value) }}
@@ -4480,7 +4504,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   </svg>
                   <span>{agentContextPercent}% ctx</span>
                 </button>
-                <span className="tui-status-model" title={agentModel || '默认模型'}>{agentModel || 'default'} · {agentReasoningOptions.find((option) => option.value === agentReasoningEffort)?.label || 'Auto'}</span>
+                <span className="tui-status-model" title={agentModel || '默认模型'}>{agentModel || 'default'} · {reasoningOptionLabel(agentReasoningEffort)}</span>
               </div>
             </div>
             </>}
@@ -5430,10 +5454,12 @@ function SettingsModal({ onClose, onNotify }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [modelList, setModelList] = useState([])
+  const [modelCapabilities, setModelCapabilities] = useState(null)
+  const [modelCapabilitiesById, setModelCapabilitiesById] = useState({})
   const [fetchingModels, setFetchingModels] = useState(false)
   const [activePane, setActivePane] = useState('connection')
   const [connectionStatus, setConnectionStatus] = useState('idle')
-  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', thinkingBudgets: { ...TUI_THINKING_BUDGETS }, temperature: 0.7, maxTokens: 16384, contextWindow: 100000, compaction: { ...TUI_COMPACTION_DEFAULTS } })
+  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', thinkingBudgets: { ...TUI_THINKING_BUDGETS }, temperature: 0.7, contextWindow: 100000, compaction: { ...TUI_COMPACTION_DEFAULTS } })
 
   useEffect(() => {
     let mounted = true
@@ -5442,6 +5468,7 @@ function SettingsModal({ onClose, onNotify }) {
         if (!mounted) return
         const s = response.settings || {}
         setSettings(s)
+        setModelCapabilities(s.modelCapabilities || null)
         setForm({
           provider: s.provider === 'anthropic' ? 'anthropic' : 'openai',
           apiBaseUrl: s.apiBaseUrl || '',
@@ -5450,7 +5477,6 @@ function SettingsModal({ onClose, onNotify }) {
           reasoningEffort: s.reasoningEffort || '',
           thinkingBudgets: { ...TUI_THINKING_BUDGETS, ...(s.thinkingBudgets || {}) },
           temperature: s.temperature ?? 0.7,
-          maxTokens: s.maxTokens ?? 16384,
           contextWindow: s.contextWindow ?? 100000,
           compaction: { ...TUI_COMPACTION_DEFAULTS, ...(s.compaction || {}) },
         })
@@ -5466,7 +5492,12 @@ function SettingsModal({ onClose, onNotify }) {
     try {
       const response = await api.updateSettings(form)
       setSettings(response.settings)
-      setForm((current) => ({ ...current, apiKey: '' }))
+      setModelCapabilities(response.settings?.modelCapabilities || null)
+      setForm((current) => ({
+        ...current,
+        apiKey: '',
+        reasoningEffort: response.settings?.reasoningEffort ?? current.reasoningEffort,
+      }))
       let availableModels = []
       let modelRefreshError = null
       if (response.settings?.apiKeyMask) {
@@ -5474,14 +5505,17 @@ function SettingsModal({ onClose, onNotify }) {
           const modelResponse = await api.getModels()
           availableModels = modelResponse.models || []
           setModelList(availableModels)
+          setModelCapabilitiesById(modelResponse.modelCapabilities || {})
           setConnectionStatus('connected')
         } catch (error) {
           modelRefreshError = error
           setModelList([])
+          setModelCapabilitiesById({})
           setConnectionStatus('error')
         }
       } else {
         setModelList([])
+        setModelCapabilitiesById({})
         setConnectionStatus('idle')
       }
       window.dispatchEvent(new CustomEvent('story:model-settings-updated', {
@@ -5509,6 +5543,8 @@ function SettingsModal({ onClose, onNotify }) {
         apiKey: form.apiKey,
       })
       setModelList(response.models || [])
+      setModelCapabilitiesById(response.modelCapabilities || {})
+      setModelCapabilities(response.modelCapabilities?.[form.model] || modelCapabilities)
       setConnectionStatus('connected')
       if (!(response.models || []).length) onNotify('连接成功，但接口没有返回可用模型')
     } catch (error) {
@@ -5520,10 +5556,22 @@ function SettingsModal({ onClose, onNotify }) {
   }
 
   function updateField(field, value) {
-    setForm((current) => ({ ...current, [field]: value }))
+    setForm((current) => {
+      if (field !== 'model') return { ...current, [field]: value }
+      const capabilities = modelCapabilitiesById[value]
+      const supported = new Set(capabilities?.supportedEfforts || [])
+      const configured = current.reasoningEffort
+      const reasoningEffort = configured && configured !== 'off' && capabilities && !supported.has(configured)
+        ? capabilities.effectiveEffort || ''
+        : configured
+      return { ...current, model: value, reasoningEffort }
+    })
+    if (field === 'model') setModelCapabilities(modelCapabilitiesById[value] || null)
     if (['provider', 'apiBaseUrl', 'apiKey'].includes(field)) {
       setConnectionStatus('idle')
       setModelList([])
+      setModelCapabilities(null)
+      setModelCapabilitiesById({})
     }
   }
 
@@ -5549,6 +5597,7 @@ function SettingsModal({ onClose, onNotify }) {
     error: '连接失败',
   }[connectionStatus]
   const compactionThreshold = resolveWebCompactionThreshold(form.contextWindow, form.compaction)
+  const availableReasoningOptions = reasoningOptionsForCapabilities(modelCapabilities)
 
   return <div className="modal-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -5620,15 +5669,9 @@ function SettingsModal({ onClose, onNotify }) {
                   <label className="settings-field">
                     <span>思考强度</span>
                     <div className="settings-select-wrap"><BrainCircuit size={16} /><select value={form.reasoningEffort} onChange={(e) => updateField('reasoningEffort', e.target.value)}>
-                      <option value="">Auto (Model default)</option>
-                      <option value="minimal">Minimal</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="xhigh">XHigh</option>
-                      <option value="max">Max</option>
+                      {availableReasoningOptions.map((option) => <option key={option.value || 'auto'} value={option.value}>{option.label}{option.value === '' ? ' (Model default)' : ''}</option>)}
                     </select><ChevronDown size={14} /></div>
-                    <small>强度越高通常耗时越长、使用的 token 越多。</small>
+                    <small>{modelCapabilities?.reasoning === false ? '当前模型不支持可控思考。' : '仅显示当前模型支持的档位；强度越高通常耗时越长。'}</small>
                   </label>
 
                   <div className="settings-thinking-budgets">
@@ -5654,12 +5697,12 @@ function SettingsModal({ onClose, onNotify }) {
                 </section>
 
                 <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>Token 预算</h3><p>支持输入任意精确整数，不再受 1024 步进限制。</p></div></div>
+                  <div className="settings-section-heading"><div><h3>Token 预算</h3><p>与 TUI 一致，输出上限由模型目录决定。</p></div></div>
                   <div className="settings-number-row">
                     <label className="settings-field">
-                      <span>最大输出 Tokens</span>
-                      <input type="number" min="1" max="128000" step="1" value={form.maxTokens} onChange={(e) => updateField('maxTokens', Number(e.target.value))} />
-                      <small>思考与正文共享此预算；长思考建议至少 16384，触顶后助手会自动收尾。</small>
+                      <span>模型最大输出 Tokens</span>
+                      <input type="text" value={compactTokenCount(modelCapabilities?.maxTokens || 16384)} readOnly />
+                      <small>自动读取模型目录；思考预算只占其中一部分，不再用 Web 的旧 16K 默认值覆盖。</small>
                     </label>
                     <label className="settings-field">
                       <span>上下文窗口 Tokens</span>

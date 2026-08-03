@@ -5,6 +5,7 @@ import {
   runContextCompaction,
   runStoryAgent,
   runStoryDelegate,
+  storyAgentModelCapabilities as resolveStoryAgentModelCapabilities,
 } from '../src/agent-runtime.ts'
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
@@ -20,7 +21,7 @@ function isNetworkError(error) {
     || ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(error?.cause?.code)
 }
 
-function userModelConfig(user) {
+export function storyAgentModelConfig(user) {
   if (!user?.settings) return sharedModelAccessAllowed ? null : { provider: 'openai', allow_server_fallback: false }
   const settings = user.settings
   return {
@@ -31,10 +32,19 @@ function userModelConfig(user) {
     reasoning_effort: settings.reasoningEffort || undefined,
     thinking_budgets: settings.thinkingBudgets || undefined,
     temperature: settings.temperature ?? undefined,
-    max_tokens: settings.maxTokens ?? undefined,
     context_window: settings.contextWindow ?? undefined,
     allow_server_fallback: sharedModelAccessAllowed,
   }
+}
+
+export function storyAgentModelCapabilities(settings = {}) {
+  return resolveStoryAgentModelCapabilities({
+    provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
+    api_base_url: settings.apiBaseUrl || undefined,
+    model: settings.model || undefined,
+    reasoning_effort: settings.reasoningEffort || undefined,
+    context_window: settings.contextWindow ?? undefined,
+  })
 }
 
 async function preparedStoryAgentBody(user, input) {
@@ -45,7 +55,7 @@ async function preparedStoryAgentBody(user, input) {
     message: prepared.message,
     skill: prepared.skill || null,
     payload: prepared.payload,
-    model_config: userModelConfig(user),
+    model_config: storyAgentModelConfig(user),
   }
 }
 
@@ -134,7 +144,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
 }
 
 export async function invokeContextCompaction(user, input, signal = AbortSignal.timeout(300_000)) {
-  return await runContextCompaction(userModelConfig(user), {
+  return await runContextCompaction(storyAgentModelConfig(user), {
     existingSummary: typeof input?.existingSummary === 'string' ? input.existingSummary : '',
     messages: Array.isArray(input?.messages) ? input.messages : [],
     instructions: typeof input?.instructions === 'string' ? input.instructions : '',

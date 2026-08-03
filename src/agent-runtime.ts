@@ -3,7 +3,10 @@ import * as path from "node:path";
 import { Agent, type AgentPromptOptions } from "@yemu/agent-core/agent";
 import type { AgentEvent, AgentMessage, AgentTool } from "@yemu/agent-core/types";
 import { buildModel } from "@yemu/model-catalog/build";
-import { type AssistantMessage, type Effort, type Model, z } from "@yemu/model-runtime";
+import { getBundledModelReferenceIndex } from "@yemu/model-catalog/identity/bundled";
+import { inheritReferenceThinking, resolveModelReference } from "@yemu/model-catalog/identity/reference";
+import { clampThinkingLevelForModel, getSupportedEfforts } from "@yemu/model-catalog/model-thinking";
+import { type AssistantMessage, Effort, type Model, z } from "@yemu/model-runtime";
 import * as AIError from "@yemu/model-runtime/error";
 import { render } from "@yemu/utils/prompt";
 import agentRequestTemplate from "./prompts/agent-request.md" with { type: "text" };
@@ -30,6 +33,14 @@ const skillsRoot = path.join(packageRoot, "skills");
 const MAX_SKILL_FILE_CHARS = 200_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
+const THINKING_EFFORTS = [
+	Effort.Minimal,
+	Effort.Low,
+	Effort.Medium,
+	Effort.High,
+	Effort.XHigh,
+	Effort.Max,
+] as const;
 const DEFAULT_THINKING_BUDGETS = {
 	minimal: 1_024,
 	low: 2_048,
@@ -155,12 +166,23 @@ export interface YemuModelConfig {
 	api_base_url?: string;
 	api_key?: string;
 	model?: string;
-	reasoning_effort?: Effort;
+	reasoning_effort?: Effort | "off";
 	thinking_budgets?: Partial<Record<Effort, number>>;
 	temperature?: number;
 	max_tokens?: number;
 	context_window?: number;
 	allow_server_fallback?: boolean;
+}
+
+export interface StoryAgentModelCapabilities {
+	reasoning: boolean;
+	supportedEfforts: Effort[];
+	configuredLevel: Effort | "off" | "auto";
+	effectiveEffort?: Effort;
+	disableReasoning: boolean;
+	defaultEffort?: Effort;
+	maxTokens: number | null;
+	contextWindow: number | null;
 }
 
 export interface StoryAgentInput {
@@ -418,16 +440,8 @@ function positiveInteger(value: number | undefined, fallback: number, maximum: n
 	return Number.isFinite(value) && Number(value) > 0 ? Math.min(Math.floor(Number(value)), maximum) : fallback;
 }
 
-function modelForConfig(config: YemuModelConfig | null | undefined): { model: Model; apiKey: string; effort?: Effort } {
+function configuredModel(config: YemuModelConfig | null | undefined): Model {
 	const configuredProvider = config?.provider === "anthropic" ? "anthropic" : "openai";
-	const apiKey =
-		config?.api_key?.trim() ||
-		(configuredProvider === "anthropic" ? Bun.env.ANTHROPIC_API_KEY?.trim() : Bun.env.OPENAI_API_KEY?.trim()) ||
-		"";
-	if (!apiKey) {
-		throw Object.assign(new Error("模型 API Key 未配置，请先在设置中填写密钥"), { status: 400 });
-	}
-
 	const id =
 		config?.model?.trim() ||
 		(configuredProvider === "anthropic" ? Bun.env.ANTHROPIC_MODEL?.trim() : Bun.env.OPENAI_MODEL?.trim()) ||
@@ -438,21 +452,88 @@ function modelForConfig(config: YemuModelConfig | null | undefined): { model: Mo
 			? cleanBaseUrl(config?.api_base_url || Bun.env.ANTHROPIC_BASE_URL, "https://api.anthropic.com")
 			: cleanBaseUrl(config?.api_base_url || Bun.env.OPENAI_BASE_URL, "https://api.openai.com/v1");
 	const provider = configuredProvider === "anthropic" ? "anthropic" : openAICompatibleProvider(baseUrl);
-	const effort = config?.reasoning_effort;
-	const model = buildModel({
+	const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+	const referenceContextWindow = Number(reference?.contextWindow) > 0
+		? Math.min(Number(reference?.contextWindow), 2_000_000)
+		: DEFAULT_CONTEXT_WINDOW;
+	const referenceMaxTokens = Number(reference?.maxTokens) > 0
+		? Math.min(Number(reference?.maxTokens), 128_000)
+		: DEFAULT_MAX_TOKENS;
+	return buildModel({
 		id,
-		name: id,
+		name: reference?.name ?? id,
 		api,
 		provider,
 		baseUrl,
-		reasoning: effort !== undefined && effort !== "minimal",
-		input: ["text"],
-		supportsTools: true,
+		reasoning: reference?.reasoning ?? config?.reasoning_effort !== undefined,
+		thinking: inheritReferenceThinking(undefined, reference, provider),
+		input: reference?.input ?? ["text"],
+		supportsTools: reference?.supportsTools ?? true,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: positiveInteger(config?.context_window, DEFAULT_CONTEXT_WINDOW, 2_000_000),
-		maxTokens: positiveInteger(config?.max_tokens, DEFAULT_MAX_TOKENS, 128_000),
+		contextWindow: positiveInteger(config?.context_window, referenceContextWindow, 2_000_000),
+		maxTokens: positiveInteger(config?.max_tokens, referenceMaxTokens, 128_000),
 	});
-	return { model, apiKey, effort };
+}
+
+function provisionalAutoEffort(model: Model): Effort | undefined {
+	if (!model.reasoning) return undefined;
+	const supported = [...getSupportedEfforts(model)];
+	if (!supported.length) return undefined;
+	const lowIndex = THINKING_EFFORTS.indexOf(Effort.Low);
+	const xhighIndex = THINKING_EFFORTS.indexOf(Effort.XHigh);
+	const atOrAboveLow = supported.filter((effort) => THINKING_EFFORTS.indexOf(effort) >= lowIndex);
+	const floored = atOrAboveLow.length ? atOrAboveLow : supported;
+	const candidates = floored.filter((effort) => THINKING_EFFORTS.indexOf(effort) <= xhighIndex);
+	if (!candidates.length) return undefined;
+	const preferred = model.thinking?.defaultLevel === Effort.Max
+		? Effort.XHigh
+		: model.thinking?.defaultLevel ?? Effort.High;
+	const preferredIndex = THINKING_EFFORTS.indexOf(preferred);
+	return candidates.findLast((effort) => THINKING_EFFORTS.indexOf(effort) <= preferredIndex) ?? candidates[0];
+}
+
+export function storyAgentModelCapabilities(
+	config: YemuModelConfig | null | undefined,
+): StoryAgentModelCapabilities {
+	const model = configuredModel(config);
+	const configuredLevel = config?.reasoning_effort ?? "auto";
+	const disableReasoning = configuredLevel === "off";
+	const effectiveEffort = disableReasoning
+		? undefined
+		: configuredLevel === "auto"
+			? provisionalAutoEffort(model)
+			: clampThinkingLevelForModel(model, configuredLevel);
+	return {
+		reasoning: model.reasoning,
+		supportedEfforts: [...getSupportedEfforts(model)],
+		configuredLevel,
+		effectiveEffort,
+		disableReasoning,
+		defaultEffort: model.thinking?.defaultLevel,
+		maxTokens: model.maxTokens,
+		contextWindow: model.contextWindow,
+	};
+}
+
+function modelForConfig(
+	config: YemuModelConfig | null | undefined,
+): { model: Model; apiKey: string; effort?: Effort; disableReasoning: boolean } {
+	const configuredProvider = config?.provider === "anthropic" ? "anthropic" : "openai";
+	const apiKey =
+		config?.api_key?.trim() ||
+		(configuredProvider === "anthropic" ? Bun.env.ANTHROPIC_API_KEY?.trim() : Bun.env.OPENAI_API_KEY?.trim()) ||
+		"";
+	if (!apiKey) {
+		throw Object.assign(new Error("模型 API Key 未配置，请先在设置中填写密钥"), { status: 400 });
+	}
+	const model = configuredModel(config);
+	const capabilities = storyAgentModelCapabilities(config);
+	return {
+		model,
+		apiKey,
+		effort: capabilities.effectiveEffort,
+		disableReasoning: capabilities.disableReasoning,
+	};
 }
 
 function safePayloadJson(payload: Record<string, unknown>): string {
@@ -1005,7 +1086,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
 					"allow"),
 	});
-	const { model, apiKey, effort } = modelForConfig(request.modelConfig);
+	const { model, apiKey, effort, disableReasoning } = modelForConfig(request.modelConfig);
 	const renderUserPrompt = (payload: Record<string, unknown>): string =>
 		request.mode === "compact"
 			? render(compactRequestTemplate, {
@@ -1067,6 +1148,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			model,
 			systemPrompt: [systemPrompt],
 			thinkingLevel: effort,
+			disableReasoning,
 			tools: createTools(toolState, skillMap),
 			messages: [],
 		},
