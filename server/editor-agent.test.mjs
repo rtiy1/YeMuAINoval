@@ -18,6 +18,7 @@ import {
   parseAgentChoiceResponse,
   reconcileAgentTurnItems,
   resolveEditorAgentCommand,
+  segmentAgentTurnItems,
   waitForAgentPoll,
 } from '../src/editor-agent.mjs'
 
@@ -381,6 +382,26 @@ test('editor agent applies Item SSE deltas and reconciles transient output', () 
     summary: [{ type: 'summary_text', text: '先读取文件' }],
   }])
   assert.equal(nonRegressing[0].summary[0].text, '先读取文件，再执行写入。')
+})
+
+test('editor agent segments reasoning and tools like the native TUI timeline', () => {
+  const items = [
+    { id: 'reasoning-1', type: 'reasoning', meta: { messageId: 'assistant-1' } },
+    { id: 'read-1', type: 'dynamicToolCall' },
+    { id: 'read-2', type: 'dynamicToolCall' },
+    { id: 'reasoning-2', type: 'reasoning', meta: { messageId: 'assistant-2' } },
+    { id: 'write-1', type: 'dynamicToolCall' },
+    { id: 'reasoning-3', type: 'reasoning', meta: { messageId: 'assistant-3' } },
+    { id: 'answer-1', type: 'agentMessage' },
+  ]
+  assert.deepEqual(
+    segmentAgentTurnItems(items).map((segment) => segment.map((item) => item.id)),
+    [
+      ['reasoning-1', 'read-1', 'read-2'],
+      ['reasoning-2', 'write-1'],
+      ['reasoning-3', 'answer-1'],
+    ],
+  )
 })
 
 test('editor agent compacts repeated execution cycles and drops queue noise', () => {

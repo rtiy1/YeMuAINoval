@@ -493,6 +493,46 @@ export function agentReasoningText(item) {
     .trim()
 }
 
+const agentTimelineToolTypes = new Set(['dynamicToolCall', 'collabAgentToolCall'])
+
+export function segmentAgentTurnItems(value) {
+  const items = Array.isArray(value) ? value.filter(Boolean) : []
+  const segments = []
+  let current = []
+  let reasoningKey = null
+  const flush = () => {
+    if (current.length) segments.push(current)
+    current = []
+    reasoningKey = null
+  }
+  const currentHasTool = () => current.some((item) => agentTimelineToolTypes.has(item.type))
+  const currentHasOutput = () => current.some((item) => ['agentMessage', 'plan'].includes(item.type))
+
+  for (const item of items) {
+    if (item.type === 'reasoning') {
+      const nextReasoningKey = item.meta?.messageId
+        || `attempt:${item.meta?.interactionAttempt || 1}:reasoning:${item.id}`
+      if (current.length && (currentHasTool() || currentHasOutput()
+        || (reasoningKey && reasoningKey !== nextReasoningKey))) flush()
+      reasoningKey = nextReasoningKey
+      current.push(item)
+      continue
+    }
+    if (agentTimelineToolTypes.has(item.type)) {
+      current.push(item)
+      continue
+    }
+    if (['agentMessage', 'plan'].includes(item.type)) {
+      if (currentHasTool()) flush()
+      current.push(item)
+      continue
+    }
+    if (item.type === 'requestUserInput') flush()
+  }
+  flush()
+  return segments
+}
+
 export function buildAgentTurnView(run) {
   const items = Array.isArray(run?.items) ? run.items.filter(Boolean) : []
   const result = run?.response?.result && typeof run.response.result === 'object'

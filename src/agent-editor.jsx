@@ -24,6 +24,7 @@ import {
   agentReasoningText,
   buildAgentTurnView,
   formatAgentDuration,
+  segmentAgentTurnItems,
 } from './editor-agent.mjs'
 import {
   AgentChoicePrompt,
@@ -86,10 +87,10 @@ function tuiToolArgs(item) {
   return args
 }
 
-function tuiAssistantMessage(run) {
+function tuiAssistantMessage(run, items, { includeFallback = false, terminal = false } = {}) {
   const view = buildAgentTurnView(run)
   const content = []
-  for (const item of view.items || []) {
+  for (const item of items || []) {
     if (item.type === 'reasoning') {
       // Keep the browser transcript aligned with the native TUI: remove provider
       // comment sentinels and collapse fenced implementation detail to prose.
@@ -114,15 +115,20 @@ function tuiAssistantMessage(run) {
       if (text) content.push({ type: 'text', text })
     }
   }
-  if (!content.some((item) => item.type === 'text') && view.answerText) {
+  if (includeFallback && !content.some((item) => item.type === 'text') && view.answerText) {
     content.push({ type: 'text', text: view.answerText })
   }
   return {
     role: 'assistant',
     content,
-    stopReason: run.status === 'failed' ? 'error' : run.status === 'cancelled' ? 'aborted' : 'stop',
-    errorMessage: run.status === 'failed' ? run.text || run.statusMessage : undefined,
+    stopReason: terminal && run.status === 'failed' ? 'error' : terminal && run.status === 'cancelled' ? 'aborted' : 'stop',
+    errorMessage: terminal && run.status === 'failed' ? run.text || run.statusMessage : undefined,
   }
+}
+
+function segmentIsStreaming(items) {
+  return items.some((item) => !['dynamicToolCall', 'collabAgentToolCall'].includes(item.type)
+    && item.status === 'inProgress')
 }
 
 function tuiToolResult(item) {
@@ -151,11 +157,29 @@ export function YemuAssistantTranscript({ messages, assistantName, working = fal
       })
       continue
     }
-    const assistantMessage = tuiAssistantMessage(message)
-    const items = buildAgentTurnView(message).items || []
+    const view = buildAgentTurnView(message)
+    const items = view.items || []
     const running = ['queued', 'running'].includes(message.status)
-    if (running) stream = assistantMessage
-    else entries.push({ id: `${message.id}:assistant`, type: 'message', timestamp: message.completedAt || null, message: assistantMessage })
+    const segments = segmentAgentTurnItems(items)
+    if (!segments.length && view.answerText) segments.push([])
+    for (const [index, segment] of segments.entries()) {
+      const last = index === segments.length - 1
+      const assistantMessage = tuiAssistantMessage(message, segment, {
+        includeFallback: last && segment.length === 0,
+        terminal: last && !running,
+      })
+      if (!assistantMessage.content.length) continue
+      if (running && last && segmentIsStreaming(segment)) {
+        stream = assistantMessage
+      } else {
+        entries.push({
+          id: `${message.id}:assistant:${index + 1}`,
+          type: 'message',
+          timestamp: segment[0]?.createdAt || message.completedAt || null,
+          message: assistantMessage,
+        })
+      }
+    }
     for (const item of items) {
       if (!['dynamicToolCall', 'collabAgentToolCall'].includes(item.type)) continue
       if (itemStatus(item) === 'running') {
