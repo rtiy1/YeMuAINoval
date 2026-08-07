@@ -87,3 +87,6 @@ packages/coding-agent/bench/boot-baseline.json
 /bazel-testlogs
 /bazel-yemu
 /.bazelrc.user
+
+# Runtime data (per-user workspaces, CLI config, db)
+server/data/
