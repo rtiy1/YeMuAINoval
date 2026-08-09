@@ -1844,7 +1844,7 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
 function WritingAssistantPage({ session, loading, skills, onSend, onClear, onReviewProposal, onOpenSettings, onNotify, onOpenProject }) {
   const [input, setInput] = useState('')
   const [selectedSkill, setSelectedSkill] = useState('')
-  const [webSearch, setWebSearch] = useState(false)
+  const [webFetch, setWebFetch] = useState(false)
   const [model, setModel] = useState('')
   const [modelList, setModelList] = useState([])
   const [modelLoading, setModelLoading] = useState(false)
@@ -1911,7 +1911,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
   function send(message) {
     const options = {}
     if (selectedSkill) options.skill = selectedSkill
-    if (webSearch) options.web_search = true
+    if (webFetch) options.web_fetch = true
     onSend(message, options)
   }
 
@@ -2010,7 +2010,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
                 <button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button>
               </form>
               <div className="assistant-composer-tools">
-                <button type="button" className={`composer-toggle ${webSearch ? 'active' : ''}`} aria-pressed={webSearch} title={webSearch ? '已开启联网搜索：夜雨会先检索再回答' : '开启后夜雨会先联网检索再回答'} onClick={() => setWebSearch((value) => !value)}><Globe size={13} /><span>联网搜索</span></button>
+                <button type="button" className={`composer-toggle ${webFetch ? 'active' : ''}`} aria-pressed={webFetch} title={webFetch ? '已开启网页读取' : '开启后夜雨可读取公开网页'} onClick={() => setWebFetch((value) => !value)}><Globe size={13} /><span>网页读取</span></button>
                 <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{item.displayName || skillMeta[item.name]?.label || item.name}</option>)}</select></label>
                 <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               </div>
@@ -2247,7 +2247,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
   const [agentCompaction, setAgentCompaction] = useState({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000 })
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
-  const [agentWebSearch, setAgentWebSearch] = useState(false)
+  const [agentWebFetch, setAgentWebFetch] = useState(false)
   const [agentMultiAgent, setAgentMultiAgent] = useState(false)
   const agentMode = 'build'
   const [agentPickerOpen, setAgentPickerOpen] = useState(null)
@@ -3349,7 +3349,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     if (command.name === 'tools') {
       appendLocalCommandResult(message, [
         'read_story_skill　读取 Story Skill 与参考文件',
-        'web_search　联网检索公开资料（开启联网或使用 /search 时可用）',
+        'web_fetch　读取已知 URL 的公开网页（开启网页读取后可用）',
         'list_story_files　浏览 PostgreSQL 作品工作区',
         'read_story_file　读取 PostgreSQL 作品文件',
         'write_story_file　创建或更新作品文件',
@@ -3724,7 +3724,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
           tool_policy: {
-            externalSearch: agentWebSearch ? 'allow' : 'deny',
+            externalSearch: agentWebFetch ? 'allow' : 'deny',
             mutateStoryData: requestMode === 'build' ? 'allow' : 'propose',
             deleteStoryData: 'deny',
           },
@@ -4449,7 +4449,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <div className="agent-composer-controls" ref={agentControlsRef}>
                     <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '智能体'}</span><ChevronDown size={11} /></button>
                     <span className="agent-control-divider" aria-hidden="true" />
-                    <button type="button" className={`agent-tool-button ${agentWebSearch ? 'active' : ''}`} aria-pressed={agentWebSearch} onClick={() => setAgentWebSearch((active) => !active)} title={agentWebSearch ? '关闭联网搜索' : '开启联网搜索'}><Globe size={13} /><span>联网</span></button>
+                    <button type="button" className={`agent-tool-button ${agentWebFetch ? 'active' : ''}`} aria-pressed={agentWebFetch} onClick={() => setAgentWebFetch((active) => !active)} title={agentWebFetch ? '关闭网页读取' : '开启网页读取'}><Globe size={13} /><span>网页</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
                       <AgentModelGlyph model={agentModel} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>

@@ -62,7 +62,7 @@ async function preparedStoryAgentBody(user, input) {
 export async function invokeStoryAgent(
   user,
   input,
-  signal = AbortSignal.timeout(300_000),
+  signal = undefined,
   onDelta = null,
   onReasoningDelta = null,
   onToolEvent = null,
@@ -88,12 +88,12 @@ export async function invokeStoryAgent(
 
 function delegateRoles(input) {
   const skill = String(input?.skill || '')
-  if (skill === 'story-search' || input?.payload?.multi_agent !== true) return []
+  if (input?.payload?.multi_agent !== true) return []
   if (/(?:review|analyze|scan|deslop)/.test(skill)) return ['continuity_guard', 'prose_critic']
   return ['continuity_guard', 'scene_planner']
 }
 
-export async function invokeStoryAgentDelegates(user, input, signal = AbortSignal.timeout(300_000), onEvent = null) {
+export async function invokeStoryAgentDelegates(user, input, signal = undefined, onEvent = null) {
   const roles = delegateRoles(input)
   if (!roles.length) return []
   const body = await preparedStoryAgentBody(user, input)
@@ -132,7 +132,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = AbortSigna
       await onEvent?.(completed)
       return completed
     } catch (error) {
-      if (signal.aborted) throw error
+      if (signal?.aborted) throw error
       const failed = {
         id,
         runId,

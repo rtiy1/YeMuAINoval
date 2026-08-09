@@ -1,7 +1,15 @@
 import crypto from 'node:crypto'
 import { unlink, writeFile } from 'node:fs/promises'
 import { executeWritingTask } from './writing-task-executor.mjs'
-import { createTaskRedis, isTaskQueueEnabled, TASK_CANCEL_CHANNEL, TASK_GROUP, TASK_STREAM } from './task-queue.mjs'
+import {
+  createTaskRedis,
+  isTaskQueueEnabled,
+  refreshTaskClaim,
+  taskClaimHeartbeatMs,
+  TASK_CANCEL_CHANNEL,
+  TASK_GROUP,
+  TASK_STREAM,
+} from './task-queue.mjs'
 import { closeStore } from './store.mjs'
 
 if (!isTaskQueueEnabled()) {
@@ -23,6 +31,7 @@ let activeExecutionId = null
 let nextClaimAt = 0
 const claimIdleMs = Math.max(180_000, Number(process.env.AI_TASK_CLAIM_IDLE_MS) || 180_000)
 const claimIntervalMs = Math.max(10_000, Number(process.env.AI_TASK_CLAIM_INTERVAL_MS) || 30_000)
+const claimHeartbeatMs = taskClaimHeartbeatMs(claimIdleMs)
 const heartbeatFile = '/tmp/story-ai-worker-ready'
 
 await redis.xgroup('CREATE', TASK_STREAM, TASK_GROUP, '0', 'MKSTREAM').catch((error) => {
@@ -56,15 +65,34 @@ async function processEntry(entry, { resumeRunning = false } = {}) {
     activeTaskId = taskId
     activeController = new AbortController()
     activeExecutionId = crypto.randomUUID()
-    const outcome = await executeWritingTask(taskId, {
-      controller: activeController,
-      executionId: activeExecutionId,
-      requeueOnAbort: true,
-      resumeRunning,
-    })
-    activeTaskId = null
-    activeController = null
-    activeExecutionId = null
+    let refreshingClaim = false
+    const claimHeartbeat = setInterval(() => {
+      if (refreshingClaim || stopping) return
+      refreshingClaim = true
+      void refreshTaskClaim(redis, consumer, messageId)
+        .then((refreshed) => {
+          if (!refreshed && !stopping) console.warn(`[ai-task-worker] task claim disappeared: ${taskId}`)
+        })
+        .catch((error) => {
+          if (!stopping) console.warn(`[ai-task-worker] task claim heartbeat failed: ${error.message}`)
+        })
+        .finally(() => { refreshingClaim = false })
+    }, claimHeartbeatMs)
+    claimHeartbeat.unref?.()
+    let outcome = null
+    try {
+      outcome = await executeWritingTask(taskId, {
+        controller: activeController,
+        executionId: activeExecutionId,
+        requeueOnAbort: true,
+        resumeRunning,
+      })
+    } finally {
+      clearInterval(claimHeartbeat)
+      activeTaskId = null
+      activeController = null
+      activeExecutionId = null
+    }
     if (outcome?.status === 'requeued') await redis.xadd(TASK_STREAM, '*', 'taskId', taskId)
   }
   await redis.xack(TASK_STREAM, TASK_GROUP, messageId)

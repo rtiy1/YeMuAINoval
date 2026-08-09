@@ -18,8 +18,14 @@ import readStoryFileDescription from "./prompts/tool-read-story-file.md" with { 
 import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with { type: "text" };
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
+import webFetchDescription from "./prompts/tool-web-fetch.md" with { type: "text" };
 import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
-import { runSearchQuery, webSearchSchema, type SearchQueryParams } from "./web-search-runtime";
+import {
+	type HeadlessWebFetchResult,
+	runWebFetch,
+	webFetchSchema,
+	type WebFetchParams,
+} from "./web-fetch-runtime";
 import {
 	createStoryFileWorkspace,
 	mergeStoryFileArtifacts,
@@ -33,6 +39,7 @@ const skillsRoot = path.join(packageRoot, "skills");
 const MAX_SKILL_FILE_CHARS = 200_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 16_384;
+const MAX_OUTPUT_LIMIT_RECOVERIES = 3;
 const THINKING_EFFORTS = [
 	Effort.Minimal,
 	Effort.Low,
@@ -261,7 +268,7 @@ export interface StoryAgentCallbacks {
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
-	searchWeb?: (params: SearchQueryParams, signal?: AbortSignal) => Promise<StoryWebSearchResult>;
+	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
 	signal?: AbortSignal;
 }
 
@@ -273,14 +280,6 @@ export interface StoryAssistantMessageEvent {
 	phase: "start" | "end";
 	messageId: string;
 	stopReason?: AssistantMessage["stopReason"];
-}
-
-export interface StoryWebSearchResult {
-	content: Array<{ type: "text"; text: string }>;
-	details: {
-		response?: unknown;
-		error?: string;
-	};
 }
 
 export interface StoryToolEvent {
@@ -316,8 +315,8 @@ interface ToolState {
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
-	canSearchWeb: boolean;
-	searchWeb?: (params: SearchQueryParams, signal?: AbortSignal) => Promise<StoryWebSearchResult>;
+	canFetchWeb: boolean;
+	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
 }
 
 function structuredStoryFileText(value: unknown, depth = 0): string {
@@ -427,7 +426,6 @@ function routeStorySkill(message: string): string {
 	if (/榜|选题|趋势|市场/.test(text)) return "story-long-scan";
 	if (/短篇/.test(text) && /写|续|大纲|开书/.test(text)) return "story-short-write";
 	if (/写|续写|日更|大纲|开书|章节|正文/.test(text)) return "story-long-write";
-	if (/搜索|检索|查资料|联网/.test(text)) return "story-search";
 	return "story";
 }
 
@@ -846,22 +844,19 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
-	const searchTool: AgentTool<typeof webSearchSchema, StoryWebSearchResult["details"]> = {
-		name: "web_search",
-		label: "联网搜索",
-		description:
-			"搜索公开网页中的最新资料。返回标题、链接与摘要；需要当前信息或用户明确要求联网时调用，不得伪造搜索结果。",
-		parameters: webSearchSchema,
+	const fetchTool: AgentTool<typeof webFetchSchema, HeadlessWebFetchResult["details"]> = {
+		name: "web_fetch",
+		label: "读取网页",
+		description: webFetchDescription.trim(),
+		parameters: webFetchSchema,
 		strict: true,
 		loadMode: "essential",
 		approval: "read",
 		async execute(_toolCallId, params, signal) {
-			if (!state.canSearchWeb) throw new Error("当前任务未开启联网搜索");
-			const result = state.searchWeb
-				? await state.searchWeb(params, signal)
-				: await runSearchQuery(params, { signal });
-			if (result.details.error) throw new Error(result.details.error);
-			return result;
+			if (!state.canFetchWeb) throw new Error("当前任务未开启网页读取");
+			return state.fetchWeb
+				? await state.fetchWeb(params, signal)
+				: await runWebFetch(params, { signal });
 		},
 	};
 
@@ -940,7 +935,7 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 
 	return [
 		readTool,
-		...(state.canSearchWeb ? [searchTool] : []),
+		...(state.canFetchWeb ? [fetchTool] : []),
 		listFilesTool,
 		readFileTool,
 		...(state.canMutateStoryFiles ? [writeFileTool, editFileTool] : []),
@@ -1056,18 +1051,16 @@ function compactToolArguments(value: unknown): Record<string, unknown> {
 		"count",
 		"chars",
 		"accepted",
-		"query",
-		"recency",
-		"limit",
-		"provider",
+		"url",
+		"finalUrl",
+		"status",
+		"contentType",
+		"bytes",
+		"redirects",
+		"truncated",
 		"error",
 	]) {
 		if (args[key] !== undefined) compact[key] = args[key];
-	}
-	if (args.response && typeof args.response === "object" && !Array.isArray(args.response)) {
-		const response = args.response as Record<string, unknown>;
-		compact.provider = response.provider;
-		if (Array.isArray(response.sources)) compact.sources = response.sources.length;
 	}
 	for (const key of ["content", "old_text", "new_text"]) {
 		if (typeof args[key] === "string") compact[`${key}_chars`] = args[key].length;
@@ -1091,9 +1084,9 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 	const systemPrompt = render(agentSystemTemplate, {
 		mode: request.mode,
 		role: request.role,
-		webSearchEnabled:
+		webFetchEnabled:
 			request.mode === "story" &&
-			(request.skillName === "story-search" ||
+			(request.payload.web_fetch === true ||
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
 					"allow"),
 	});
@@ -1144,12 +1137,12 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			"allow"
 				? request.callbacks?.writeStoryFile
 				: undefined,
-		canSearchWeb:
+		canFetchWeb:
 			request.mode === "story" &&
-			(request.skillName === "story-search" ||
+			(request.payload.web_fetch === true ||
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
 					"allow"),
-		searchWeb: request.callbacks?.searchWeb,
+		fetchWeb: request.callbacks?.fetchWeb,
 	};
 	const requiredStoryFiles = toolState.canMutateStoryFiles
 		? storyFileMutationRequirement(request.message, request.payload)
@@ -1166,7 +1159,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		getApiKey: () => apiKey,
 		thinkingBudgets: { ...DEFAULT_THINKING_BUDGETS, ...(request.modelConfig?.thinking_budgets ?? {}) },
 		temperature,
-		deadline: request.callbacks?.signal ? undefined : Date.now() + 300_000,
+		deadline: undefined,
 	});
 	let callbackQueue = Promise.resolve();
 	let assistantMessageOrdinal = 0;
@@ -1279,11 +1272,11 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				!toolState.question &&
 				!toolState.submission &&
 				latestAssistantMessage(agent.state.messages)?.stopReason === "length" &&
-				outputLimitRecoveries < 2
+				outputLimitRecoveries < MAX_OUTPUT_LIMIT_RECOVERIES
 			) {
 				outputLimitRecoveries += 1;
 				const remainingFiles = Math.max(0, requiredStoryFiles - toolState.storyFiles.written().length);
-				const forceTool = outputLimitRecoveries >= 2
+				const forceTool = outputLimitRecoveries >= MAX_OUTPUT_LIMIT_RECOVERIES
 					? remainingFiles > 0
 						? "write_story_file"
 						: "submit_story_result"
@@ -1329,7 +1322,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		}
 		const messages = agent.state.messages;
 		if (!toolState.question && !toolState.submission && latestAssistantMessage(messages)?.stopReason === "length") {
-			throw new Error("模型已连续两次达到输出 Token 上限，仍未生成完整结果；请提高最大输出 Tokens 或降低思考强度后重试。");
+			throw new Error("模型已连续三次达到输出 Token 上限，仍未生成完整结果；请提高最大输出 Tokens 或降低思考强度后重试。");
 		}
 		const fallbackText = assistantText(messages);
 		const submission: StoryAgentResult = toolState.submission

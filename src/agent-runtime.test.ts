@@ -396,16 +396,19 @@ test("assistant message boundaries preserve reasoning-tool-reasoning order", asy
 	}
 });
 
-test("writing skills keep their route while the TUI web search tool is enabled", async () => {
+test("writing skills keep their route while only the CLI-style web fetch tool is enabled", async () => {
 	const responses = [
-		deepSeekToolSseResponse("call-search", "web_search", { query: "宋代夜市 营业时间", limit: 3 }),
+		deepSeekToolSseResponse("call-fetch", "web_fetch", {
+			url: "https://example.com/song-night-market",
+			prompt: "核对营业时间",
+		}),
 		deepSeekToolSseResponse("call-submit-search", "submit_story_result", {
 			status: "completed",
-			output: "已结合检索资料给出写作建议。",
+			output: "已结合网页资料给出写作建议。",
 		}),
 		deepSeekSseResponse("完成"),
 	];
-	const searchQueries: string[] = [];
+	const fetchedUrls: string[] = [];
 	const requestPayloads: Array<Record<string, unknown>> = [];
 	let calls = 0;
 	const mockedFetch = Object.assign(
@@ -420,7 +423,7 @@ test("writing skills keep their route while the TUI web search tool is enabled",
 		const response = await runStoryAgent({
 			message: "续写夜市场景，并核对宋代夜市资料",
 			skill: "story-long-write",
-			payload: { tool_policy: { externalSearch: "allow", mutateStoryData: "propose" } },
+			payload: { web_fetch: true, tool_policy: { mutateStoryData: "propose" } },
 			model_config: {
 				provider: "openai",
 				api_base_url: "https://api.deepseek.com/v1",
@@ -428,20 +431,30 @@ test("writing skills keep their route while the TUI web search tool is enabled",
 				model: "deepseek-v4-flash",
 			},
 		}, {
-			searchWeb: async (params) => {
-				searchQueries.push(params.query);
+			fetchWeb: async (params) => {
+				fetchedUrls.push(params.url);
 				return {
-					content: [{ type: "text", text: "[1] 宋代城市夜市资料\n    https://example.test/song-night-market" }],
-					details: { response: { provider: "test", sources: [{ url: "https://example.test/song-night-market" }] } },
+					content: [{ type: "text", text: "Source: https://example.com/song-night-market\n\n夜市可营业至三更。" }],
+					details: {
+						url: params.url,
+						finalUrl: params.url,
+						status: 200,
+						contentType: "text/html",
+						bytes: 32,
+						chars: 24,
+						redirects: 0,
+						truncated: false,
+					},
 				};
 			},
 		});
 		expect(response.selected_skill).toBe("story-long-write");
-		expect(response.result.output).toBe("已结合检索资料给出写作建议。");
-		expect(searchQueries).toEqual(["宋代夜市 营业时间"]);
+		expect(response.result.output).toBe("已结合网页资料给出写作建议。");
+		expect(fetchedUrls).toEqual(["https://example.com/song-night-market"]);
 		const firstTools = Array.isArray(requestPayloads[0]?.tools) ? requestPayloads[0].tools : [];
-		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).toContain("web_search");
-		expect(JSON.stringify(requestPayloads[1]?.messages)).toContain("example.test/song-night-market");
+		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).toContain("web_fetch");
+		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).not.toContain("web_search");
+		expect(JSON.stringify(requestPayloads[1]?.messages)).toContain("夜市可营业至三更");
 	} finally {
 		fetchSpy.mockRestore();
 	}

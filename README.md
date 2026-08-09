@@ -26,7 +26,7 @@
 - 🧠 **持续作品记忆** — 六类长期事实（角色状态 / 已发生事件 / 世界规则 / 章节摘要 / 不可违背事实 / 语言习惯）自动进入写作上下文，防止长篇写崩设定
 - ✏️ **可审阅 AI 修改** — AI 改写以逐项 diff 呈现，可分别接受或拒绝并查看修改原因；应用前保留正文快照，可一键恢复
 - 🪝 **伏笔生命周期** — 登记伏笔的分类、重要性、埋入章节、计划回收与实际回收章节，未回收伏笔自动进入上下文
-- 🔍 **可选联网搜索** — 工作台 Agent 开启「联网」后先检索再回答；Tavily 优先，零配置回退 DuckDuckGo
+- 🌐 **可选网页读取** — 工作台 Agent 开启「网页」后可用 `web_fetch` 读取已知 URL 的公开原文，无需额外搜索服务或 API Key
 - 👥 **多智能体协作** — 可切换单 / 多智能体模式；协作模式由两个子 Agent 并行分析，再交给夜雨结合报告完成最终回复
 - 🔐 **双格式模型** — 支持 OpenAI 兼容与 Anthropic（Claude）两种格式，均可填自定义 Base URL 走代理
 - 💾 **可恢复 Agent 会话** — 每个作品章节可保存多个 Thread，刷新页面或切换章节后仍能恢复 Turn、Item、追问答案与执行结果
@@ -133,7 +133,7 @@ YEMU_PUBLIC_URL=https://novel.example.com ./deploy.sh start
 >
 > 1. `AUTH_SECRET` 必须设置，用于 JWT 签发与 API Key 加密
 > 2. Docker 部署使用 `YEMU_PUBLIC_URL` 同时设置允许来源与邮件公开地址
-> 3. 可选配置 `ANTHROPIC_*` / `TAVILY_API_KEY` 启用 Anthropic 默认与联网搜索
+> 3. 可选配置 `ANTHROPIC_*` 启用服务端 Anthropic 默认模型
 
 `AUTH_SECRET` 必须与数据库备份一起妥善保管并保持不变；更换后，已有登录会话会失效，数据库中已加密的用户模型 Key 也无法解密。
 
@@ -210,7 +210,8 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 | `AI_TASK_QUEUE_ENABLED` | — | 配置 Redis 时是否启用独立任务队列；默认 `true`，启用时还需要 PostgreSQL 和 worker |
 | `AI_TASK_CLAIM_IDLE_MS` | — | worker 接管失联任务前的等待时间，最小且默认 180000 ms |
 | `AI_TASK_CLAIM_INTERVAL_MS` | — | worker 扫描失联任务的间隔，最小 10000 ms、默认 30000 ms |
-| `AI_TASK_TIMEOUT_MS` | `900000` | 单个 Story Agent 任务的总时限；允许 60000–3600000 ms，超时会标记为可重试失败，不会伪装成用户取消 |
+| `AI_TASK_CLAIM_HEARTBEAT_MS` | `60000` | 长任务执行期间刷新 Redis 租约，避免健康 worker 被误判为失联；最大为 `AI_TASK_CLAIM_IDLE_MS` 的一半 |
+| `AI_TASK_TIMEOUT_MS` | `0` | 单个 Story Agent 任务的可选总时限；`0` 或留空表示像 CLI 一样只响应显式取消，正整数启用部署级毫秒上限 |
 | `ALLOW_SHARED_MODEL_KEY` | — | 是否允许用户回退服务端模型 Key；BYOK 部署保持 `false` |
 | `REGISTRATION_MODE` | — | `open` / `owner-only` / `closed`；生产默认 `owner-only` |
 | `AI_DAILY_REQUEST_LIMIT` | — | 每用户 24 小时额度；`0` 表示不限 |
@@ -224,7 +225,6 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 | `SKILL_REVIEW_TIMEOUT_MS` | — | 单次 Skill 安全审查超时，默认 45000 ms |
 | `OPENAI_*` | — | 服务端 OpenAI 默认（可被用户配置覆盖） |
 | `ANTHROPIC_*` | — | 服务端 Anthropic 默认 |
-| `TAVILY_API_KEY` | — | 联网搜索 Tavily key；留空回退 DuckDuckGo |
 
 ### Skill 市场安全审查
 
@@ -234,13 +234,13 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 
 市场采用“上传 → 模型审查 → 上架 → 用户导入 → 账号内调用”的闭环。待审查内容只有上传者可见；其他用户只能看到已通过专用模型审查的上架版本。导入记录绑定当前账号，导入后会出现在工作台 Agent 的 Skill 列表中，并以 `community-prompt-only` 模式运行。社区包中的脚本和二进制不会执行；Skill 未导入、被下架或文件完整性校验失败时，服务端会拒绝调用。
 
-## 🧠 工作台 Agent 与联网搜索
+## 🧠 工作台 Agent 与网页读取
 
 - **Agent 生命周期**：每个作品章节可保存多个持久化 `Thread`，每个 `Turn` 由消息、思考摘要、计划、工具调用、结构化追问和修改建议等 `Item` 组成。任务可在 API 进程内执行，也可通过 Redis 交给独立 worker；重新进入章节会恢复当前状态。
 - **Web 交互渲染**：浏览器通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated` 与 `item/*` 事件，不支持流式响应时自动回退轮询。计划选择、补充问题和 diff 审阅均由 Web 前端直接渲染，无需 TUI 或桌面客户端。
-- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔、作品记忆与本地文本文件；输入区可切换模型、思考强度、单 / 多智能体和联网搜索。
-- **共享 Agent 指令层**：写作、审稿、记忆和搜索工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
-- **联网搜索**：打开工作台输入区的「联网」开关后，每轮先检索再结合来源回答。配置 `TAVILY_API_KEY` 时使用 Tavily，留空则回退 DuckDuckGo；网络失败时会直接报告错误。
+- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔、作品记忆与本地文本文件；输入区可切换模型、思考强度、单 / 多智能体和网页读取。
+- **共享 Agent 指令层**：写作、审稿和记忆工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
+- **公开网页读取**：打开工作台输入区的「网页」开关后，Agent 可用 `web_fetch` 读取已知 URL 的公开 HTML、Markdown、JSON 或纯文本，无需 Tavily 等额外搜索服务。网页读取会限制响应大小并拦截 localhost、内网/保留 IP、非标准端口和二进制内容；它不提供关键词搜索。
 
 Web 端当前以「工作台」为创作入口：新建空白作品或导入本地 TXT 后，在章节右侧直接完成续写、审稿、自然化润色、资料检索和指定 Story Skill 调用。
 
@@ -303,10 +303,10 @@ Web 端当前以「工作台」为创作入口：新建空白作品或导入本�
 | 长短篇创作 | `story-long-write`、`story-short-write` |
 | 分析与趋势 | `story-long-analyze`、`story-short-analyze`、`story-long-scan`、`story-short-scan` |
 | 审稿与润色 | `story-review`、`story-deslop` |
-| 导入与检索 | `story-import`、`story-search` |
+| 导入 | `story-import` |
 | 扩展能力 | `story-cover`、`browser-cdp` |
 
-运行时当前会自动发现 15 个内置 Skill；`GET /api/ai/skills` 会根据当前用户是否已配置模型，将可用状态返回为 `ready` 或 `needs_model`。执行时通过受限读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
+运行时当前会自动发现 14 个内置 Skill；`GET /api/ai/skills` 会根据当前用户是否已配置模型，将可用状态返回为 `ready` 或 `needs_model`。执行时通过受限读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
 
 ## ✅ 验证
 

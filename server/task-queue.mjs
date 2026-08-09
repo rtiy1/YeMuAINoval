@@ -9,6 +9,20 @@ export const TASK_CANCEL_CHANNEL = 'ai-tasks:v1:cancel'
 
 let producerPromise = null
 
+export function taskClaimHeartbeatMs(claimIdleMs, value = process.env.AI_TASK_CLAIM_HEARTBEAT_MS) {
+  const idleMs = Math.max(3_000, Number(claimIdleMs) || 180_000)
+  const configured = Number(value)
+  const requested = Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : Math.floor(idleMs / 3)
+  return Math.max(1_000, Math.min(Math.floor(idleMs / 2), requested))
+}
+
+export async function refreshTaskClaim(client, consumer, messageId) {
+  const claimed = await client.xclaim(TASK_STREAM, TASK_GROUP, consumer, 0, messageId, 'JUSTID')
+  return Array.isArray(claimed) && claimed.includes(messageId)
+}
+
 export function isTaskQueueEnabled() {
   return Boolean(String(process.env.REDIS_URL || '').trim()) && process.env.AI_TASK_QUEUE_ENABLED !== 'false'
 }

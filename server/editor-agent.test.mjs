@@ -44,6 +44,10 @@ test('editor agent routes slash commands by project length', () => {
   assert.equal(resolveEditorAgentCommand('/expand', { type: '长篇' }).skill, 'story-long-write')
   assert.equal(resolveEditorAgentCommand('/shorten', { type: '短篇' }).skill, 'story-short-write')
   assert.deepEqual(
+    resolveEditorAgentCommand('/search 宋代夜市', { type: '长篇' }),
+    { skill: 'story', message: '/search 宋代夜市' },
+  )
+  assert.deepEqual(
     resolveEditorAgentCommand('/skill story-review 检查人物动机', { type: '长篇' }),
     { skill: 'story-review', message: '检查人物动机' },
   )

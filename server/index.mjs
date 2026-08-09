@@ -1427,7 +1427,7 @@ async function startWritingTask(user, body, forcedThreadId = null) {
       })
       if (activeTurn) throw Object.assign(new Error('当前 Agent 会话已有未完成轮次'), { status: 409 })
     }
-    const providerCalls = input.payload.multi_agent === true && input.skill !== 'story-search' ? 3 : 1
+    const providerCalls = input.payload.multi_agent === true ? 3 : 1
     for (let index = 0; index < providerCalls; index += 1) {
       recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-task' : 'ai-task-subagent')
     }
@@ -1455,7 +1455,7 @@ async function regenerateAgentTurn(user, threadId, turnId) {
         : '当前回复仍在生成中'), { status: 409 })
     }
     const input = structuredClone(original.input)
-    const providerCalls = input.payload?.multi_agent === true && input.skill !== 'story-search' ? 3 : 1
+    const providerCalls = input.payload?.multi_agent === true ? 3 : 1
     for (let index = 0; index < providerCalls; index += 1) {
       recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-turn-regenerate' : 'ai-turn-regenerate-subagent')
     }
@@ -1639,7 +1639,7 @@ async function steerAgentTurn(user, threadId, turnId, body) {
     }
     const firstPending = task.status === 'running' && !task.steeringHistory.some((item) => item.status === 'pending')
     if (firstPending) {
-      const providerCalls = task.input?.payload?.multi_agent === true && task.skill !== 'story-search' ? 3 : 1
+      const providerCalls = task.input?.payload?.multi_agent === true ? 3 : 1
       for (let index = 0; index < providerCalls; index += 1) {
         recordQueuedAiUsage(db, user.id, index === 0 ? 'ai-task-steer' : 'ai-task-steer-subagent')
       }
@@ -1736,7 +1736,7 @@ async function interruptWritingTask(userId, taskId) {
   return prepared.task
 }
 
-async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webSearch = false) {
+async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webFetch = false) {
   const response = await invokeStoryAgent(user, {
     message,
     skill: skill || undefined,
@@ -1744,7 +1744,7 @@ async function requestWritingAssistantTurn(user, session, message, skill = null,
       ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
       conversation: (session.messages || []).map(({ role, text }) => ({ role, text })),
       requirements: session.requirements || emptyWritingRequirements(),
-      web_search: webSearch,
+      web_fetch: webFetch,
       assistant_mode: 'guided-project-creation',
     },
   })
@@ -3005,7 +3005,7 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
     const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
     if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
-    const webSearch = req.body?.web_search === true
+    const webFetch = req.body?.web_fetch === true
 
     let session = await loadWritingSession(req.user.id)
     if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
@@ -3026,8 +3026,8 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
 
     const generated = await runWithAiQuota(
       req.user.id,
-      webSearch ? 'writing-assistant-search' : 'writing-assistant-turn',
-      () => requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webSearch),
+      webFetch ? 'writing-assistant-fetch' : 'writing-assistant-turn',
+      () => requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webFetch),
     )
     const reloaded = await loadWritingSession(req.user.id)
     if (!reloaded || reloaded.id !== session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
@@ -3750,26 +3750,32 @@ await startTaskStreamBridge().catch((error) => {
   console.error(`AI task progress bridge unavailable: ${error.message}`)
 })
 
-const interruptedTaskIds = await updateDb((db) => {
+const recoverableTasks = await updateDb((db) => {
   const timestamp = new Date().toISOString()
-  const interrupted = []
+  const recoverable = []
   for (const task of db.writingTasks) {
     if (!['queued', 'running'].includes(task.status)) continue
     if (isTaskQueueEnabled()) {
+      // Running Redis entries remain owned by their worker. The pending-entry
+      // lease will recover them if that worker actually disappeared.
+      if (task.status === 'running') continue
+      task.statusMessage = '任务等待 worker 执行'
+    } else {
+      if (task.status === 'running') task.resumeFromCheckpoint = true
       task.status = 'queued'
       task.progress = 0
-      task.statusMessage = '任务等待 worker 恢复执行'
-      interrupted.push(task.id)
-    } else {
-      task.status = 'failed'
-      task.error = '服务曾在任务执行期间重启，请重新提交任务'
-      task.statusMessage = '任务因服务重启中断'
+      task.activeExecutionId = null
+      task.statusMessage = '服务重启后正在从上次进度继续'
     }
     task.updatedAt = timestamp
+    recoverable.push({ id: task.id, userId: task.userId })
   }
-  return interrupted
+  return recoverable
 })
-for (const taskId of interruptedTaskIds) await enqueueWritingTask(taskId)
+for (const task of recoverableTasks) {
+  if (isTaskQueueEnabled()) await enqueueWritingTask(task.id)
+  else queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })
+}
 
 const server = app.listen(port, host, () => {
   const address = server.address()

@@ -709,7 +709,6 @@ export function resolveEditorAgentCommand(rawMessage, project) {
     shorten: { skill: `story-${length}-write`, message: argument ? `精简当前选区或章节：${argument}` : '精简当前选区；没有选区时精简当前章节，删除重复说明和拖沓段落，保留必要信息与情绪。' },
     analyze: { skill: `story-${length}-analyze`, message: argument || '分析当前章节的结构、人物动机和节奏。' },
     scan: { skill: `story-${length}-scan`, message: argument || '扫描当前作品的问题并给出可执行建议。' },
-    search: { skill: 'story-search', message: argument || '搜索与当前作品相关的写作资料。' },
   }
   if (command === 'skill' && rest.length > 0) {
     return { skill: rest[0], message: rest.slice(1).join(' ').trim() || `执行 ${rest[0]}` }

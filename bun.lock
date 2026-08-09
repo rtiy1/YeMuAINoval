@@ -5,6 +5,7 @@
     "": {
       "name": "yemu",
       "dependencies": {
+        "@mozilla/readability": "catalog:",
         "@vitejs/plugin-react": "latest",
         "@yemu/agent-core": "workspace:*",
         "@yemu/model-catalog": "workspace:*",
@@ -18,6 +19,7 @@
         "helmet": "latest",
         "ioredis": "^5.11.1",
         "jose": "latest",
+        "linkedom": "catalog:",
         "lucide-react": "latest",
         "pg": "^8.22.0",
         "react": "latest",
@@ -25,6 +27,8 @@
         "sherpa-onnx": "1.13.2",
         "sherpa-onnx-darwin-arm64": "1.13.3",
         "sherpa-onnx-node": "1.13.2",
+        "turndown": "catalog:",
+        "turndown-plugin-gfm": "catalog:",
         "vite": "latest",
       },
       "devDependencies": {

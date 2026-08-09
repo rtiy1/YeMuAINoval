@@ -10,6 +10,7 @@ import {
   FileSearch,
   FileText,
   FolderSearch,
+  Globe2,
   LoaderCircle,
   RotateCcw,
   ShieldAlert,
@@ -218,6 +219,7 @@ function ToolItem({ item }) {
     write_story_file: FilePlus2,
     edit_story_file: FilePenLine,
     read_story_skill: FileText,
+    web_fetch: Globe2,
   }
   const Icon = item.type === 'collabAgentToolCall'
     ? UsersRound
@@ -255,17 +257,23 @@ function ToolItem({ item }) {
 
 function ReasoningItem({ item }) {
   const text = agentReasoningText(item)
-  if (!text) return null
-  return <details className="agent-transcript-reasoning" open={item.status === 'inProgress'}>
+  const formatted = formatThinkingForDisplay(text, true)
+  if (!formatted.trim()) return null
+  const streaming = item.status === 'inProgress'
+  const maxChars = streaming ? 4_000 : 12_000
+  const displayText = formatted.length > maxChars
+    ? `…（已折叠较早思考，仅显示最近内容）…\n\n${formatted.slice(-maxChars)}`
+    : formatted
+  return <details className="agent-transcript-reasoning">
     <summary>
-      <span className={`tui-trace-symbol ${item.status === 'inProgress' ? 'running' : ''}`} aria-hidden="true">
-        {item.status === 'inProgress' ? '✻' : '◇'}
+      <span className={`tui-trace-symbol ${streaming ? 'running' : ''}`} aria-hidden="true">
+        {streaming ? '✻' : '◇'}
       </span>
-      <span>思考</span>
+      <span>{streaming ? '思考中' : '思考'}</span>
       {itemDuration(item) && <small>{itemDuration(item)}</small>}
       <ChevronRight size={12} className="agent-trace-chevron" />
     </summary>
-    <AgentMarkdown value={text} streaming={item.status === 'inProgress'} />
+    <AgentMarkdown value={displayText} streaming={streaming} />
   </details>
 }
 

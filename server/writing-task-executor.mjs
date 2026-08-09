@@ -9,13 +9,40 @@ import { publishTaskStreamEvent } from './task-stream.mjs'
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
 const messageToolHistoryLimit = 6
 const steeringHistoryLimit = 8
-const defaultWritingTaskTimeoutMs = 15 * 60 * 1000
+const maximumWritingTaskTimeoutMs = 30 * 24 * 60 * 60 * 1000
 const reasoningSegmentMaxChars = 200_000
 
 export function writingTaskTimeoutMs(value = process.env.AI_TASK_TIMEOUT_MS) {
+  if (value === undefined || value === null || String(value).trim() === '') return null
   const configured = Number(value)
-  if (!Number.isFinite(configured) || configured <= 0) return defaultWritingTaskTimeoutMs
-  return Math.min(60 * 60 * 1000, Math.max(60_000, Math.floor(configured)))
+  if (!Number.isFinite(configured) || configured <= 0) return null
+  return Math.min(maximumWritingTaskTimeoutMs, Math.max(60_000, Math.floor(configured)))
+}
+
+function resumeTaskFromCheckpoint(task) {
+  const partialOutput = typeof task.partialOutput === 'string' ? task.partialOutput : ''
+  const payload = task.input?.payload && typeof task.input.payload === 'object' ? task.input.payload : {}
+  const continuation = Array.isArray(payload.continuation_conversation) ? payload.continuation_conversation : []
+  const recoveryMessages = [
+    ...(partialOutput.trim() ? [{ role: 'assistant', text: partialOutput.slice(-12_000) }] : []),
+    {
+      role: 'user',
+      text: '系统恢复：上一次执行因 worker 退出而中断。保留已经写入的作品文件，先检查文件清单，然后从未完成处直接继续；不要重做已完成的文件，也不要道歉或重复之前的过程。',
+    },
+  ]
+  task.input = {
+    ...task.input,
+    payload: {
+      ...payload,
+      continuation_conversation: [...continuation, ...recoveryMessages].slice(-12),
+      execution_recovery: {
+        kind: 'worker_checkpoint',
+        partial_output_chars: partialOutput.length,
+      },
+    },
+  }
+  task.continuationMode = 'worker_checkpoint'
+  return partialOutput
 }
 
 function positiveInteger(value) {
@@ -186,6 +213,7 @@ const storyToolLabels = {
   read_story_skill: '读取 Story Skill',
   list_story_files: '查看作品文件',
   read_story_file: '读取作品文件',
+  web_fetch: '读取网页',
   write_story_file: '写入作品文件',
   edit_story_file: '修改作品文件',
   request_user_input: '请求补充信息',
@@ -193,7 +221,7 @@ const storyToolLabels = {
 }
 
 function storyToolLabel(event) {
-  const path = String(event?.arguments?.path || event?.details?.path || '').trim()
+  const path = String(event?.arguments?.path || event?.details?.path || event?.arguments?.url || event?.details?.finalUrl || '').trim()
   const base = storyToolLabels[event?.toolName] || `调用 ${event?.toolName || '工具'}`
   return path ? `${base} · ${path}` : base
 }
@@ -269,16 +297,23 @@ export async function executeWritingTask(taskId, {
       const user = task ? db.users.find((item) => item.id === task.userId) : null
       if (!task || !user || task.cancelRequested || (task.status !== 'queued' && !(resumeRunning && task.status === 'running'))) return null
       task.executionGeneration = Math.max(1, positiveInteger(task.executionGeneration) || 1)
-      if (resumeRunning && task.status === 'running') {
+      const recoverCheckpoint = task.resumeFromCheckpoint === true || (resumeRunning && task.status === 'running')
+      let checkpointOutput = ''
+      if (recoverCheckpoint) {
+        archiveTaskReasoning(task, { turnId: task.turnId || task.id, completedAt: new Date().toISOString() })
+        checkpointOutput = resumeTaskFromCheckpoint(task)
         finishRunningEvent(task, 'interrupted')
+      }
+      if (resumeRunning && task.status === 'running') {
         task.executionGeneration += 1
       }
+      delete task.resumeFromCheckpoint
       const executionGeneration = task.executionGeneration
       task.activeExecutionId = executionId
       task.steerRequested = false
       task.status = 'running'
       task.progress = 15
-      task.partialOutput = ''
+      task.partialOutput = checkpointOutput
       task.reasoningSummary = ''
       task.reasoningStartedAt = new Date().toISOString()
       task.reasoningCompletedAt = null
@@ -292,6 +327,7 @@ export async function executeWritingTask(taskId, {
         executionGeneration,
         interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
         subagents: Array.isArray(task.subagents) ? task.subagents : [],
+        checkpointOutput,
       }
     })
     if (!prepared) return { status: 'skipped' }
@@ -306,14 +342,13 @@ export async function executeWritingTask(taskId, {
         task.updatedAt = new Date().toISOString()
       }
     })
-    // A Story Skill can make several sequential model and file-tool turns. The old
-    // five-minute deadline covered the whole task, so healthy long-form work was
-    // routinely aborted halfway through and then mislabeled as a user cancel.
-    const signal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(writingTaskTimeoutMs()),
-    ])
-    let partialOutput = ''
+    // CLI agents are bounded by explicit cancellation, not by a fixed wall clock.
+    // Operators can still opt into a deployment-specific hard deadline.
+    const timeoutMs = writingTaskTimeoutMs()
+    const signal = timeoutMs === null
+      ? controller.signal
+      : AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)])
+    let partialOutput = prepared.checkpointOutput
     let reasoningSummary = ''
     let reasoningSegmentOrdinal = 0
     const reasoningSegments = new Map()
@@ -631,6 +666,7 @@ export async function executeWritingTask(taskId, {
         finishRunningEvent(task, 'interrupted')
         task.executionGeneration = Math.max(1, positiveInteger(task.executionGeneration) || 1) + 1
         task.activeExecutionId = null
+        task.resumeFromCheckpoint = true
         appendEvent(task, 'lifecycle', 'worker 中断，等待恢复执行', 'queued')
         task.status = 'queued'
         task.progress = 0

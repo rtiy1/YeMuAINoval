@@ -18,7 +18,6 @@ export const EDITOR_AGENT_COMMANDS = [
   command('polish', '/polish [要求]', '润色当前章节并降低 AI 味', { group: 'writing' }),
   command('analyze', '/analyze [要求]', '分析当前作品结构', { group: 'writing' }),
   command('scan', '/scan [要求]', '扫描当前作品问题', { group: 'writing' }),
-  command('search', '/search <关键词>', '联网查写作资料', { group: 'writing' }),
   command('settings', '/settings', '打开模型与上下文设置'),
   command('status', '/status', '查看模型、作品和章节状态'),
   command('context', '/context', '查看当前上下文、阈值与压缩摘要'),
