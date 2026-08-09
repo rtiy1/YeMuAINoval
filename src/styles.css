@@ -6377,29 +6377,22 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .yemu-collab-transcript .tr-root {
-  padding: 16px 14px 30px;
+  padding: 18px 18px 34px;
   scrollbar-width: thin;
   scrollbar-color: var(--tui-line) transparent;
 }
 
 .yemu-collab-transcript .tr-row {
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 0 10px;
-  padding: 7px 0;
+  display: block;
+  padding: 9px 0;
 }
 
 .yemu-collab-transcript .tr-gutter {
-  padding-top: 7px;
-  color: color-mix(in srgb, var(--tui-muted) 78%, transparent);
-  font-family: 'Noto Sans SC', sans-serif;
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0;
-  text-transform: none;
+  display: none;
 }
 
 .yemu-collab-transcript .tr-row--user {
-  margin-bottom: 5px;
+  margin-bottom: 9px;
 }
 
 .yemu-collab-transcript .tr-row--user .tr-body {
@@ -6412,27 +6405,63 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .yemu-collab-transcript .tr-row--assistant .tr-body {
-  padding-top: 2px;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.yemu-collab-transcript .tr-row--custom .tr-body,
+.yemu-collab-transcript .agent-transcript-question-inline {
+  width: 100%;
+  align-self: stretch;
+}
+
+.yemu-collab-transcript .tr-row--custom {
+  padding: 10px 0 13px;
+}
+
+.yemu-collab-transcript .agent-transcript-input {
+  width: 100%;
+  padding: 8px 0;
+  border-top: 1px solid var(--tui-line-soft);
+  border-bottom: 1px solid var(--tui-line-soft);
+}
+
+.yemu-collab-transcript .tr-row--assistant + .tr-row--assistant {
+  margin-top: 4px;
 }
 
 .yemu-collab-transcript .tr-md {
   color: var(--tui-text);
-  font-size: 11.5px;
-  line-height: 1.72;
+  font-size: 12.5px;
+  line-height: 1.82;
+}
+
+.yemu-collab-transcript .tr-md p {
+  margin: 0 0 12px;
+  white-space: normal;
+}
+
+.yemu-collab-transcript .tr-md li {
+  margin: 4px 0;
+  white-space: normal;
+}
+
+.yemu-collab-transcript .tr-md > :last-child {
+  margin-bottom: 0;
 }
 
 .yemu-collab-transcript .tr-think {
-  padding: 1px 0;
+  padding: 3px 0;
 }
 
 .yemu-collab-transcript .tr-think-head {
-  min-height: 26px;
+  min-height: 28px;
   padding: 0;
   color: var(--tui-muted);
   background: transparent;
   border: 0;
   border-radius: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
 }
 
@@ -6458,9 +6487,9 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .yemu-collab-transcript .tv-head {
-  min-height: 26px;
-  padding: 3px 0;
-  gap: 7px;
+  min-height: 30px;
+  padding: 5px 0;
+  gap: 8px;
 }
 
 .yemu-collab-transcript .tv-head:hover {
@@ -6486,7 +6515,7 @@ details[open] > summary .agent-trace-chevron {
 
 .yemu-collab-transcript .tv-name {
   color: var(--tui-muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: .04em;
 }
@@ -6494,7 +6523,8 @@ details[open] > summary .agent-trace-chevron {
 .yemu-collab-transcript .tv-sum {
   color: var(--tui-muted);
   font-family: 'Noto Sans SC', sans-serif;
-  font-size: 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
 }
 
 .yemu-collab-transcript .tv-body,
@@ -7446,6 +7476,14 @@ details[open] > summary .agent-trace-chevron {
 
   .editor-page .tui-agent-shell .agent-conversation {
     padding: 18px 15px 28px;
+  }
+
+  .editor-page .tui-agent-shell .agent-conversation.collab-native {
+    padding: 0;
+  }
+
+  .editor-page .tui-agent-shell .yemu-collab-transcript .tr-root {
+    padding: 16px 16px 30px;
   }
 
   .editor-page .tui-agent-shell .agent-composer-wrap {

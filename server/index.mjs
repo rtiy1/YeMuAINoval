@@ -2407,6 +2407,9 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
   let lastPlanVersion = ''
   let lastOutputLength = 0
   let outputItemStarted = false
+  let segmentedOutput = (initialTask.events || []).some((event) => event?.type === 'output'
+    && event?.meta?.outputSegment === true
+    && Math.max(1, Number(event?.meta?.interactionAttempt) || 1) === Math.max(1, Number(initialTask.interactionAttempt) || 1))
   let lastReasoningLength = 0
   let reasoningItemStarted = false
   let reasoningItemCompleted = false
@@ -2522,6 +2525,52 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       }
       return true
     }
+    if (event.type === 'output_event' && event.itemId) {
+      segmentedOutput = true
+      const planMode = initialTask.input?.payload?.collaboration_mode === 'plan'
+      const outputItemType = planMode ? 'plan' : 'agentMessage'
+      const baseItem = {
+        id: event.itemId,
+        type: outputItemType,
+        status: event.status || (event.phase === 'end' ? 'completed' : 'inProgress'),
+        content: [{ type: 'outputText', text: event.phase === 'end' ? event.text || '' : '' }],
+        meta: {
+          outputSegment: true,
+          messageId: event.messageId || null,
+          interactionAttempt,
+        },
+        ...(event.completedAt ? { completedAt: event.completedAt } : {}),
+      }
+      if (event.phase === 'start') {
+        res.write(`event: item/started\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: baseItem,
+        })}\n\n`)
+        return true
+      }
+      if (event.phase === 'delta' && typeof event.delta === 'string' && event.delta) {
+        lastOutputLength += event.delta.length
+        const deltaEvent = planMode ? 'item/plan/delta' : 'item/agentMessage/delta'
+        res.write(`event: ${deltaEvent}\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          itemId: event.itemId,
+          delta: event.delta,
+        })}\n\n`)
+        return true
+      }
+      if (event.phase === 'end') {
+        res.write(`event: item/completed\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item: baseItem,
+        })}\n\n`)
+        itemVersions.set(baseItem.id, `${baseItem.status}:${baseItem.completedAt || ''}:${JSON.stringify(baseItem.meta)}`)
+        return true
+      }
+      return true
+    }
     if (event.type === 'reasoning_delta' && typeof event.delta === 'string' && event.delta) {
       if (segmentedReasoning) return true
       const room = Math.max(0, 12_000 - lastReasoningLength)
@@ -2559,6 +2608,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
       return true
     }
     if (event.type === 'output_delta' && typeof event.delta === 'string' && event.delta) {
+      if (segmentedOutput) return true
       const itemId = `${initialTurn.id}:agent:${interactionAttempt}`
       const planMode = initialTask.input?.payload?.collaboration_mode === 'plan'
       const outputItemType = planMode ? 'plan' : 'agentMessage'
@@ -2674,6 +2724,9 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         }
         lastOutputLength = 0
         outputItemStarted = false
+        segmentedOutput = (task.events || []).some((event) => event?.type === 'output'
+          && event?.meta?.outputSegment === true
+          && Math.max(1, Number(event?.meta?.interactionAttempt) || 1) === interactionAttempt)
         lastReasoningLength = 0
         reasoningItemStarted = false
         reasoningItemCompleted = false
@@ -2750,7 +2803,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           },
         })}\n\n`)
       }
-      if (partialOutput.length > lastOutputLength) {
+      if (!segmentedOutput && partialOutput.length > lastOutputLength) {
         const delta = partialOutput.slice(lastOutputLength)
         lastOutputLength = partialOutput.length
         const planMode = task.input?.payload?.collaboration_mode === 'plan'

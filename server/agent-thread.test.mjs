@@ -324,6 +324,72 @@ test('turn items preserve TUI reasoning-tool-reasoning order', () => {
   )
 })
 
+test('turn items preserve output-question-output-question chronology across continuations', () => {
+  const items = agentTurnItems(
+    { id: 'turn-inline-input', taskId: 'task-inline-input', message: '一起设计故事', createdAt: '2026-01-01T00:00:00.000Z' },
+    {
+      id: 'task-inline-input',
+      turnId: 'turn-inline-input',
+      status: 'waiting_input',
+      interactionAttempt: 2,
+      events: [
+        {
+          id: 'turn-inline-input:agent:1:1',
+          type: 'output',
+          status: 'completed',
+          meta: { outputSegment: true, interactionAttempt: 1, text: '先确认主角身份。' },
+          startedAt: '2026-01-01T00:00:01.000Z',
+          completedAt: '2026-01-01T00:00:01.500Z',
+        },
+        {
+          id: 'turn-inline-input:agent:2:1',
+          type: 'output',
+          status: 'completed',
+          meta: { outputSegment: true, interactionAttempt: 2, text: '身份确定，再确认力量方向。' },
+          startedAt: '2026-01-01T00:00:04.000Z',
+          completedAt: '2026-01-01T00:00:04.500Z',
+        },
+      ],
+      input: {
+        payload: {
+          request_user_input_history: [{
+            requestId: 'request-identity',
+            interactionAttempt: 1,
+            questions: [{ id: 'identity', question: '选择主角身份？', options: [{ label: '原创角色' }] }],
+            response: { answers: { identity: { answers: ['原创角色'] } }, answerText: '主角身份：原创角色' },
+            requestedAt: '2026-01-01T00:00:02.000Z',
+            resolvedAt: '2026-01-01T00:00:03.000Z',
+          }],
+        },
+      },
+      result: {
+        status: 'needs_input',
+        result: {
+          question: {
+            requestId: 'request-power',
+            questions: [{ id: 'power', question: '选择力量方向？', options: [{ label: '忍术' }] }],
+          },
+        },
+      },
+      inputRequestStartedAt: '2026-01-01T00:00:05.000Z',
+      updatedAt: '2026-01-01T00:00:05.000Z',
+    },
+  )
+  assert.deepEqual(
+    items
+      .filter((item) => ['agentMessage', 'requestUserInput', 'userMessage'].includes(item.type))
+      .map((item) => item.id),
+    [
+      'turn-inline-input:user',
+      'turn-inline-input:agent:1:1',
+      'request-identity',
+      'request-identity:answer',
+      'turn-inline-input:agent:2:1',
+      'request-power',
+    ],
+  )
+})
+
 test('normalization keeps private steer idempotency without exposing it', () => {
   const db = {
     agentThreads: [],

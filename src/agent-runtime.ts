@@ -263,7 +263,7 @@ export interface StoryAgentResponse {
 }
 
 export interface StoryAgentCallbacks {
-	onDelta?: (delta: string) => void | Promise<void>;
+	onDelta?: (delta: string, context: StoryOutputContext) => void | Promise<void>;
 	onReasoningDelta?: (delta: string, context: StoryReasoningContext) => void | Promise<void>;
 	onAssistantMessageEvent?: (event: StoryAssistantMessageEvent) => void | Promise<void>;
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
@@ -271,6 +271,10 @@ export interface StoryAgentCallbacks {
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
 	signal?: AbortSignal;
+}
+
+export interface StoryOutputContext {
+	messageId: string;
 }
 
 export interface StoryReasoningContext {
@@ -1330,7 +1334,13 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 		if (event.type === "message_update") {
 			const update = event.assistantMessageEvent;
 			if (update.type === "text_delta") {
-				callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onDelta, update.delta);
+				const messageId = activeAssistantMessageId ?? `assistant-${Math.max(1, assistantMessageOrdinal)}`;
+				callbackQueue = enqueueCallback(
+					callbackQueue,
+					request.callbacks?.onDelta,
+					update.delta,
+					{ messageId },
+				);
 			}
 			if (update.type === "thinking_delta") {
 				const messageId = activeAssistantMessageId ?? `assistant-${Math.max(1, assistantMessageOrdinal)}`;

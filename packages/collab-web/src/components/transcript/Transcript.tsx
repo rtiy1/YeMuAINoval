@@ -1,4 +1,11 @@
-import type { AssistantMessage, ImageContent, SessionEntry, TextContent, ToolResultMessage } from "@yemu/wire";
+import type {
+	AssistantMessage,
+	CustomMessageEntry,
+	ImageContent,
+	SessionEntry,
+	TextContent,
+	ToolResultMessage,
+} from "@yemu/wire";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +27,8 @@ export interface TranscriptProps {
 	host?: ToolRenderHost;
 	userLabel?: string;
 	agentLabel?: string;
+	/** Product-specific timeline rows, such as an inline approval or question. */
+	renderCustomMessage?: (entry: CustomMessageEntry) => ReactNode;
 }
 
 function Row({
@@ -150,6 +159,7 @@ interface EntryRowProps {
 	host?: ToolRenderHost;
 	userLabel: string;
 	agentLabel: string;
+	renderCustomMessage?: (entry: CustomMessageEntry) => ReactNode;
 }
 
 /** Re-render only when the entry itself or one of its tool pairings changed. */
@@ -158,7 +168,8 @@ function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
 		prev.entry !== next.entry ||
 		prev.host !== next.host ||
 		prev.userLabel !== next.userLabel ||
-		prev.agentLabel !== next.agentLabel
+		prev.agentLabel !== next.agentLabel ||
+		prev.renderCustomMessage !== next.renderCustomMessage
 	)
 		return false;
 	const e = next.entry;
@@ -178,6 +189,7 @@ const EntryRow = memo(function EntryRow({
 	host,
 	userLabel,
 	agentLabel,
+	renderCustomMessage,
 }: EntryRowProps): ReactNode {
 	switch (entry.type) {
 		case "message": {
@@ -216,6 +228,14 @@ const EntryRow = memo(function EntryRow({
 				);
 			}
 			if (!entry.display) return null;
+			const rendered = renderCustomMessage?.(entry);
+			if (rendered !== undefined && rendered !== null) {
+				return (
+					<Row kind="custom" gutter="" title={entry.timestamp}>
+						{rendered}
+					</Row>
+				);
+			}
 			return (
 				<Row kind="custom" gutter="" title={entry.timestamp}>
 					<div className="tr-custom">
@@ -266,6 +286,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 		host,
 		userLabel = "host",
 		agentLabel = "agent",
+		renderCustomMessage,
 	} = props;
 
 	const results = useMemo(() => {
@@ -326,6 +347,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					host={host}
 					userLabel={userLabel}
 					agentLabel={agentLabel}
+					renderCustomMessage={renderCustomMessage}
 				/>
 			))}
 			{stream !== null && (

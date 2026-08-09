@@ -3464,16 +3464,18 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     assistantTurnIdRef.current = turnId
     setAssistantRunning(true)
     setAssistantElapsedMs(0)
-    setAssistantMessages((current) => current.flatMap((item) => item.id === requestId
-      ? [{
-        id: `${requestId}-answer-${Date.now()}`,
-        role: 'user',
-        text: answer,
-      }, {
+    const answeredAt = new Date().toISOString()
+    setAssistantMessages((current) => current.map((item) => item.id === requestId
+      ? {
         ...item,
         status: 'running',
         response: null,
         text: '',
+        items: (item.items || []).map((timelineItem) => (
+          timelineItem.type === 'requestUserInput' && timelineItem.status === 'inProgress'
+            ? { ...timelineItem, status: 'completed', response: answers, completedAt: answeredAt }
+            : timelineItem
+        )),
         reasoningHistory: item.reasoningSummary
           ? [...(item.reasoningHistory || []), {
             id: `${turnId}:reasoning:${Math.max(1, Number(item.reasoningHistory?.length || 0) + 1)}`,
@@ -3482,8 +3484,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           : item.reasoningHistory || [],
         reasoningSummary: '',
         durationMs: 0,
-      }]
-      : [item]))
+      }
+      : item))
     const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
     try {
       const resumed = await api.answerAgentTurn(threadId, turnId, answers, { signal: controller.signal })
@@ -4398,7 +4400,13 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <button onClick={(event) => submitAssistant(event, '/polish 保留作者语气，降低模板感')}><code>/polish</code><span>保留语气并自然化润色</span><kbd>↵</kbd></button>
                 </div>
               </div>}
-              {assistantMessages.length > 0 && <YemuAssistantTranscript messages={assistantMessages} assistantName={ASSISTANT_NAME} working={assistantRunning} />}
+              {assistantMessages.length > 0 && <YemuAssistantTranscript
+                messages={assistantMessages}
+                assistantName={ASSISTANT_NAME}
+                working={assistantRunning}
+                choiceDisabled={assistantRunning || assistantLoading}
+                onChoose={(run, reply) => submitAssistantAnswer(run, reply)}
+              />}
             </div>
             {latestAgentRun && <div className="agent-native-controls"><AgentEditorTurn
               key={`${latestAgentRun.id}:controls`}

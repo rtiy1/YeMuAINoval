@@ -25,6 +25,7 @@ import {
   agentReasoningText,
   buildAgentTurnView,
   formatAgentDuration,
+  normalizeStructuredAgentQuestion,
   segmentAgentTurnItems,
 } from './editor-agent.mjs'
 import {
@@ -63,10 +64,23 @@ function itemDuration(item) {
 
 function itemResponse(item) {
   if (!item?.response || typeof item.response !== 'object') return ''
-  return Object.values(item.response)
-    .flatMap((value) => Array.isArray(value) ? value : [value])
-    .filter((value) => typeof value === 'string' && value.trim())
-    .join('；')
+  const values = []
+  const collect = (value) => {
+    if (typeof value === 'string' && value.trim()) {
+      values.push(value.trim())
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach(collect)
+      return
+    }
+    if (value && typeof value === 'object') {
+      if (Object.hasOwn(value, 'answers')) collect(value.answers)
+      else Object.values(value).forEach(collect)
+    }
+  }
+  collect(item.response)
+  return [...new Set(values)].join('；')
 }
 
 function tuiAssistantMessage(run, items, { includeFallback = false, terminal = false } = {}) {
@@ -125,7 +139,13 @@ function tuiToolResult(item) {
   }
 }
 
-export function YemuAssistantTranscript({ messages, assistantName, working = false }) {
+export function YemuAssistantTranscript({
+  messages,
+  assistantName,
+  working = false,
+  choiceDisabled = false,
+  onChoose,
+}) {
   const entries = []
   const activeTools = new Map()
   let stream = null
@@ -145,6 +165,25 @@ export function YemuAssistantTranscript({ messages, assistantName, working = fal
     const segments = segmentAgentTurnItems(items)
     if (!segments.length && view.answerText) segments.push([])
     for (const [index, segment] of segments.entries()) {
+      const inputItem = segment.length === 1 && segment[0].type === 'requestUserInput'
+        ? segment[0]
+        : null
+      if (inputItem) {
+        entries.push({
+          id: `${message.id}:input:${inputItem.id}`,
+          type: 'custom_message',
+          customType: 'request-user-input',
+          content: '',
+          display: true,
+          timestamp: inputItem.createdAt || inputItem.completedAt || null,
+          details: {
+            item: inputItem,
+            prompt: normalizeStructuredAgentQuestion({ questions: inputItem.questions }),
+            run: message,
+          },
+        })
+        continue
+      }
       const last = index === segments.length - 1
       const assistantMessage = tuiAssistantMessage(message, segment, {
         includeFallback: last && segment.length === 0,
@@ -184,6 +223,21 @@ export function YemuAssistantTranscript({ messages, assistantName, working = fal
       working={working}
       userLabel="你"
       agentLabel={assistantName || '夜雨'}
+      renderCustomMessage={(entry) => {
+        if (entry.customType !== 'request-user-input') return null
+        const details = entry.details && typeof entry.details === 'object' ? entry.details : {}
+        const inputItem = details.item
+        if (!inputItem || typeof inputItem !== 'object') return null
+        if (inputItem.status !== 'inProgress') return <CompletedInputItem item={inputItem} />
+        if (!details.prompt) return null
+        return <section className="agent-transcript-question agent-transcript-question-inline" data-item-type={inputItem.type}>
+          <AgentChoicePrompt
+            prompt={details.prompt}
+            disabled={choiceDisabled || !onChoose}
+            onChoose={(reply) => onChoose?.(details.run, reply)}
+          />
+        </section>
+      }}
     />
   </div>
 }
@@ -420,9 +474,6 @@ export function AgentEditorTurn({
       </section>}
     </div>}
 
-    {controlsOnly && view.choicePrompt && <section className="agent-transcript-question" data-item-type="requestUserInput">
-      <AgentChoicePrompt prompt={view.choicePrompt} disabled={choiceDisabled} onChoose={onChoose} />
-    </section>}
     {controlsOnly && view.suggestedChoicePrompt && onFollowup && <section className="agent-transcript-question agent-suggested-followup" data-item-type="suggestedFollowup">
       <AgentChoicePrompt prompt={view.suggestedChoicePrompt} disabled={choiceDisabled} onChoose={onFollowup} variant="followup" />
     </section>}

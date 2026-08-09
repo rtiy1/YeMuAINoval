@@ -408,6 +408,25 @@ test('editor agent segments reasoning and tools like the native TUI timeline', (
   )
 })
 
+test('editor agent keeps output and request cards in one chronological timeline', () => {
+  const items = [
+    { id: 'output-1', type: 'agentMessage' },
+    { id: 'request-1', type: 'requestUserInput', status: 'completed' },
+    { id: 'answer-1', type: 'userMessage' },
+    { id: 'output-2', type: 'agentMessage' },
+    { id: 'request-2', type: 'requestUserInput', status: 'inProgress' },
+  ]
+  assert.deepEqual(
+    segmentAgentTurnItems(items).map((segment) => segment.map((item) => item.id)),
+    [
+      ['output-1'],
+      ['request-1'],
+      ['output-2'],
+      ['request-2'],
+    ],
+  )
+})
+
 test('editor agent compacts repeated execution cycles and drops queue noise', () => {
   const compacted = compactAgentEvents([
     { id: 'queued', type: 'lifecycle', label: '任务已排队', status: 'completed' },
@@ -557,11 +576,10 @@ test('editor agent restores resolved answers and all reasoning summaries', () =>
       },
     }],
   })
-  assert.deepEqual(messages.map((item) => item.role), ['user', 'user', 'agent'])
-  assert.equal(messages[1].text, '题材：规则怪谈')
-  assert.equal(messages[2].reasoningHistory[0].summary, '先确认题材。')
-  assert.equal(messages[2].reasoningSummary, '根据题材完成设计。')
-  assert.equal(messages[2].usage.total_tokens, 170)
+  assert.deepEqual(messages.map((item) => item.role), ['user', 'agent'])
+  assert.equal(messages[1].reasoningHistory[0].summary, '先确认题材。')
+  assert.equal(messages[1].reasoningSummary, '根据题材完成设计。')
+  assert.equal(messages[1].usage.total_tokens, 170)
 })
 
 test('editor agent maps in-progress and interrupted items to timeline events', () => {

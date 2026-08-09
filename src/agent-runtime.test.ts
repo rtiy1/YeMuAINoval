@@ -305,6 +305,7 @@ test("reasoning-only length stops automatically continue to a visible answer", a
 	];
 	const reasoningDeltas: string[] = [];
 	const textDeltas: string[] = [];
+	const textMessageIds: string[] = [];
 	const payloads: Array<Record<string, unknown>> = [];
 	let calls = 0;
 	const mockedFetch = Object.assign(
@@ -329,12 +330,16 @@ test("reasoning-only length stops automatically continue to a visible answer", a
 			},
 		}, {
 			onReasoningDelta: (delta) => reasoningDeltas.push(delta),
-			onDelta: (delta) => textDeltas.push(delta),
+			onDelta: (delta, context) => {
+				textDeltas.push(delta);
+				textMessageIds.push(context.messageId);
+			},
 		});
 
 		expect(calls).toBe(2);
 		expect(reasoningDeltas.join("")).toContain("这一轮的额度只够思考");
 		expect(textDeltas.join("")).toBe("这是自动续跑后提交的最终答复。");
+		expect(textMessageIds).toEqual(["assistant-2"]);
 		expect(response.result.output).toBe("这是自动续跑后提交的最终答复。");
 		expect(payloads[1]?.reasoning_effort).toBe("high");
 		const recoveryMessages = payloads[1]?.messages;

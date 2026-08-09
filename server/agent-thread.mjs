@@ -552,6 +552,21 @@ export function agentTurnItems(turn, task) {
       })
       continue
     }
+    if (event.type === 'output') {
+      const outputText = typeof event.meta?.text === 'string' ? event.meta.text : ''
+      if (outputText.trim()) {
+        items.push({
+          id: event.id,
+          type: task?.input?.payload?.collaboration_mode === 'plan' ? 'plan' : 'agentMessage',
+          status: itemStatus(event.status),
+          content: [{ type: 'outputText', text: outputText }],
+          meta: event.meta || {},
+          createdAt: event.startedAt || task.createdAt || null,
+          completedAt: event.completedAt || null,
+        })
+      }
+      continue
+    }
     const dynamicTool = event.type === 'tool'
     items.push({
       id: event.id,
@@ -637,16 +652,35 @@ export function agentTurnItems(turn, task) {
   if (TERMINAL_TASK_STATUSES.has(task?.status)) {
     const planMode = task?.input?.payload?.collaboration_mode === 'plan'
     const interactionAttempt = Math.max(1, positiveInteger(task?.interactionAttempt) || 1)
-    items.push({
-      id: `${turn.id}:agent:${interactionAttempt}`,
-      type: planMode ? 'plan' : 'agentMessage',
-      status: itemStatus(task.status),
-      content: [{ type: 'outputText', text: taskResultText(task) || task.statusMessage || '' }],
-      createdAt: task.updatedAt || null,
-      completedAt: task.updatedAt || null,
-    })
+    const finalText = taskResultText(task) || task.statusMessage || ''
+    const segmentedText = items
+      .filter((item) => ['agentMessage', 'plan'].includes(item.type)
+        && Math.max(1, positiveInteger(item.meta?.interactionAttempt) || 1) === interactionAttempt)
+      .map((item) => item.content?.[0]?.text || '')
+      .join('')
+    if (finalText && !segmentedText.includes(finalText)) {
+      items.push({
+        id: `${turn.id}:agent:${interactionAttempt}`,
+        type: planMode ? 'plan' : 'agentMessage',
+        status: itemStatus(task.status),
+        content: [{ type: 'outputText', text: finalText }],
+        meta: { interactionAttempt },
+        createdAt: task.updatedAt || null,
+        completedAt: task.updatedAt || null,
+      })
+    }
   }
-  return items
+  const [initialUserItem, ...timelineItems] = items
+  const sortedTimeline = timelineItems
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.item.createdAt || left.item.completedAt || '')
+      const rightTime = Date.parse(right.item.createdAt || right.item.completedAt || '')
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime
+      return left.index - right.index
+    })
+    .map(({ item }) => item)
+  return initialUserItem ? [initialUserItem, ...sortedTimeline] : sortedTimeline
 }
 
 export function agentTurnPublic(thread, turn, task, taskPublic) {

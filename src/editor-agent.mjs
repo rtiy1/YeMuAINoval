@@ -527,7 +527,11 @@ export function segmentAgentTurnItems(value) {
       current.push(item)
       continue
     }
-    if (item.type === 'requestUserInput') flush()
+    if (item.type === 'requestUserInput') {
+      flush()
+      current.push(item)
+      flush()
+    }
   }
   flush()
   return segments
@@ -791,17 +795,6 @@ export function agentThreadMessages(thread) {
         events: agentTurnEvents(turn),
       })
       continue
-    }
-    for (const [historyIndex, exchange] of (task.inputHistory || []).entries()) {
-      const answerText = String(exchange?.response?.answerText || '').trim()
-      if (!answerText) continue
-      messages.push({
-        id: `${turn.id}-answer-${exchange.requestId || historyIndex + 1}`,
-        role: 'user',
-        text: answerText,
-        turnId: turn.id,
-        requestId: exchange.requestId || null,
-      })
     }
     const completed = task.status === 'completed'
     messages.push({

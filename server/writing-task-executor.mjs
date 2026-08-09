@@ -11,6 +11,7 @@ const messageToolHistoryLimit = 6
 const steeringHistoryLimit = 8
 const maximumWritingTaskTimeoutMs = 30 * 24 * 60 * 60 * 1000
 const reasoningSegmentMaxChars = 200_000
+const outputSegmentMaxChars = 200_000
 
 export function writingTaskTimeoutMs(value = process.env.AI_TASK_TIMEOUT_MS) {
   if (value === undefined || value === null || String(value).trim() === '') return null
@@ -247,6 +248,7 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
     const meta = {
       ...(existing?.meta || {}),
       toolName: event.toolName,
+      interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
       arguments: Object.keys(argumentsValue).length ? argumentsValue : existing?.meta?.arguments || {},
       ...(Object.keys(details).length ? { details } : {}),
       ...(event.isError ? { error: '工具执行失败' } : {}),
@@ -367,6 +369,8 @@ export async function executeWritingTask(taskId, {
     let reasoningSummary = ''
     let reasoningSegmentOrdinal = 0
     const reasoningSegments = new Map()
+    let outputSegmentOrdinal = 0
+    const outputSegments = new Map()
     let checkpointTimer = null
     let checkpointDirty = false
     let checkpointQueue = Promise.resolve()
@@ -381,6 +385,10 @@ export async function executeWritingTask(taskId, {
         ...segment,
         meta: { ...segment.meta },
       }))
+      const outputSegmentSnapshots = [...outputSegments.values()].map((segment) => ({
+        ...segment,
+        meta: { ...segment.meta },
+      }))
       checkpointQueue = checkpointQueue.then(() => updateDb((db) => {
         const task = db.writingTasks.find((item) => item.id === taskId)
         if (!task || task.status !== 'running' || task.cancelRequested
@@ -389,6 +397,11 @@ export async function executeWritingTask(taskId, {
         task.reasoningSummary = reasoningSnapshot
         task.events ||= []
         for (const segment of reasoningSegmentSnapshots) {
+          const existing = task.events.find((event) => event.id === segment.id)
+          if (existing) Object.assign(existing, segment)
+          else task.events.push(segment)
+        }
+        for (const segment of outputSegmentSnapshots) {
           const existing = task.events.find((event) => event.id === segment.id)
           if (existing) Object.assign(existing, segment)
           else task.events.push(segment)
@@ -439,6 +452,55 @@ export async function executeWritingTask(taskId, {
       })
       return segment
     }
+    const ensureOutputSegment = (messageId) => {
+      const key = String(messageId || `assistant-${outputSegmentOrdinal + 1}`)
+      const existing = outputSegments.get(key)
+      if (existing) return existing
+      outputSegmentOrdinal += 1
+      const timestamp = new Date().toISOString()
+      const segment = {
+        id: `${prepared.turnId}:agent:${prepared.interactionAttempt}:${outputSegmentOrdinal}`,
+        type: 'output',
+        label: '模型回复',
+        status: 'running',
+        meta: {
+          outputSegment: true,
+          messageId: key,
+          interactionAttempt: prepared.interactionAttempt,
+          text: '',
+        },
+        startedAt: timestamp,
+      }
+      outputSegments.set(key, segment)
+      publishTaskStreamEvent(taskId, {
+        type: 'output_event',
+        phase: 'start',
+        itemId: segment.id,
+        messageId: key,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
+      })
+      return segment
+    }
+    const flushOutputSegment = (delta, context = {}) => {
+      const segment = ensureOutputSegment(context.messageId)
+      const previousLength = segment.meta.text.length
+      segment.meta.text = `${segment.meta.text}${delta}`.slice(0, outputSegmentMaxChars)
+      const acceptedDelta = segment.meta.text.slice(previousLength)
+      partialOutput += acceptedDelta
+      if (acceptedDelta) {
+        publishTaskStreamEvent(taskId, {
+          type: 'output_event',
+          phase: 'delta',
+          itemId: segment.id,
+          messageId: segment.meta.messageId,
+          delta: acceptedDelta,
+          interactionAttempt: prepared.interactionAttempt,
+          executionGeneration: prepared.executionGeneration,
+        })
+      }
+      scheduleCheckpoint()
+    }
     const flushReasoningSummary = (delta, context = {}) => {
       const segment = ensureReasoningSegment(context.messageId)
       const previousLength = segment.meta.summary.length
@@ -478,6 +540,31 @@ export async function executeWritingTask(taskId, {
       })
       scheduleCheckpoint()
       await flushCheckpoint()
+    }
+    const completeOutputSegment = async (event) => {
+      const segment = outputSegments.get(String(event?.messageId || ''))
+      if (!segment || segment.status !== 'running') return
+      const timestamp = new Date().toISOString()
+      segment.status = event?.stopReason === 'aborted' ? 'interrupted' : event?.stopReason === 'error' ? 'failed' : 'completed'
+      segment.completedAt = timestamp
+      segment.meta.stopReason = event?.stopReason || 'stop'
+      publishTaskStreamEvent(taskId, {
+        type: 'output_event',
+        phase: 'end',
+        itemId: segment.id,
+        messageId: segment.meta.messageId,
+        status: segment.status,
+        text: segment.meta.text,
+        completedAt: timestamp,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
+      })
+      scheduleCheckpoint()
+      await flushCheckpoint()
+    }
+    const completeAssistantMessageSegments = async (event) => {
+      await completeReasoningSegment(event)
+      await completeOutputSegment(event)
     }
     let delegates = prepared.subagents
     const reusableDelegates = delegates.length > 0
@@ -525,16 +612,7 @@ export async function executeWritingTask(taskId, {
         ...(reports.length ? { _agent_reports: reports } : {}),
       },
     }
-    const result = await invokeStoryAgent(prepared.user, executionInput, signal, (delta) => {
-      partialOutput += delta
-      publishTaskStreamEvent(taskId, {
-        type: 'output_delta',
-        delta,
-        interactionAttempt: prepared.interactionAttempt,
-        executionGeneration: prepared.executionGeneration,
-      })
-      scheduleCheckpoint()
-    }, flushReasoningSummary, async (event) => {
+    const result = await invokeStoryAgent(prepared.user, executionInput, signal, flushOutputSegment, flushReasoningSummary, async (event) => {
       if (event?.phase === 'start') {
         for (const segment of reasoningSegments.values()) {
           if (segment.status === 'running') {
@@ -548,7 +626,7 @@ export async function executeWritingTask(taskId, {
         prepared.executionGeneration,
         event,
       )
-    }, completeReasoningSegment)
+    }, completeAssistantMessageSegments)
     await flushCheckpoint()
     const privateContinuation = responseContinuation(result)
     const resultContinuationMode = continuationMode(result, privateContinuation)
