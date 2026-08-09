@@ -19,6 +19,7 @@ import {
   reconcileAgentTurnItems,
   resolveEditorAgentCommand,
   segmentAgentTurnItems,
+  shouldShowAgentDiff,
   waitForAgentPoll,
 } from '../src/editor-agent.mjs'
 
@@ -58,6 +59,13 @@ test('editor agent distinguishes review tasks from reviewable edits', () => {
   assert.equal(isEditorAgentEdit('扫描作品问题', 'story-long-scan'), false)
   assert.equal(isEditorAgentEdit('保持语气并续写', 'story-long-write'), true)
   assert.equal(isEditorAgentEdit('自然化处理', 'story-deslop'), true)
+})
+
+test('editor agent hides duplicate apply-to-draft cards for artifact mutations', () => {
+  const view = { outputText: '新正文', originalText: '旧正文' }
+  assert.equal(shouldShowAgentDiff({ editRequested: true }, view), true)
+  assert.equal(shouldShowAgentDiff({ editRequested: true, artifactPreview: { documents: 1 } }, view), false)
+  assert.equal(shouldShowAgentDiff({ editRequested: true, artifactApplication: { applied: true } }, view), false)
 })
 
 test('editor agent renders structured result summaries', () => {

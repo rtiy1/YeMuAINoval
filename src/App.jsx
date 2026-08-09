@@ -105,6 +105,7 @@ import { AgentEditorTurn, YemuAssistantTranscript } from './agent-editor.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
 import { canReplaceActiveDraft, shouldRefreshActiveDraft } from './artifact-sync.mjs'
 import { resolveModelIcon } from './model-icons.mjs'
+import { recordsWithoutProject } from './project-records.mjs'
 import {
   saveTextDocument,
   sendAgentNotification,
@@ -1092,7 +1093,9 @@ function App() {
       await api.deleteProject(project.id)
       const remaining = projects.filter((p) => p.id !== project.id)
       setProjects(remaining)
-      setForeshadows((current) => current.filter((item) => item.projectId !== project.id))
+      setIdeas((current) => recordsWithoutProject(current, project.id))
+      setForeshadows((current) => recordsWithoutProject(current, project.id))
+      setStoryMemories((current) => recordsWithoutProject(current, project.id))
       if (activeProject?.id === project.id) {
         setActiveProject(remaining[0] || null)
         setActiveChapterId(null)

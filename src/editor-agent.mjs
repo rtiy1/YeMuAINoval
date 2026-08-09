@@ -618,6 +618,13 @@ export function buildAgentTurnView(run) {
   }
 }
 
+export function shouldShowAgentDiff(run, view) {
+  return run?.editRequested === true
+    && Boolean(view?.outputText && view?.originalText)
+    && !run?.artifactPreview
+    && run?.artifactApplication?.applied !== true
+}
+
 export function applyAgentItemStreamEvent(items, event, payload) {
   const current = Array.isArray(items) ? items.filter(Boolean) : []
   if (['item/started', 'item/completed'].includes(event) && payload?.item?.id) {

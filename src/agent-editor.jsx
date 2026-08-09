@@ -27,6 +27,7 @@ import {
   formatAgentDuration,
   normalizeStructuredAgentQuestion,
   segmentAgentTurnItems,
+  shouldShowAgentDiff,
 } from './editor-agent.mjs'
 import {
   AgentChoicePrompt,
@@ -417,7 +418,7 @@ export function AgentEditorTurn({
     status: run.status === 'running' ? 'inProgress' : 'completed',
     content: [{ type: 'outputText', text: view.answerText }],
   }
-  const showDiff = run.editRequested && view.outputText && view.originalText
+  const showDiff = shouldShowAgentDiff(run, view)
   const [hunks, setHunks] = useState(() => (
     showDiff ? buildEditHunks(view.originalText, view.outputText, view.proposal?.blocks || []) : []
   ))
