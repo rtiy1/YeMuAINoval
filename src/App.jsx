@@ -103,6 +103,7 @@ import {
 } from './editor-agent.mjs'
 import { AgentEditorTurn, YemuAssistantTranscript } from './agent-editor.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
+import { canReplaceActiveDraft, shouldRefreshActiveDraft } from './artifact-sync.mjs'
 import { resolveModelIcon } from './model-icons.mjs'
 import {
   saveTextDocument,
@@ -706,12 +707,18 @@ function App() {
 
   async function refreshGeneratedArtifacts(application) {
     if (!currentProject?.id || application?.applied !== true) return
+    const projectId = currentProject.id
+    const chapterId = activeChapterId
+    const refreshActiveDraft = shouldRefreshActiveDraft(application, chapterId)
+    const expectedDraftKey = refreshActiveDraft ? `${projectId}:${chapterId}` : ''
     try {
-      const [chapterResponse, ideaResponse, projectResponse, dashboardResponse] = await Promise.all([
-        api.getChapters(currentProject.id),
+      const [chapterResponse, ideaResponse, projectResponse, dashboardResponse, draftResponse, historyResponse] = await Promise.all([
+        api.getChapters(projectId),
         api.getIdeas(),
-        api.getProject(currentProject.id),
+        api.getProject(projectId),
         api.getDashboard(),
+        refreshActiveDraft ? api.getChapterDraft(projectId, chapterId) : Promise.resolve(null),
+        refreshActiveDraft ? api.getChapterHistory(projectId, chapterId) : Promise.resolve(null),
       ])
       setChapters(chapterResponse.chapters || [])
       setIdeas(ideaResponse.ideas || [])
@@ -720,7 +727,27 @@ function App() {
         setActiveProject(projectResponse.project)
       }
       setDashboard(dashboardResponse.stats || null)
-      setToast(application.summary || '设定与大纲已写入项目')
+      let preservedConcurrentEdit = false
+      if (draftResponse && activeDraftKeyRef.current === expectedDraftKey) {
+        const content = draftResponse.content || ''
+        const cleanDraft = canReplaceActiveDraft({
+          activeKey: activeDraftKeyRef.current,
+          expectedKey: expectedDraftKey,
+          currentDraft: draftRef.current,
+          savedDraft: savedDraftRef.current,
+        })
+        if (!cleanDraft && draftRef.current !== content) {
+          preservedConcurrentEdit = true
+          setLastAiRestore({ chapterId, content: draftRef.current, source: 'artifact-sync' })
+        }
+        setDraft(content)
+        draftRef.current = content
+        savedDraftRef.current = content
+        setDraftStatus('saved')
+        if (historyResponse) setHistorySnapshots(historyResponse.snapshots || [])
+      }
+      const summary = application.summary || '设定与大纲已写入项目'
+      setToast(preservedConcurrentEdit ? `${summary}；写作期间的本地修改可一键恢复` : summary)
     } catch (error) {
       setToast(error.message || '设定已写入，但界面刷新失败')
     }
