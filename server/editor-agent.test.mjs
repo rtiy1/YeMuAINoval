@@ -239,7 +239,7 @@ test('editor agent does not turn an ordinary status table into choices', () => {
   assert.equal(parsed, null)
 })
 
-test('editor agent exposes completed markdown choices as non-blocking followups', () => {
+test('editor agent does not render a late card from completed markdown choices', () => {
   const output = `## 下一步
 
 | 选项 | 做什么 |
@@ -257,8 +257,8 @@ test('editor agent exposes completed markdown choices as non-blocking followups'
 
   assert.equal(view.effectiveStatus, 'completed')
   assert.equal(view.choicePrompt, null)
-  assert.deepEqual(view.suggestedChoicePrompt.options.map((option) => option.label), ['补全设定', '直接搭大纲'])
-  assert.equal(view.suggestedChoicePrompt.intro, '')
+  assert.equal(view.suggestedChoicePrompt, null)
+  assert.equal(view.answerText, output)
 })
 
 test('editor agent renders structured blocking questions returned by skills', () => {

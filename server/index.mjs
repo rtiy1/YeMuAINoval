@@ -2426,6 +2426,28 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
     const executionGeneration = Math.max(1, Number(event?.executionGeneration) || 1)
     if (interactionAttempt !== lastInteractionAttempt || executionGeneration !== lastExecutionGeneration) return false
     if (event.type === 'tool_event' && event.toolCallId && event.toolName) {
+      if (event.toolName === 'request_user_input') {
+        const questions = Array.isArray(event.arguments?.questions)
+          ? event.arguments.questions.slice(0, 3)
+          : []
+        if (!questions.length) return true
+        const item = {
+          id: event.toolCallId,
+          type: 'requestUserInput',
+          status: 'inProgress',
+          requestId: event.toolCallId,
+          questions,
+          meta: { interactionAttempt },
+          createdAt: new Date().toISOString(),
+        }
+        res.write(`event: item/started\ndata: ${JSON.stringify({
+          threadId: initialThread.id,
+          turnId: initialTurn.id,
+          item,
+        })}\n\n`)
+        itemVersions.set(item.id, `${item.status}:${JSON.stringify(item.questions)}`)
+        return true
+      }
       const completed = event.phase === 'end'
       const item = {
         id: `${initialTurn.id}:tool:${event.toolCallId}`,

@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentPromptOptions } from "@yemu/agent-core/agent";
+import { TERMINAL_TOOL_RESULT_ABORT_REASON } from "@yemu/agent-core/agent-loop";
 import type { AgentEvent, AgentMessage, AgentTool } from "@yemu/agent-core/types";
 import { buildModel } from "@yemu/model-catalog/build";
 import { getBundledModelReferenceIndex } from "@yemu/model-catalog/identity/bundled";
@@ -307,16 +308,100 @@ interface RuntimeResult {
 	usage: StoryAgentUsage;
 }
 
+interface AnsweredQuestion {
+	id: string;
+	header: string;
+	question: string;
+}
+
 interface ToolState {
 	activeSkill: string;
 	question?: StoryQuestion;
 	submission?: StoryAgentResult;
+	answeredQuestions: AnsweredQuestion[];
 	referencesLoaded: Set<string>;
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	canFetchWeb: boolean;
 	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
+}
+
+const questionTopicPatterns: Array<[string, RegExp]> = [
+	["identity", /身份|身世|出身|穿越成|原创角色|原著角色|大族子弟/],
+	["timeline", /时间线|时间点|时代|时期|开局|从.{0,10}开始|水门|鸣人|忍界大战/],
+	["advantage", /金手指|外挂|系统|血继|天赋|先知|能力方向/],
+	["romance", /后宫|女主|感情线|全收|单女主|无女主|恋爱对象/],
+	["platform", /平台|飞卢|起点|番茄|刺猬猫|晋江/],
+	["style", /风格|文风|节奏|尺度|爽点|基调/],
+	["length", /篇幅|字数|长篇|短篇|卷数/],
+	["viewpoint", /视角|人称|第一人称|第三人称/],
+];
+
+function normalizedQuestionPart(value: unknown): string {
+	return String(value ?? "")
+		.toLowerCase()
+		.replace(/[\s\p{P}\p{S}]+/gu, "")
+		.replace(/^(?:请|请问|需要确认|想确认|再确认)/, "");
+}
+
+function questionTopics(question: AnsweredQuestion): Set<string> {
+	const source = `${question.header}\n${question.question}`;
+	return new Set(questionTopicPatterns.filter(([, pattern]) => pattern.test(source)).map(([topic]) => topic));
+}
+
+function answeredQuestionHistory(payload: Record<string, unknown>): AnsweredQuestion[] {
+	if (!Array.isArray(payload.request_user_input_history)) return [];
+	const result: AnsweredQuestion[] = [];
+	for (const entryValue of payload.request_user_input_history.slice(-6)) {
+		if (!entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)) continue;
+		const entry = entryValue as Record<string, unknown>;
+		if (!entry.response || typeof entry.response !== "object" || Array.isArray(entry.response)) continue;
+		if (!Array.isArray(entry.questions)) continue;
+		for (const questionValue of entry.questions.slice(0, 3)) {
+			if (!questionValue || typeof questionValue !== "object" || Array.isArray(questionValue)) continue;
+			const question = questionValue as Record<string, unknown>;
+			const text = String(question.question ?? "").trim();
+			if (!text) continue;
+			result.push({
+				id: String(question.id ?? "").trim(),
+				header: String(question.header ?? "").trim(),
+				question: text,
+			});
+		}
+	}
+	return result;
+}
+
+function repeatsAnsweredQuestion(
+	question: { id: string; header?: string; question: string },
+	answeredQuestions: AnsweredQuestion[],
+): boolean {
+	const current: AnsweredQuestion = {
+		id: question.id.trim(),
+		header: question.header?.trim() ?? "",
+		question: question.question.trim(),
+	};
+	const currentId = normalizedQuestionPart(current.id);
+	const currentHeader = normalizedQuestionPart(current.header);
+	const currentText = normalizedQuestionPart(current.question);
+	const currentTopics = questionTopics(current);
+	return answeredQuestions.some(answered => {
+		const answeredId = normalizedQuestionPart(answered.id);
+		if (currentId && answeredId && !/^question\d+$/.test(currentId) && currentId === answeredId) return true;
+		const answeredHeader = normalizedQuestionPart(answered.header);
+		if (currentHeader.length >= 2 && answeredHeader.length >= 2
+			&& (currentHeader === answeredHeader || currentHeader.includes(answeredHeader) || answeredHeader.includes(currentHeader))) {
+			return true;
+		}
+		const answeredText = normalizedQuestionPart(answered.question);
+		if (currentText.length >= 6 && answeredText.length >= 6
+			&& (currentText === answeredText || currentText.includes(answeredText) || answeredText.includes(currentText))) {
+			return true;
+		}
+		const answeredTopics = questionTopics(answered);
+		return [...currentTopics].some(topic => answeredTopics.has(topic));
+	});
 }
 
 function structuredStoryFileText(value: unknown, depth = 0): string {
@@ -783,7 +868,10 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
-	const inputTool: AgentTool<typeof requestUserInputSchema, { requestId: string }> = {
+	const inputTool: AgentTool<
+		typeof requestUserInputSchema,
+		{ requestId: string; skippedAnsweredQuestions?: number; blockedAfterMutation?: boolean }
+	> = {
 		name: "request_user_input",
 		label: "请求用户输入",
 		description: requestUserInputDescription.trim(),
@@ -791,9 +879,31 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		loadMode: "essential",
 		approval: "read",
 		async execute(toolCallId, params) {
+			if (state.storyFiles.written().length > 0 || state.submission) {
+				return {
+					content: [{
+						type: "text",
+						text: "当前回合已经开始写入或提交结果，不能在交付完成后再弹出问题。采用最小合理假设完成当前任务；可选方向只能作为普通文字建议放在最终回答中。",
+					}],
+					details: { requestId: toolCallId, blockedAfterMutation: true },
+				};
+			}
+			const freshQuestions = params.questions.filter(
+				question => !repeatsAnsweredQuestion(question, state.answeredQuestions),
+			);
+			const skippedAnsweredQuestions = params.questions.length - freshQuestions.length;
+			if (!freshQuestions.length) {
+				return {
+					content: [{
+						type: "text",
+						text: "这些主题已经在本轮对话中回答过。不要换一种说法重复提问；采用已有答案和最小合理假设，直接继续执行当前任务。",
+					}],
+					details: { requestId: toolCallId, skippedAnsweredQuestions },
+				};
+			}
 			state.question = {
 				requestId: toolCallId,
-				questions: params.questions.map(question => ({
+				questions: freshQuestions.map(question => ({
 					id: question.id,
 					header: question.header,
 					question: question.question,
@@ -806,8 +916,16 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 				})),
 			};
 			return {
-				content: [{ type: "text", text: "问题已交给用户。请结束本次执行，等待用户回答。" }],
-				details: { requestId: toolCallId },
+				content: [{
+					type: "text",
+					text: skippedAnsweredQuestions
+						? `已跳过 ${skippedAnsweredQuestions} 个用户答过的问题，其余问题已交给用户。请结束本次执行，等待用户回答。`
+						: "问题已交给用户。请结束本次执行，等待用户回答。",
+				}],
+				details: {
+					requestId: toolCallId,
+					...(skippedAnsweredQuestions ? { skippedAnsweredQuestions } : {}),
+				},
 			};
 		},
 	};
@@ -1069,6 +1187,40 @@ function compactToolArguments(value: unknown): Record<string, unknown> {
 	return compact;
 }
 
+function compactRequestUserInputArguments(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const questions = (value as Record<string, unknown>).questions;
+	if (!Array.isArray(questions)) return {};
+	return {
+		questions: questions.slice(0, 3).flatMap(questionValue => {
+			if (!questionValue || typeof questionValue !== "object" || Array.isArray(questionValue)) return [];
+			const question = questionValue as Record<string, unknown>;
+			const id = String(question.id ?? "").trim().slice(0, 80);
+			const text = String(question.question ?? "").trim().slice(0, 1_000);
+			if (!id || !text) return [];
+			const options = Array.isArray(question.options)
+				? question.options.slice(0, 6).flatMap(optionValue => {
+						if (!optionValue || typeof optionValue !== "object" || Array.isArray(optionValue)) return [];
+						const option = optionValue as Record<string, unknown>;
+						const label = String(option.label ?? "").trim().slice(0, 100);
+						if (!label) return [];
+						return [{
+							label,
+							...(option.value ? { value: String(option.value).slice(0, 200) } : {}),
+							...(option.description ? { description: String(option.description).slice(0, 300) } : {}),
+						}];
+					})
+				: [];
+			return [{
+				id,
+				...(question.header ? { header: String(question.header).slice(0, 80) } : {}),
+				question: text,
+				options,
+			}];
+		}),
+	};
+}
+
 function compactToolDetails(value: unknown): Record<string, unknown> | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const result = value as Record<string, unknown>;
@@ -1125,6 +1277,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			: undefined;
 	const toolState: ToolState = {
 		activeSkill: request.skillName,
+		answeredQuestions: answeredQuestionHistory(request.payload),
 		referencesLoaded: new Set<string>(),
 		storyFiles: createStoryFileWorkspace(request.payload, request.callbacks?.readStoryFile),
 		canMutateStoryFiles:
@@ -1217,14 +1370,24 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			});
 		}
 		if (event.type === "tool_execution_end") {
+			const inputArguments = event.toolName === "request_user_input" &&
+				toolState.question?.requestId === event.toolCallId
+				? compactRequestUserInputArguments(toolState.question)
+				: {};
 			callbackQueue = enqueueCallback(callbackQueue, request.callbacks?.onToolEvent, {
 				phase: "end",
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
-				arguments: {},
+				arguments: inputArguments,
 				details: compactToolDetails(event.result),
 				isError: event.isError === true,
 			});
+			const completedInputRequest = event.toolName === "request_user_input" &&
+				toolState.question?.requestId === event.toolCallId;
+			const completedSubmission = event.toolName === "submit_story_result" && Boolean(toolState.submission);
+			if ((completedInputRequest || completedSubmission) && event.isError !== true) {
+				agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			}
 		}
 	});
 	const abort = (): void => {

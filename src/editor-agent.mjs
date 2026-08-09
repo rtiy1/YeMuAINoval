@@ -569,12 +569,10 @@ export function buildAgentTurnView(run) {
   const answerText = isStreaming
     ? nonEmptyText(run?.text, itemAnswerText)
     : nonEmptyText(itemAnswerText, run?.text, resultOutput, agentResponseText(run?.response))
-  const suggestedChoice = !choicePrompt && run?.status === 'completed'
-    ? parseAgentChoicePrompt(answerText)
-    : null
-  const suggestedChoicePrompt = suggestedChoice
-    ? { ...suggestedChoice, intro: '' }
-    : null
+  // Completed prose stays prose. Interactive cards are reserved for the
+  // structured requestUserInput protocol so they cannot appear after a model
+  // has already finished writing or submitting the turn.
+  const suggestedChoicePrompt = null
   const legacyActivityItems = items.length
     ? []
     : compactAgentEvents(run?.events).map((event) => ({

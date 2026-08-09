@@ -388,9 +388,182 @@ test("assistant message boundaries preserve reasoning-tool-reasoning order", asy
 			"end:assistant-2",
 			"tool:start:submit_story_result",
 			"tool:end:submit_story_result",
-			"start:assistant-3",
-			"end:assistant-3",
 		]);
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("request-user-input terminates the model loop and streams complete questions", async () => {
+	const responses = [
+		deepSeekToolSseResponse("call-input-now", "request_user_input", {
+			questions: [{
+				id: "identity",
+				header: "主角身份",
+				question: "主角具体穿越成什么身份？",
+				options: [
+					{ label: "原创平民", description: "从零成长" },
+					{ label: "木叶忍族", description: "拥有家族关系" },
+				],
+			}],
+		}),
+		deepSeekSseResponse("这段内容不应该在问题之后继续生成。"),
+	];
+	const toolEvents: Array<{
+		phase: string;
+		toolName: string;
+		arguments: Record<string, unknown>;
+	}> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (): Promise<Response> => responses[calls++] ?? deepSeekSseResponse("不应继续"),
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "先确认主角身份再继续",
+			skill: "story-long-write",
+			payload: {},
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		}, {
+			onToolEvent: event => toolEvents.push(event),
+		});
+
+		expect(calls).toBe(1);
+		expect(response.status).toBe("needs_input");
+		expect(response.result.question?.requestId).toBe("call-input-now");
+		expect(response.result.question?.questions[0]?.question).toBe("主角具体穿越成什么身份？");
+		const completedInput = toolEvents.find(event => event.phase === "end");
+		expect(completedInput?.toolName).toBe("request_user_input");
+		expect(completedInput?.arguments.questions).toEqual([{
+			id: "identity",
+			header: "主角身份",
+			question: "主角具体穿越成什么身份？",
+			options: [
+				{ label: "原创平民", value: "原创平民", description: "从零成长" },
+				{ label: "木叶忍族", value: "木叶忍族", description: "拥有家族关系" },
+			],
+		}]);
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("request-user-input cannot appear after the turn has started writing files", async () => {
+	const responses = [
+		deepSeekToolSseResponse("call-write-before-input", "write_story_file", {
+			path: "设定/临时.md",
+			content: "已经开始写入。",
+		}),
+		deepSeekToolSseResponse("call-late-input", "request_user_input", {
+			questions: [{
+				id: "late_direction",
+				question: "现在再选择方向？",
+				options: [{ label: "方向 A" }, { label: "方向 B" }],
+			}],
+		}),
+		deepSeekToolSseResponse("call-submit-after-late-input", "submit_story_result", {
+			status: "completed",
+			output: "已按最小合理假设完成。",
+		}),
+	];
+	const requestPayloads: Array<Record<string, unknown>> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			requestPayloads.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>);
+			return responses[calls++] ?? deepSeekSseResponse("不应继续");
+		},
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "继续完善当前方案",
+			skill: "story-setup",
+			payload: { tool_policy: { mutateStoryData: "propose" } },
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		});
+
+		expect(calls).toBe(3);
+		expect(response.status).toBe("completed");
+		expect(response.result.question).toBeUndefined();
+		expect(response.result.output).toBe("已按最小合理假设完成。");
+		expect(JSON.stringify(requestPayloads[2]?.messages)).toContain("不能在交付完成后再弹出问题");
+	} finally {
+		fetchSpy.mockRestore();
+	}
+});
+
+test("answered request-user-input topics are not asked again with different wording", async () => {
+	const responses = [
+		deepSeekToolSseResponse("call-repeat", "request_user_input", {
+			questions: [{
+				id: "protagonist_identity",
+				header: "主角身份",
+				question: "主角具体要穿越成谁？",
+				options: [
+					{ label: "原创角色", description: "与水门同期" },
+					{ label: "水门本人", description: "改写四代目人生" },
+				],
+			}],
+		}),
+		deepSeekToolSseResponse("call-submit-after-repeat", "submit_story_result", {
+			status: "completed",
+			output: "沿用已有答案并按原创角色继续推进。",
+		}),
+		deepSeekSseResponse("完成"),
+	];
+	const requestPayloads: Array<Record<string, unknown>> = [];
+	let calls = 0;
+	const mockedFetch = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			requestPayloads.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>);
+			return responses[calls++] ?? deepSeekSseResponse("完成");
+		},
+		{ preconnect: globalThis.fetch.preconnect },
+	);
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(mockedFetch);
+	try {
+		const response = await runStoryAgent({
+			message: "继续完成火影同人开书方案",
+			skill: "story-long-write",
+			payload: {
+				request_user_input_history: [{
+					questions: [{
+						id: "identity_timeline",
+						header: "穿越身份与时间线",
+						question: "主角穿越成谁、从哪个时间点开始？",
+					}],
+					response: {
+						answers: { identity_timeline: { answers: ["从水门那一代开始"] } },
+						answerText: "穿越身份与时间线：从水门那一代开始",
+					},
+				}],
+			},
+			model_config: {
+				provider: "openai",
+				api_base_url: "https://api.deepseek.com/v1",
+				api_key: "test-key",
+				model: "deepseek-v4-flash",
+			},
+		});
+
+		expect(response.status).toBe("completed");
+		expect(response.result.question).toBeUndefined();
+		expect(response.result.output).toBe("沿用已有答案并按原创角色继续推进。");
+		expect(JSON.stringify(requestPayloads[1]?.messages)).toContain("不要换一种说法重复提问");
 	} finally {
 		fetchSpy.mockRestore();
 	}
@@ -579,7 +752,7 @@ test("Story Agent can write multiple virtual files across independent tool turns
 			},
 		});
 		const documents = response.result.artifacts?.documents as Array<{ path: string; content: string }>;
-		expect(calls).toBe(4);
+		expect(calls).toBe(3);
 		expect(documents.map(file => file.path)).toEqual(["设定/人物.md", "设定/地点.md"]);
 		expect(documents[0]?.content).toBe("林默，失踪记者。");
 		expect(documents[1]?.content).toContain("# 旧港");

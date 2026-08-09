@@ -26,14 +26,19 @@ describe('editor assistant styles', () => {
     expect(collapsed).not.toContain('display: none')
   })
 
-  test('maps dense assistant surfaces onto the dark palette', () => {
+  test('keeps the assistant palette dark-compatible and transcript controls flat', () => {
     const darkAssistant = styles.indexOf('/* The assistant owns denser UI than the editor')
     expect(darkAssistant).toBeGreaterThanOrEqual(0)
     const darkSession = ruleBody('.tui-agent-session,', darkAssistant)
-    const darkComposer = ruleBody('.agent-choice-card,', darkAssistant)
+    const flatTool = ruleBody('.yemu-collab-transcript .tv-card')
+    const flatChoice = ruleBody('.tui-agent-shell .agent-choice-card')
+    const webMode = ruleBody('.agent-mode-trigger.web.active')
 
     expect(darkSession).toContain('background: var(--tui-panel)')
-    expect(darkComposer).toContain('background: var(--tui-bg)')
+    expect(flatTool).toContain('background: transparent')
+    expect(flatTool).toContain('border: 0')
+    expect(flatChoice).toContain('background: transparent')
+    expect(webMode).toContain('background: #e9f5ef')
     expect(styles.slice(darkAssistant)).toContain("html[data-theme='dark'] .tui-agent-shell.collapsed .assistant-reopen")
   })
 })

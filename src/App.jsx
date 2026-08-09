@@ -1915,6 +1915,14 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
     onSend(message, options)
   }
 
+  function toggleWebFetch() {
+    const next = !webFetch
+    setWebFetch(next)
+    onNotify(next
+      ? '网页读取已开启：夜雨可以直接读取公开网页链接'
+      : '网页读取已关闭')
+  }
+
   function submitCustomQuestion(event, questionId) {
     event?.preventDefault()
     const value = customAnswer.trim()
@@ -2010,7 +2018,7 @@ function WritingAssistantPage({ session, loading, skills, onSend, onClear, onRev
                 <button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button>
               </form>
               <div className="assistant-composer-tools">
-                <button type="button" className={`composer-toggle ${webFetch ? 'active' : ''}`} aria-pressed={webFetch} title={webFetch ? '已开启网页读取' : '开启后夜雨可读取公开网页'} onClick={() => setWebFetch((value) => !value)}><Globe size={13} /><span>网页读取</span></button>
+                <button type="button" className={`composer-toggle ${webFetch ? 'active' : ''}`} aria-pressed={webFetch} title={webFetch ? '关闭网页读取' : '开启后夜雨可读取公开网页'} onClick={toggleWebFetch}><Globe size={13} /><span>{webFetch ? '网页读取已开启' : '网页读取'}</span></button>
                 <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{item.displayName || skillMeta[item.name]?.label || item.name}</option>)}</select></label>
                 <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               </div>
@@ -3679,6 +3687,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       chapterTitle: displayChapter.title,
       mode: requestMode,
       multiAgent: agentMultiAgent,
+      webFetch: agentWebFetch,
       sourceText: draft,
       selectionStart,
       selectionEnd,
@@ -3920,6 +3929,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       text: '已停止本次运行。',
     } : item))
     setAssistantRunning(false)
+  }
+
+  function toggleAgentWebFetch() {
+    if (assistantRunning) return
+    const next = !agentWebFetch
+    setAgentWebFetch(next)
+    onNotify(next
+      ? '联网读取已开启：夜雨可以直接读取公开网页链接'
+      : '联网读取已关闭')
   }
 
   async function clearAssistant() {
@@ -4397,7 +4415,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               controlsOnly
             /></div>}
             <div className="agent-composer-wrap">
-              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
+              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{agentWebFetch && <span className="agent-context-web" aria-live="polite"><Globe size={11} />联网读取已开启</span>}{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
               {assistantAwaitingInput && <div className="agent-composer-blocked"><CircleHelp size={13} /><span>当前任务正在等待选择，请先回答上方问题</span></div>}
               <form className={`assistant-form agent-composer ${assistantAwaitingInput ? 'waiting-input' : ''}`} onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
@@ -4449,7 +4467,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <div className="agent-composer-controls" ref={agentControlsRef}>
                     <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '智能体'}</span><ChevronDown size={11} /></button>
                     <span className="agent-control-divider" aria-hidden="true" />
-                    <button type="button" className={`agent-tool-button ${agentWebFetch ? 'active' : ''}`} aria-pressed={agentWebFetch} onClick={() => setAgentWebFetch((active) => !active)} title={agentWebFetch ? '关闭网页读取' : '开启网页读取'}><Globe size={13} /><span>网页</span></button>
+                    <button type="button" className={`agent-mode-trigger web ${agentWebFetch ? 'active' : ''}`} aria-pressed={agentWebFetch} aria-label={agentWebFetch ? '关闭联网读取' : '开启联网读取'} disabled={assistantRunning} onClick={toggleAgentWebFetch} title={assistantRunning ? '当前任务的联网权限已经固定' : agentWebFetch ? '关闭联网读取' : '开启后可直接读取公开网页链接'}><Globe size={13} /><span>{agentWebFetch ? '联网已开' : '联网'}</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
                       <AgentModelGlyph model={agentModel} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>

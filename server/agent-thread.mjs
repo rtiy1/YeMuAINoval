@@ -539,6 +539,7 @@ export function agentTurnItems(turn, task) {
   )
   for (const event of task?.events || []) {
     if (event.type === 'result') continue
+    if (event.type === 'tool' && event.meta?.toolName === 'request_user_input') continue
     if (event.type === 'reasoning') {
       items.push({
         id: event.id,
@@ -615,7 +616,12 @@ export function agentTurnItems(turn, task) {
       completedAt: ['queued', 'running'].includes(task?.status) ? null : task?.reasoningCompletedAt || task?.updatedAt || null,
     })
   }
-  const inputRequest = task?.result?.status === 'needs_input' ? task.result?.result?.question : null
+  const pendingInputRequest = task?.pendingInputRequest && typeof task.pendingInputRequest === 'object'
+    ? task.pendingInputRequest
+    : null
+  const inputRequest = task?.result?.status === 'needs_input'
+    ? task.result?.result?.question
+    : pendingInputRequest
   if (inputRequest && typeof inputRequest === 'object') {
     const requestId = text(inputRequest.requestId) || `${turn.id}:request-user-input`
     items.push({
@@ -625,7 +631,7 @@ export function agentTurnItems(turn, task) {
       requestId,
       questions: Array.isArray(inputRequest.questions) ? inputRequest.questions : [inputRequest],
       meta: { interactionAttempt: Math.max(1, positiveInteger(task?.interactionAttempt) || 1) },
-      createdAt: task?.inputRequestStartedAt || task?.updatedAt || null,
+      createdAt: task?.inputRequestStartedAt || pendingInputRequest?.requestedAt || task?.updatedAt || null,
     })
   }
   if (TERMINAL_TASK_STATUSES.has(task?.status)) {

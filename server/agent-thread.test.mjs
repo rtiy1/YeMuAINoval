@@ -446,6 +446,40 @@ test('choice turns expose a structured request-user-input item', () => {
   assert.equal(request?.requestId, 'call-choice')
 })
 
+test('pending streamed questions replace the generic request tool card', () => {
+  const items = agentTurnItems(
+    { id: 'turn-live-choice', taskId: 'task-live-choice', message: '先确认身份' },
+    {
+      id: 'task-live-choice',
+      status: 'running',
+      interactionAttempt: 1,
+      pendingInputRequest: {
+        requestId: 'call-live-choice',
+        questions: [{
+          id: 'identity',
+          header: '主角身份',
+          question: '主角具体穿越成什么身份？',
+          options: [{ label: '原创平民' }, { label: '木叶忍族' }],
+        }],
+        requestedAt: '2026-01-01T00:00:01.000Z',
+      },
+      events: [{
+        id: 'turn-live-choice:tool:call-live-choice',
+        type: 'tool',
+        status: 'completed',
+        label: '请求补充信息',
+        meta: { toolName: 'request_user_input', arguments: { questions: 1 } },
+      }],
+    },
+  )
+
+  const request = items.find((item) => item.type === 'requestUserInput')
+  assert.equal(request?.id, 'call-live-choice')
+  assert.equal(request?.status, 'inProgress')
+  assert.equal(request?.questions[0].question, '主角具体穿越成什么身份？')
+  assert.equal(items.some((item) => item.type === 'dynamicToolCall' && item.tool === 'request_user_input'), false)
+})
+
 test('agent input answers follow the request-user-input response shape', () => {
   const normalized = normalizeAgentInputAnswers({
     questions: [

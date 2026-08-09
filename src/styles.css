@@ -838,35 +838,35 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .agent-reasoning-summary > svg { margin-top: 2px; color: #70857b; }
 .agent-reasoning-summary > div > strong { color: #59645e; font-size: 9px; font-weight: 650; }
 .agent-reasoning-summary .agent-markdown { margin-top: 3px; color: #747c77; font-size: 9px; line-height: 1.6; }
-.agent-choice-response { display: grid; gap: 10px; margin-top: 8px; }
+.agent-choice-response { display: grid; gap: 8px; margin-top: 4px; }
 .agent-choice-intro { margin: 0; color: #555d57; font-size: 11px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-choice-card { overflow: hidden; background: #fafaf9; border: 1px solid #dedfdd; border-radius: 9px; }
-.agent-choice-card > header { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 7px; }
+.agent-choice-card { overflow: visible; background: transparent; border: 0; border-radius: 0; }
+.agent-choice-card > header { display: flex; align-items: center; justify-content: space-between; padding: 0 0 6px; border-bottom: 1px solid #dedfdd; }
 .agent-choice-card > header span { color: #3f4742; font-size: 10px; font-weight: 650; }
 .agent-choice-card > header small { color: #999e9a; font-size: 8px; }
-.agent-choice-card > p { margin: 0; padding: 0 10px 9px; color: #363d39; font-size: 11px; line-height: 1.55; }
-.agent-choice-options { display: grid; gap: 1px; padding: 0 5px 5px; }
-.agent-choice-options button { min-width: 0; display: grid; grid-template-columns: 24px minmax(0, 1fr) 14px; align-items: center; gap: 8px; padding: 8px; color: #4a514d; background: #fff; border: 1px solid #e5e5e3; border-radius: 6px; text-align: left; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.agent-choice-card > p { margin: 0; padding: 9px 0 7px; color: #363d39; font-size: 11px; line-height: 1.55; }
+.agent-choice-options { display: grid; gap: 0; padding: 0; border-top: 1px solid #ecece9; }
+.agent-choice-options button { min-width: 0; display: grid; grid-template-columns: 24px minmax(0, 1fr) 14px; align-items: center; gap: 8px; padding: 8px 2px; color: #4a514d; background: transparent; border: 0; border-bottom: 1px solid #ecece9; border-radius: 0; text-align: left; transition: background .15s ease, color .15s ease; }
 .agent-choice-options button:hover:not(:disabled) { color: #315e52; background: #f1f7f4; border-color: #b9cec6; }
 .agent-choice-options button:focus-visible { outline: 2px solid rgba(68, 116, 101, .24); outline-offset: 1px; }
 .agent-choice-options button:disabled { cursor: default; }
 .agent-choice-options button:disabled:not(.selected) { opacity: .55; }
 .agent-choice-options button.selected { color: #2f6255; background: #edf6f2; border-color: #a9c7bc; }
-.agent-choice-options button strong { width: 24px; height: 24px; display: grid; place-items: center; color: #66716b; background: #f1f2f0; border-radius: 6px; font-family: 'DM Mono', monospace; font-size: 9px; }
+.agent-choice-options button strong { width: 24px; height: 24px; display: grid; place-items: center; color: #66716b; background: #f1f2f0; border-radius: 3px; font-family: 'DM Mono', monospace; font-size: 9px; }
 .agent-choice-options button.selected strong { color: #fff; background: #4d7b6e; }
 .agent-choice-options button .agent-choice-copy { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; font-size: 10px; line-height: 1.45; }
 .agent-choice-options button .agent-choice-copy small { color: #8b928d; font-size: 8px; line-height: 1.45; }
 .agent-choice-options button:hover:not(:disabled) .agent-choice-copy small, .agent-choice-options button.selected .agent-choice-copy small { color: #648077; }
 .agent-choice-options button > svg { color: #a0a5a1; }
 .agent-choice-options button.selected > svg { color: #4d7b6e; }
-.agent-choice-custom { display: flex; gap: 6px; padding: 0 5px 6px; }
+.agent-choice-custom { display: flex; gap: 6px; padding: 8px 0 0; }
 .agent-choice-custom input { min-width: 0; flex: 1; height: 31px; padding: 0 9px; color: #3f4742; background: #fff; border: 1px solid #cbd8d2; border-radius: 6px; font-size: 10px; }
 .agent-choice-custom input:focus { outline: 2px solid rgba(68, 116, 101, .18); border-color: #7fa997; }
 .agent-choice-custom button { min-width: 48px; padding: 0 10px; color: #fff; background: #4d7b6e; border-radius: 6px; font-size: 10px; }
 .agent-choice-custom button:disabled { cursor: default; opacity: .45; }
-.agent-choice-confirm { display: block; width: calc(100% - 10px); min-height: 31px; margin: 0 5px 6px; color: #fff; background: #4d7b6e; border-radius: 6px; font-size: 10px; }
+.agent-choice-confirm { display: block; width: auto; min-width: 64px; min-height: 29px; margin: 8px 0 0 auto; padding: 0 12px; color: #fff; background: #4d7b6e; border-radius: 4px; font-size: 10px; }
 .agent-choice-confirm:disabled { cursor: default; opacity: .45; }
-.agent-choice-hint { display: block; padding: 3px 10px 9px; color: #909590; font-size: 8px; line-height: 1.5; }
+.agent-choice-hint { display: block; padding: 6px 0 0; color: #909590; font-size: 8px; line-height: 1.5; }
 .agent-finding-list { display: flex; flex-direction: column; border-top: 1px solid #e1ded8; }
 .agent-finding-list > div { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid #e1ded8; }
 .agent-finding-list > div > span { color: #a06b55; font-family: 'DM Mono', monospace; font-size: 8px; }
@@ -1035,12 +1035,12 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .assistant-chat-form .assistant-send { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: grid; place-items: center; color: #f8f5ec; background: #2a2f2b; border-radius: 10px; }
 .assistant-chat-form .assistant-send:disabled { opacity: .45; cursor: not-allowed; }
 .assistant-plan-questions { display: grid; gap: 10px; max-width: 720px; }
-.assistant-plan-question { padding: 14px; background: #f7f4ed; border: 1px solid #ddd8ce; border-radius: 12px; }
+.assistant-plan-question { padding: 4px 0 10px; background: transparent; border: 0; border-bottom: 1px solid #ddd8ce; border-radius: 0; }
 .assistant-plan-question > span { color: #a16b55; font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
-.assistant-plan-question h3 { margin: 5px 0 11px; color: #374039; font-size: 14px; line-height: 1.55; }
-.assistant-plan-question > div { display: flex; flex-wrap: wrap; gap: 7px; }
-.assistant-plan-question button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 112px; padding: 8px 11px; color: #4e5951; background: #fffdfa; border: 1px solid #d9d4c9; border-radius: 9px; text-align: left; }
-.assistant-plan-question button:hover { color: #2f6b5f; border-color: #a9c5bb; background: #edf5f1; }
+.assistant-plan-question h3 { margin: 5px 0 8px; color: #374039; font-size: 14px; line-height: 1.55; }
+.assistant-plan-question > div { display: grid; gap: 0; border-top: 1px solid #e8e4dc; }
+.assistant-plan-question button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 112px; padding: 8px 2px; color: #4e5951; background: transparent; border: 0; border-bottom: 1px solid #e8e4dc; border-radius: 0; text-align: left; }
+.assistant-plan-question button:hover { color: #2f6b5f; background: #edf5f1; }
 .assistant-plan-question button strong { font-size: 12px; font-weight: 650; }
 .assistant-plan-question button small { color: #8b9189; font-size: 10px; }
 .assistant-plan-custom { display: flex; gap: 7px; margin-top: 9px; }
@@ -3077,6 +3077,21 @@ details[open] > summary .agent-trace-chevron {
 
 .agent-mode-trigger.team > svg:last-child {
   color: #929a96;
+}
+
+.agent-mode-trigger.web {
+  color: #59615d;
+}
+
+.agent-mode-trigger.web.active {
+  color: #2f6e5c;
+  background: #e9f5ef;
+  border-color: #cfe6da;
+}
+
+.agent-mode-trigger.web:disabled {
+  cursor: default;
+  opacity: .72;
 }
 
 .agent-composer-controls {
@@ -6358,9 +6373,7 @@ details[open] > summary .agent-trace-chevron {
   width: 100%;
   height: 100%;
   min-height: 0;
-  background:
-    radial-gradient(circle at 92% 0, color-mix(in srgb, var(--tui-accent) 7%, transparent), transparent 34%),
-    var(--tui-bg);
+  background: var(--tui-bg);
 }
 
 .yemu-collab-transcript .tr-root {
@@ -6414,50 +6427,83 @@ details[open] > summary .agent-trace-chevron {
 
 .yemu-collab-transcript .tr-think-head {
   min-height: 26px;
-  padding: 0 8px;
+  padding: 0;
   color: var(--tui-muted);
-  background: color-mix(in srgb, var(--tui-raised) 82%, transparent);
-  border: 1px solid var(--tui-line-soft);
-  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   font-size: 10px;
   font-style: normal;
 }
 
 .yemu-collab-transcript .tr-think-body {
   margin: 7px 0 2px 6px;
-  padding: 6px 10px;
+  padding: 3px 0 3px 10px;
   color: var(--tui-muted);
-  background: color-mix(in srgb, var(--tui-raised) 55%, transparent);
+  background: transparent;
   border-left-color: color-mix(in srgb, var(--tui-accent) 35%, var(--tui-line));
-  border-radius: 0 6px 6px 0;
+  border-radius: 0;
   font-size: 10px;
   font-style: normal;
   line-height: 1.65;
 }
 
-.yemu-collab-transcript .tv-card {
-  border-color: color-mix(in srgb, var(--tui-line) 76%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--tui-raised) 92%, var(--tui-bg));
-  box-shadow: 0 1px 2px rgba(30, 42, 36, .035);
+.yemu-collab-transcript .tv-card,
+.yemu-collab-transcript .tr-body > .tv-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .yemu-collab-transcript .tv-head {
-  min-height: 34px;
-  padding: 7px 10px;
+  min-height: 26px;
+  padding: 3px 0;
+  gap: 7px;
+}
+
+.yemu-collab-transcript .tv-head:hover {
+  background: transparent;
+}
+
+.yemu-collab-transcript .tv-status {
+  width: 11px;
+  height: 11px;
+  background: transparent;
+  border: 1px solid var(--tui-faint);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 2px var(--tui-bg);
+}
+
+.yemu-collab-transcript .tv-status--ok {
+  background: var(--tui-muted);
+}
+
+.yemu-collab-transcript .tv-status--err {
+  background: var(--tui-danger);
 }
 
 .yemu-collab-transcript .tv-name {
-  color: var(--tui-accent);
+  color: var(--tui-muted);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: .04em;
 }
 
 .yemu-collab-transcript .tv-sum {
-  color: var(--tui-text);
+  color: var(--tui-muted);
   font-family: 'Noto Sans SC', sans-serif;
   font-size: 10px;
+}
+
+.yemu-collab-transcript .tv-body,
+.yemu-collab-transcript .tv-partial {
+  margin-left: 5px;
+  padding: 5px 0 6px 16px;
+  background: transparent;
+  border-top: 0;
+  border-left: 1px solid var(--tui-line);
 }
 
 .agent-native-controls {
@@ -6860,9 +6906,9 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-choice-card {
-  background: #f8f6f0;
-  border-color: #d8d4ca;
-  border-radius: 3px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .tui-agent-shell .agent-choice-card > header span,
@@ -6877,7 +6923,7 @@ details[open] > summary .agent-trace-chevron {
 
 .tui-agent-shell .agent-choice-options {
   gap: 0;
-  padding: 0 5px 5px;
+  padding: 0;
 }
 
 .tui-agent-shell .agent-choice-options button {
@@ -6885,7 +6931,7 @@ details[open] > summary .agent-trace-chevron {
   color: #59615b;
   background: transparent;
   border-color: transparent;
-  border-top-color: var(--tui-line-soft);
+  border-bottom-color: var(--tui-line-soft);
   border-radius: 0;
 }
 
@@ -7042,6 +7088,16 @@ details[open] > summary .agent-trace-chevron {
   color: var(--tui-warm);
 }
 
+.tui-agent-shell .agent-context-web {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: var(--tui-accent);
+  background: color-mix(in srgb, var(--tui-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tui-accent) 22%, transparent);
+  border-radius: 2px;
+  font-weight: 650;
+}
+
 .tui-agent-shell .assistant-form.agent-composer {
   min-height: 112px;
   padding: 0;
@@ -7132,6 +7188,7 @@ details[open] > summary .agent-trace-chevron {
 }
 
 .tui-agent-shell .agent-composer-controls .agent-mode-trigger.team.active,
+.tui-agent-shell .agent-composer-controls .agent-mode-trigger.web.active,
 .tui-agent-shell .agent-composer-controls .agent-tool-button.active {
   color: var(--tui-accent);
 }
@@ -7416,9 +7473,13 @@ details[open] > summary .agent-trace-chevron {
 .tui-agent-shell .tui-agent-header,
 .tui-agent-shell .agent-conversation,
 .tui-agent-shell .agent-composer-wrap,
-.tui-agent-shell .assistant-form.agent-composer,
-.tui-agent-shell .agent-choice-card {
+.tui-agent-shell .assistant-form.agent-composer {
   background: var(--tui-bg);
+}
+
+.tui-agent-shell .agent-choice-card {
+  background: transparent;
+  border: 0;
 }
 
 .tui-agent-shell .agent-choice-options button:hover:not(:disabled),
@@ -7573,7 +7634,6 @@ html[data-theme='dark'] .rail-file-delete {
 html[data-theme='dark'] .brand-mark,
 html[data-theme='dark'] .search-button,
 html[data-theme='dark'] .profile-menu,
-html[data-theme='dark'] .agent-choice-card,
 html[data-theme='dark'] .agent-choice-options button,
 html[data-theme='dark'] .agent-choice-custom input {
   color: var(--ide-text);
@@ -7869,7 +7929,6 @@ html[data-theme='dark'] .tui-agent-shell :is(
 }
 
 html[data-theme='dark'] .tui-agent-shell :is(
-  .agent-choice-card,
   .agent-diff,
   .assistant-form.agent-composer,
   .agent-composer-suggestions,

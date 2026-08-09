@@ -32,6 +32,7 @@ import {
   AgentDiffReview,
 } from './agent-interactions.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
+import { tuiToolArgs, tuiToolNames } from './agent-tool-args.mjs'
 import { formatThinkingForDisplay } from '../packages/coding-agent/src/utils/thinking-display.ts'
 import { Transcript as YemuTranscript } from '../packages/collab-web/src/components/transcript/Transcript.tsx'
 
@@ -66,26 +67,6 @@ function itemResponse(item) {
     .flatMap((value) => Array.isArray(value) ? value : [value])
     .filter((value) => typeof value === 'string' && value.trim())
     .join('；')
-}
-
-const tuiToolNames = {
-  list_story_files: 'glob',
-  read_story_file: 'read',
-  write_story_file: 'write',
-  edit_story_file: 'edit',
-  read_story_skill: 'read',
-  request_user_input: 'ask',
-  submit_story_result: 'resolve',
-}
-
-function tuiToolArgs(item) {
-  const args = item.arguments || item.meta?.arguments || {}
-  const tool = tuiToolNames[item.tool] || item.tool || 'tool'
-  if (tool === 'write') return { ...args, file_path: args.path }
-  if (tool === 'edit') return { ...args, file_path: args.path }
-  if (tool === 'read') return { ...args, file_path: args.path }
-  if (tool === 'glob') return { ...args, pattern: args.prefix ? `${args.prefix}/**/*` : '**/*' }
-  return args
 }
 
 function tuiAssistantMessage(run, items, { includeFallback = false, terminal = false } = {}) {

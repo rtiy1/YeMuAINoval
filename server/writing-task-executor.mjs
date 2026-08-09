@@ -238,6 +238,12 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
     const timestamp = new Date().toISOString()
     const argumentsValue = event.arguments && typeof event.arguments === 'object' ? event.arguments : {}
     const details = event.details && typeof event.details === 'object' ? event.details : {}
+    const inputQuestions = event.toolName === 'request_user_input'
+      && event.phase === 'end'
+      && Array.isArray(argumentsValue.questions)
+      && argumentsValue.questions.length
+      ? argumentsValue.questions.slice(0, 3)
+      : null
     const meta = {
       ...(existing?.meta || {}),
       toolName: event.toolName,
@@ -258,6 +264,14 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
     }
     if (existing) Object.assign(existing, next)
     else task.events.push(next)
+    if (inputQuestions) {
+      task.pendingInputRequest = {
+        requestId: event.toolCallId,
+        questions: structuredClone(inputQuestions),
+        requestedAt: timestamp,
+        interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
+      }
+    }
     task.updatedAt = timestamp
     touchAgentThread(db, task)
     streamEvent = {
@@ -312,6 +326,7 @@ export async function executeWritingTask(taskId, {
       task.activeExecutionId = executionId
       task.steerRequested = false
       task.status = 'running'
+      task.pendingInputRequest = null
       task.progress = 15
       task.partialOutput = checkpointOutput
       task.reasoningSummary = ''
@@ -619,6 +634,7 @@ export async function executeWritingTask(taskId, {
       )
       task.reasoningCompletedAt = timestamp
       task.inputRequestStartedAt = result.status === 'needs_input' ? timestamp : null
+      task.pendingInputRequest = null
       task.modelContinuation = result.status === 'needs_input' ? privateContinuation : null
       task.continuationMode = resultContinuationMode
       task.activeExecutionId = null
@@ -646,6 +662,7 @@ export async function executeWritingTask(taskId, {
         outcome = 'superseded'
         return
       }
+      task.pendingInputRequest = null
       if (pendingSteers(task).length) {
         finishRunningEvent(task, 'interrupted')
         applySteersAtBoundary(task, task.turnId, {
