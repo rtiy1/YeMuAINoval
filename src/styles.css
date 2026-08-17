@@ -8730,3 +8730,97 @@ html[data-theme='dark'] .chat-agent-shell .agent-conversation.collab-native {
   color: #fff;
   background: #a65e55;
 }
+
+/* Character relationship graph page */
+.relationship-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.relationship-project-picker select {
+  min-width: 220px;
+  padding: 8px 10px;
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border: 1px solid var(--ide-line-strong);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.relationship-canvas-wrap {
+  position: relative;
+  min-height: 480px;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--ide-paper);
+  border: 1px solid var(--ide-line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.relationship-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ide-muted);
+  font-size: 13px;
+}
+
+.relationship-graph {
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+}
+
+.relationship-edge {
+  stroke: color-mix(in srgb, var(--ide-muted) 55%, transparent);
+  stroke-width: 1.5;
+}
+
+.relationship-edge-label {
+  fill: var(--ide-muted);
+  font-size: 10px;
+}
+
+.relationship-node circle {
+  fill: color-mix(in srgb, var(--ide-green) 16%, var(--ide-paper));
+  stroke: color-mix(in srgb, var(--ide-green) 55%, var(--ide-line));
+  stroke-width: 1.5;
+}
+
+.relationship-node text {
+  fill: var(--ide-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.relationship-node .relationship-node-role {
+  fill: var(--ide-muted);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.relationship-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 12px;
+  color: var(--ide-muted);
+  background: var(--ide-paper);
+  border: 1px solid var(--ide-line);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.relationship-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.relationship-updated {
+  margin-left: auto;
+}

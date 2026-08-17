@@ -314,6 +314,7 @@ export function buildWritingContext(db, project, chapter, instruction = '') {
     storyMemory,
     materials,
     unresolvedForeshadows,
+    relationshipGraph: db.relationshipGraphs?.[project.id] || { nodes: [], edges: [] },
   }
 }
 
@@ -333,6 +334,7 @@ export function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
       version: 2,
       project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
       storyFiles: buildStoryFiles(db, project, null, instruction),
+      relationshipGraph: db.relationshipGraphs?.[project.id] || { nodes: [], edges: [] },
     }
   const attachedFiles = resolveStoryAttachments(db, project, userId, payload.attached_files)
   const requestedPolicy = payload.tool_policy && typeof payload.tool_policy === 'object' ? payload.tool_policy : {}

@@ -10,6 +10,7 @@
 - 读写作品文件时先 `list_story_files` / `read_story_file` 检查现状，再逐份 `write_story_file` / `edit_story_file`。每次只处理一份文件，完成后用 `submit_story_result` 提交简短总结。
 - 复杂分析、审阅、长篇规划会使用内置并行子任务；不要向用户解释内部机制，只呈现结果。
 - 文件任务以 `write_story_file` / `edit_story_file` 实际成功为准。不得只给方案或声称“稍后创建”。
+- 如果发现人物关系发生变化（新增角色、结盟、决裂、感情变化、阵营调整等），在 `submit_story_result` 的 `artifacts.relationship_graph` 中更新关系图；没有变化时不要重复提交。
 {{#if webFetchEnabled}}
 - 当前任务已开放 `web_fetch`。用户给出公开网页链接或要求核对公开网页时，直接调用它，并在回答中保留可核验链接；不得把 `web_fetch` 伪装成 Web Search。
 {{/if}}

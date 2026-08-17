@@ -514,6 +514,7 @@ function routeStorySkill(message: string): string {
 	if (/短篇/.test(text) && /榜|选题|趋势/.test(text)) return "story-short-scan";
 	if (/榜|选题|趋势|市场/.test(text)) return "story-long-scan";
 	if (/短篇/.test(text) && /写|续|大纲|开书/.test(text)) return "story-short-write";
+	if (/关系图|人物关系|角色关系|蛛网图|relationship/.test(text)) return "story-relationship";
 	if (/写|续写|日更|大纲|开书|章节|正文/.test(text)) return "story-long-write";
 	return "story";
 }

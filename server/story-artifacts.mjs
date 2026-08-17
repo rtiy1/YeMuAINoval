@@ -24,6 +24,35 @@ function artifactDocument(item) {
   return { path, title, category, content }
 }
 
+export function relationshipGraph(artifacts) {
+  const raw = artifacts?.relationship_graph || artifacts?.relationships
+    || ((artifacts?.nodes || artifacts?.edges) ? artifacts : null)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const nodes = Array.isArray(raw.nodes) ? raw.nodes
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item)
+      ? {
+        id: String(item.id || item.name || item.title || '').trim().slice(0, 120),
+        name: String(item.name || item.title || item.id || '').trim().slice(0, 120),
+        role: String(item.role || '').trim().slice(0, 80),
+      }
+      : null)
+    .filter((item) => item && item.id && item.name)
+    .slice(0, 120) : []
+  const edges = Array.isArray(raw.edges) ? raw.edges
+    .map((item) => item && typeof item === 'object' && !Array.isArray(item)
+      ? {
+        source: String(item.source || item.from || '').trim().slice(0, 120),
+        target: String(item.target || item.to || '').trim().slice(0, 120),
+        label: String(item.label || item.relationship || '').trim().slice(0, 120),
+        kind: String(item.kind || item.type || '').trim().slice(0, 40),
+      }
+      : null)
+    .filter((item) => item && item.source && item.target)
+    .slice(0, 240) : []
+  if (!nodes.length && !edges.length) return null
+  return { nodes, edges }
+}
+
 function nextChapterId(chapters) {
   return chapters.reduce((maximum, chapter) => Math.max(maximum, Number(chapter.id) || 0), 0) + 1
 }
@@ -42,6 +71,7 @@ export function summarizeStoryArtifacts(artifacts) {
   const worldbuilding = list(artifacts.worldbuilding, 40).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.content || item.body || item.description, 1))
   const chapters = list(artifacts.chapters, 100).filter((item) => item && typeof item === 'object' && text(item.title || item.name, 1) && text(item.outline || item.content || item.summary, 1))
   const documents = list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)
+  const graph = relationshipGraph(artifacts)
   const preview = {
     projectUpdated,
     characters: characters.length,
@@ -54,14 +84,17 @@ export function summarizeStoryArtifacts(artifacts) {
       ...worldbuilding.map((item) => ({ kind: '世界观', title: text(item.title || item.name, 120) })),
       ...chapters.map((item) => ({ kind: '章节大纲', title: text(item.title || item.name, 100) })),
       ...documents.map((item) => ({ kind: item.category || '资料文件', title: item.title })),
+      ...(graph ? [{ kind: '人物关系图', title: `${graph.nodes.length} 个角色 / ${graph.edges.length} 条关系` }] : []),
     ].slice(0, 24),
   }
+  if (graph) preview.relationships = { nodes: graph.nodes.length, edges: graph.edges.length }
   const parts = [
     preview.projectUpdated ? '作品设定' : '',
     preview.characters ? `${preview.characters} 张人物卡` : '',
     preview.worldbuilding ? `${preview.worldbuilding} 条世界观` : '',
     preview.chapters ? `${preview.chapters} 章大纲` : '',
     preview.documents ? `${preview.documents} 份资料文件` : '',
+    graph ? `人物关系图（${graph.nodes.length} 角色 / ${graph.edges.length} 关系）` : '',
   ].filter(Boolean)
   if (!parts.length) return null
   return { ...preview, summary: `准备写入${parts.join('、')}` }
@@ -129,6 +162,7 @@ export function applyStoryArtifacts(db, {
   db.chapters ||= {}
   db.drafts ||= {}
   db.editHistory ||= {}
+  db.relationshipGraphs ||= {}
   const chapters = db.chapters[project.id] ||= []
   const drafts = db.drafts[project.id] ||= {}
   const history = db.editHistory[project.id] ||= {}
@@ -231,6 +265,7 @@ export function applyStoryArtifacts(db, {
   }
 
   let documentCount = 0
+  let relationshipCount = 0
   const fileChanges = []
   for (const item of list(artifacts.documents || artifacts.files, 80).map(artifactDocument).filter(Boolean)) {
     const folder = text(item.category || item.path.split('/')[0] || '资料', 40)
@@ -284,7 +319,17 @@ export function applyStoryArtifacts(db, {
     documentCount += 1
   }
 
-  const applied = projectUpdated || characterCount > 0 || worldbuildingCount > 0 || chapterCount > 0 || documentCount > 0
+  const graph = relationshipGraph(artifacts)
+  if (graph) {
+    db.relationshipGraphs[projectId] = {
+      nodes: graph.nodes,
+      edges: graph.edges,
+      updatedAt: timestamp,
+    }
+    relationshipCount = 1
+  }
+
+  const applied = projectUpdated || characterCount > 0 || worldbuildingCount > 0 || chapterCount > 0 || documentCount > 0 || relationshipCount > 0
   if (applied) {
     project.chapters = chapters.length
     project.words = chapters.reduce((total, chapter) => {
@@ -299,6 +344,7 @@ export function applyStoryArtifacts(db, {
     worldbuildingCount ? `${worldbuildingCount} 条世界观` : '',
     chapterCount ? `${chapterCount} 章大纲` : '',
     documentCount ? `${documentCount} 份资料文件` : '',
+    graph ? `人物关系图（${graph.nodes.length} 角色 / ${graph.edges.length} 关系）` : '',
   ].filter(Boolean)
   return {
     applied,
@@ -307,6 +353,7 @@ export function applyStoryArtifacts(db, {
     worldbuilding: worldbuildingCount,
     chapters: chapterCount,
     documents: documentCount,
+    relationships: relationshipCount ? { nodes: graph.nodes.length, edges: graph.edges.length } : null,
     fileChanges,
     projectUpdated,
   }

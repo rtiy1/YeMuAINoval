@@ -48,6 +48,7 @@ import {
   Minimize2,
   Moon,
   MoreHorizontal,
+  Network,
   PanelLeft,
   PanelRight,
   Paperclip,
@@ -164,6 +165,7 @@ const PROJECT_GENRES = PROJECT_GENRE_GROUPS.flatMap((group) => group.options)
 const primaryNavItems = [
   { id: 'editor', label: '工作台', icon: PenLine },
   { id: 'works', label: '我的作品', icon: BookOpen },
+  { id: 'relations', label: '人物关系图', icon: Network },
   { id: 'library', label: '素材库', icon: Library },
   { id: 'skill-market', label: '技能市场', icon: Store },
   { id: 'stats', label: '写作统计', icon: BarChart3 },
@@ -238,6 +240,7 @@ const skillMeta = {
   'story-review': { label: '章节诊断报告', command: '审查这一章并输出报告，不直接修改正文', needsContent: true },
   'story-import': { label: '粘贴文稿分析', command: '分析我粘贴的小说正文结构', needsContent: true },
   'story-setup': { label: '写作准备建议', command: '给我一份开始写书前的准备建议，不执行系统部署', needsContent: false },
+  'story-relationship': { label: '人物关系图', command: '分析当前作品的人物关系并更新关系图', needsContent: false },
 }
 
 // 需要正文的 skill
@@ -262,13 +265,36 @@ function agentRunTokenUsage(run) {
   const hasUsage = Number(usage.input_tokens) || Number(usage.output_tokens) || Number(usage.cached_input_tokens)
   const inputTokens = Math.max(0, Number(usage.input_tokens || (source ? Math.ceil(source.length / 2.2) : 0)))
   const outputTokens = Math.max(0, Number(usage.output_tokens || (output ? Math.ceil(output.length / 2.2) : 0)))
+  const cachedInputTokens = Math.max(0, Number(usage.cached_input_tokens || 0))
+  const cacheWriteTokens = Math.max(0, Number(usage.cache_write_tokens || usage.cache_creation_input_tokens || 0))
   return {
     inputTokens,
     outputTokens,
-    cachedInputTokens: Math.max(0, Number(usage.cached_input_tokens || 0)),
+    cachedInputTokens,
+    cacheWriteTokens,
+    promptTokens: inputTokens + cachedInputTokens + cacheWriteTokens,
     reasoningTokens: Math.max(0, Number(usage.reasoning_output_tokens || 0)),
     estimated: usage.estimated === true || !hasUsage,
   }
+}
+
+function estimateStoryContextTokens(messages, draft) {
+  const text = [
+    ...(Array.isArray(messages) ? messages : []).map((message) => {
+      const result = message?.response?.result && typeof message.response.result === 'object'
+        ? message.response.result
+        : {}
+      return [
+        message?.text || '',
+        result.output || '',
+        result.summary || '',
+        result.edit_proposal?.revised_text || '',
+      ].filter(Boolean).join('\n')
+    }),
+    String(draft || ''),
+  ].join('\n')
+  // DSH-style approximate prompt accounting: system/tool overhead + active text.
+  return Math.ceil(text.length / 2.2) + 4000
 }
 
 function formatRelativeTime(value, fallback = '刚刚') {
@@ -1431,6 +1457,7 @@ function App() {
           {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} onDeleteIdea={deleteIdea} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onArtifactsApplied={refreshGeneratedArtifacts} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page workspace-empty"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>还没有作品</h2><p>新建或导入作品后，工作台会直接显示正文和助手。</p><div className="empty-state-actions"><button className="primary-button" onClick={() => setShowNew(true)}><BookPlus size={17} />新建作品</button><button className="secondary-button" onClick={() => setImportProjectOpen(true)}><Download size={16} />导入文稿</button></div></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
+          {activeSection === 'relations' && <RelationshipGraphPage projects={projects} onNotify={notify} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
           {activeSection === 'skill-market' && <SkillMarket user={user} onNotify={notify} onSkillsChanged={refreshSkills} />}
           {activeSection === 'stats' && <WritingStats stats={dashboard} projects={projects} />}
@@ -2204,6 +2231,110 @@ function AgentThreadHistory({ threads, chapters, currentThreadId, loading, switc
     </div>
   </div>
 }
+
+function RelationshipGraphPage({ projects, onNotify }) {
+  const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id || '')
+  const [graph, setGraph] = useState({ nodes: [], edges: [] })
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!projects.length) {
+      setSelectedProjectId('')
+      setGraph({ nodes: [], edges: [] })
+      return
+    }
+    if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0].id)
+    }
+  }, [projects, selectedProjectId])
+
+  useEffect(() => {
+    if (!selectedProjectId) return
+    let cancelled = false
+    setLoading(true)
+    api.getProjectRelationships(selectedProjectId)
+      .then((response) => {
+        if (!cancelled) setGraph(response.relationships || { nodes: [], edges: [] })
+      })
+      .catch((error) => {
+        if (!cancelled) onNotify(error.message || '人物关系图读取失败')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedProjectId])
+
+  async function handleSave(next) {
+    if (!selectedProjectId) return
+    setSaving(true)
+    try {
+      const response = await api.saveProjectRelationships(selectedProjectId, next)
+      setGraph(response.relationships || { nodes: [], edges: [] })
+      onNotify('人物关系图已保存')
+    } catch (error) {
+      onNotify(error.message || '人物关系图保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const nodes = graph?.nodes || []
+  const edges = graph?.edges || []
+  const positionedNodes = useMemo(() => {
+    if (!nodes.length) return []
+    const center = { x: 300, y: 260 }
+    const radius = Math.min(220, Math.max(150, nodes.length * 24))
+    return nodes.map((node, index) => {
+      const angle = (Math.PI * 2 * index) / nodes.length - Math.PI / 2
+      return { ...node, x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) }
+    })
+  }, [nodes])
+
+  return <div className="page relationship-page">
+    <div className="page-heading">
+      <div><span className="section-overline">作品关系</span><h1>人物关系图</h1><p>选择作品查看角色蛛网图；夜雨在写作中发现人物关系变化时会自动更新。</p></div>
+      {projects.length > 0 && <div className="relationship-project-picker">
+        <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} aria-label="选择作品">
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+        </select>
+      </div>}
+    </div>
+
+    <div className="relationship-canvas-wrap">
+      {loading && <div className="relationship-loading"><LoaderCircle size={22} className="spin" /><span>正在读取关系图</span></div>}
+      {!loading && !projects.length && <div className="empty-state"><div className="empty-state-icon"><Network size={28} /></div><h2>还没有作品</h2><p>先创建或导入作品，才能查看人物关系图。</p><button className="primary-button" onClick={() => {}}>新建作品</button></div>}
+      {!loading && projects.length > 0 && !positionedNodes.length && <div className="empty-state"><div className="empty-state-icon"><Network size={28} /></div><h2>还没有关系数据</h2><p>让夜雨在写作中识别人物关系后，这里会自动生成蛛网图。</p></div>}
+      {!loading && positionedNodes.length > 0 && <svg className="relationship-graph" viewBox="0 0 600 520" role="img" aria-label="人物关系蛛网图">
+        {edges.map((edge, index) => {
+          const source = positionedNodes.find((node) => node.id === edge.source)
+          const target = positionedNodes.find((node) => node.id === edge.target)
+          if (!source || !target) return null
+          const midX = (source.x + target.x) / 2
+          const midY = (source.y + target.y) / 2
+          return <g key={`${edge.source}-${edge.target}-${index}`}>
+            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="relationship-edge" />
+            <text x={midX} y={midY - 4} className="relationship-edge-label" textAnchor="middle">{edge.label || edge.kind || ''}</text>
+          </g>
+        })}
+        {positionedNodes.map((node) => <g key={node.id} className="relationship-node" transform={`translate(${node.x}, ${node.y})`}>
+          <circle r={26} />
+          <text y={4} textAnchor="middle">{node.name.slice(0, 4)}</text>
+          {node.role && <text y={42} textAnchor="middle" className="relationship-node-role">{node.role.slice(0, 6)}</text>}
+        </g>)}
+      </svg>}
+    </div>
+
+    {!loading && positionedNodes.length > 0 && <div className="relationship-legend">
+      <span><Network size={13} />{positionedNodes.length} 个角色</span>
+      <span>⚡ {edges.length} 条关系</span>
+      <span className="relationship-updated">{graph.updatedAt ? `更新于 ${formatRelativeTime(graph.updatedAt)}` : ''}</span>
+      <button className="secondary-button small" disabled={saving} onClick={() => handleSave({ nodes, edges })}>{saving ? '保存中' : '保存当前关系图'}</button>
+    </div>}
+  </div>
+}
+
 
 function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, onDeleteIdea, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
@@ -4159,9 +4290,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const assistantAwaitingInput = Boolean(latestAgentRun && agentRunEffectiveStatus(latestAgentRun) === 'needs_input')
   const goalStatusLabel = assistantRunning ? '执行中' : assistantAwaitingInput ? '等待选择' : '就绪'
   const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
-  const agentContextUsed = Math.max(0, latestAgentUsage
-    ? latestAgentUsage.inputTokens + latestAgentUsage.outputTokens
-    : Math.ceil(String(draft || '').length / 2.2))
+  const agentContextUsed = Math.max(0, latestAgentUsage && !latestAgentUsage.estimated
+    ? latestAgentUsage.promptTokens
+    : estimateStoryContextTokens(assistantMessages, draft))
   const agentContextPercent = Math.min(100, Math.round((agentContextUsed / Math.max(100, agentContextWindow)) * 100))
   const agentContextLabel = `上下文已使用 ${agentContextPercent}% · ${compactTokenCount(agentContextUsed)} / ${compactTokenCount(agentContextWindow)} Tokens`
   const agentFileOptions = [

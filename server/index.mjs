@@ -40,7 +40,7 @@ import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './t
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { compactAgentThread } from './context-compaction.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
-import { applyStoryArtifacts } from './story-artifacts.mjs'
+import { applyStoryArtifacts, relationshipGraph } from './story-artifacts.mjs'
 import {
   agentThreadPublic,
   agentTurnPublic,
@@ -3204,6 +3204,33 @@ app.get('/api/projects/:projectId', async (req, res, next) => {
   try {
     const db = await loadDb()
     res.json({ project: findOr404(db, req.params.projectId, req.user.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/projects/:projectId/relationships', async (req, res, next) => {
+  try {
+    const db = await loadDb()
+    findOr404(db, req.params.projectId, req.user.id)
+    res.json({ relationships: db.relationshipGraphs?.[req.params.projectId] || { nodes: [], edges: [] } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.put('/api/projects/:projectId/relationships', async (req, res, next) => {
+  try {
+    const graph = relationshipGraph(req.body || {})
+    if (!graph) throw Object.assign(new Error('关系图需要 nodes 或 edges 数据'), { status: 400 })
+    const timestamp = new Date().toISOString()
+    const saved = await updateDb((db) => {
+      findOr404(db, req.params.projectId, req.user.id)
+      db.relationshipGraphs ||= {}
+      db.relationshipGraphs[req.params.projectId] = { ...graph, updatedAt: timestamp }
+      return db.relationshipGraphs[req.params.projectId]
+    })
+    res.json({ relationships: saved })
   } catch (error) {
     next(error)
   }
