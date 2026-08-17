@@ -620,6 +620,7 @@ export function buildAgentTurnView(run) {
 
 export function shouldShowAgentDiff(run, view) {
   return run?.editRequested === true
+    && run?.applied !== true
     && Boolean(view?.outputText && view?.originalText)
     && !run?.artifactPreview
     && run?.artifactApplication?.applied !== true

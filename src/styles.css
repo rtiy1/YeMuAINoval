@@ -8210,3 +8210,523 @@ html[data-theme='dark'] .tui-agent-shell.collapsed .assistant-reopen {
     transition: none;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Chat assistant shell — conversation UI for the embedded writing agent      */
+/* -------------------------------------------------------------------------- */
+
+.chat-agent-shell {
+  --chat-bubble-user: #e8f1ed;
+  --chat-bubble-user-border: #c9ddd5;
+  --chat-bubble-assistant: #fbfaf6;
+  --chat-bubble-assistant-border: #e4e0d7;
+  font-family: var(--ide-font);
+  background: var(--ide-bg);
+}
+
+.chat-agent-shell .tui-agent-header {
+  min-height: 58px;
+  flex-basis: 58px;
+  padding: 0 10px 0 14px;
+  background: color-mix(in srgb, var(--ide-paper) 92%, transparent);
+  border-bottom: 1px solid var(--ide-line);
+}
+
+.chat-agent-shell .tui-agent-sigil {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  color: #f8f5ec;
+  background: #3d746a;
+  border: 0;
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+.chat-agent-shell .tui-agent-title-copy {
+  gap: 1px;
+}
+
+.chat-agent-shell .tui-agent-title-copy strong {
+  color: var(--ide-text);
+  font-family: var(--ide-font);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.chat-agent-shell .tui-agent-title-copy small {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.chat-agent-shell .agent-panel-heading .icon-button {
+  color: var(--ide-muted);
+}
+
+.chat-agent-shell .agent-panel-heading .icon-button:hover,
+.chat-agent-shell .agent-panel-heading .icon-button.active {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+
+.chat-agent-shell .tui-agent-session {
+  min-height: 30px;
+  flex-basis: 30px;
+  gap: 10px;
+  padding: 0 14px;
+  color: var(--ide-muted);
+  background: color-mix(in srgb, var(--ide-hover) 70%, var(--ide-paper));
+  border-bottom: 1px solid var(--ide-line);
+}
+
+.chat-agent-shell .tui-agent-location {
+  font-size: 9px;
+}
+
+.chat-agent-shell .tui-agent-location span,
+.chat-agent-shell .tui-agent-location strong::before {
+  color: var(--ide-green);
+}
+
+.chat-agent-shell .tui-agent-location strong {
+  color: var(--ide-text);
+  font-size: 9px;
+}
+
+.chat-agent-shell .tui-agent-state {
+  color: var(--ide-muted);
+  font-size: 8px;
+}
+
+.chat-agent-shell .tui-agent-state.running {
+  color: var(--ide-green);
+}
+
+.chat-agent-shell .tui-agent-state.waiting {
+  color: #a16b55;
+}
+
+.chat-agent-shell .agent-compaction-note {
+  color: var(--ide-muted);
+  background: var(--ide-hover);
+  border-bottom: 1px solid var(--ide-line);
+}
+
+.chat-agent-shell .agent-compaction-note svg {
+  color: var(--ide-green);
+}
+
+.chat-agent-shell .agent-conversation {
+  gap: 10px;
+  padding: 12px 12px 20px;
+  background: transparent;
+}
+
+.chat-agent-shell .yemu-collab-transcript {
+  background: transparent;
+  --bg-raised: var(--ide-paper);
+  --border: var(--ide-line);
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-root {
+  padding: 2px 2px 12px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-row {
+  display: block;
+  padding: 4px 0;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-gutter {
+  display: none;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-row--user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-row--user .tr-body {
+  align-self: auto;
+  max-width: 84%;
+  margin-left: auto;
+  padding: 9px 12px;
+  color: #2f403a;
+  background: var(--chat-bubble-user);
+  border: 1px solid var(--chat-bubble-user-border);
+  border-radius: 14px 14px 4px 14px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-row--assistant .tr-body {
+  max-width: 100%;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--ide-text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-row--custom .tr-body,
+.chat-agent-shell .yemu-collab-transcript .tr-row--custom .agent-transcript-question-inline {
+  width: 100%;
+  max-width: 100%;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-md {
+  color: var(--ide-text);
+  font-family: var(--ide-font);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-think-head {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+  font-size: 10.5px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-think-body {
+  color: var(--ide-muted);
+  border-left-color: color-mix(in srgb, var(--ide-green) 45%, var(--ide-line));
+  font-family: var(--ide-font);
+  font-size: 10.5px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-card,
+.chat-agent-shell .yemu-collab-transcript .tr-body > .tv-card {
+  border: 1px solid var(--ide-line);
+  border-radius: 6px;
+  background: var(--ide-hover);
+  box-shadow: none;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-head {
+  padding: 6px 8px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-head:hover {
+  background: color-mix(in srgb, var(--ide-text) 4%, transparent);
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-name {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+  font-size: 10.5px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-sum {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+  font-size: 11px;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-body,
+.chat-agent-shell .yemu-collab-transcript .tv-partial {
+  margin-left: 0;
+  padding: 6px 8px 8px;
+  background: transparent;
+  border-top-color: var(--ide-line);
+}
+
+.chat-agent-shell .yemu-collab-transcript .tv-partial {
+  background: var(--ide-hover);
+}
+
+.chat-agent-shell .agent-native-controls.chat-run-controls {
+  padding: 0 2px 6px;
+}
+
+.chat-agent-shell .agent-native-controls .agent-editor-turn {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.chat-agent-shell .agent-answer-actions button,
+.chat-agent-shell .agent-mutation-preview button,
+.chat-agent-shell .agent-diff footer button {
+  border-radius: 7px;
+}
+
+.chat-agent-shell .agent-composer-wrap {
+  padding: 8px 10px 10px;
+  background: color-mix(in srgb, var(--ide-paper) 96%, var(--ide-bg));
+  border-top: 1px solid var(--ide-line);
+}
+
+.chat-agent-shell .agent-context-line {
+  min-height: 24px;
+  padding: 0 4px 7px;
+  color: var(--ide-muted);
+}
+
+.chat-agent-shell .agent-context-line span,
+.chat-agent-shell .agent-context-line small {
+  font-family: var(--ide-font);
+  font-size: 9px;
+}
+
+.chat-agent-shell .assistant-form.agent-composer {
+  min-height: 116px;
+  padding: 0;
+  overflow: visible;
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .05);
+}
+
+.chat-agent-shell .assistant-form.agent-composer:focus-within {
+  border-color: color-mix(in srgb, var(--ide-green) 55%, var(--ide-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ide-green) 12%, transparent), 0 4px 16px rgba(0, 0, 0, .05);
+}
+
+.chat-agent-shell .assistant-form.agent-composer > .tui-composer-input {
+  display: block;
+  padding: 10px 12px 4px;
+}
+
+.chat-agent-shell .tui-composer-input > span {
+  display: none;
+}
+
+.chat-agent-shell .assistant-form.agent-composer .tui-composer-input textarea {
+  min-height: 58px;
+  max-height: 160px;
+  padding: 1px 0;
+  color: var(--ide-text);
+  caret-color: var(--ide-green);
+  font-family: var(--ide-font);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.chat-agent-shell .assistant-form.agent-composer textarea::placeholder {
+  color: var(--ide-muted);
+}
+
+.chat-agent-shell .assistant-form.agent-composer > .agent-attachment-list {
+  padding: 8px 11px 0;
+}
+
+.chat-agent-shell .agent-attachment-chip {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+  border-color: var(--ide-line);
+  border-radius: 6px;
+}
+
+.chat-agent-shell .assistant-form.agent-composer > .agent-composer-footer {
+  min-height: 39px;
+  margin: 0;
+  padding: 4px 7px 7px 9px;
+  border-top-color: var(--ide-line);
+}
+
+.chat-agent-shell .assistant-form.agent-composer .assistant-send {
+  color: #fff;
+  background: #3d746a;
+  border-radius: 8px;
+}
+
+.chat-agent-shell .assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
+  background: #315f57;
+}
+
+.chat-agent-shell .assistant-form.agent-composer .assistant-send.stop {
+  color: #fff;
+  background: #a16b55;
+}
+
+.chat-agent-shell .tui-agent-statusline {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+}
+
+.chat-agent-shell .agent-empty.tui-agent-empty {
+  background: transparent;
+}
+
+.chat-agent-shell .tui-agent-empty-heading strong {
+  font-family: var(--ide-font);
+  font-size: 13px;
+}
+
+.chat-agent-shell .agent-starters button {
+  border-radius: 999px;
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+
+.chat-agent-shell .agent-starters button:hover {
+  border-color: color-mix(in srgb, var(--ide-green) 45%, var(--ide-line));
+  background: color-mix(in srgb, var(--ide-green) 8%, var(--ide-paper));
+}
+
+.chat-agent-shell.collapsed .assistant-reopen {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .chat-agent-shell {
+  --chat-bubble-user: #23443e;
+  --chat-bubble-user-border: #3c635a;
+  --chat-bubble-assistant: #242a31;
+  --chat-bubble-assistant-border: #363e47;
+}
+
+html[data-theme='dark'] .chat-agent-shell .tui-agent-header,
+html[data-theme='dark'] .chat-agent-shell .tui-agent-session,
+html[data-theme='dark'] .chat-agent-shell .agent-composer-wrap,
+html[data-theme='dark'] .chat-agent-shell .assistant-form.agent-composer {
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+
+html[data-theme='dark'] .chat-agent-shell .yemu-collab-transcript .tr-row--user .tr-body {
+  color: #dcefea;
+}
+
+html[data-theme='dark'] .chat-agent-shell .yemu-collab-transcript .tv-card,
+html[data-theme='dark'] .chat-agent-shell .yemu-collab-transcript .tr-body > .tv-card {
+  background: var(--ide-hover);
+}
+
+/* Make the conversation itself the single scroll container in chat mode. */
+.chat-agent-shell .agent-conversation.collab-native {
+  overflow-y: auto;
+  padding: 12px 12px 20px;
+  background: transparent;
+}
+
+.chat-agent-shell .yemu-collab-transcript {
+  height: auto;
+  flex: none;
+}
+
+.chat-agent-shell .yemu-collab-transcript .tr-root {
+  height: auto;
+  overflow: visible;
+  padding: 0;
+}
+
+html[data-theme='dark'] .chat-agent-shell .agent-conversation.collab-native {
+  background: transparent;
+}
+
+/* Chat assistant: goal/status line and explicit error retry. */
+.chat-agent-shell .agent-goal-line {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  color: var(--ide-muted);
+  background: color-mix(in srgb, var(--ide-hover) 42%, transparent);
+  border-bottom: 1px solid var(--ide-line);
+  font-family: var(--ide-font);
+  font-size: 9px;
+}
+
+.chat-agent-shell .agent-goal-line > svg {
+  flex: 0 0 auto;
+  color: var(--ide-green);
+}
+
+.chat-agent-shell .agent-goal-line > span {
+  flex: 0 0 auto;
+  color: var(--ide-muted);
+}
+
+.chat-agent-shell .agent-goal-line > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--ide-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-agent-shell .agent-goal-line > em {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--ide-muted);
+  background: var(--ide-hover);
+  border: 1px solid var(--ide-line);
+  border-radius: 999px;
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.chat-agent-shell .agent-goal-line > em.running {
+  color: var(--ide-green);
+  border-color: color-mix(in srgb, var(--ide-green) 45%, var(--ide-line));
+  background: color-mix(in srgb, var(--ide-green) 10%, var(--ide-paper));
+}
+
+.chat-agent-shell .agent-goal-line > em.waiting {
+  color: #a16b55;
+  border-color: color-mix(in srgb, #a16b55 45%, var(--ide-line));
+  background: color-mix(in srgb, #a16b55 10%, var(--ide-paper));
+}
+
+.chat-agent-shell .agent-error-retry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  color: var(--ide-text);
+  background: color-mix(in srgb, #a65e55 8%, var(--ide-paper));
+  border: 1px solid color-mix(in srgb, #a65e55 28%, var(--ide-line));
+  border-radius: 8px;
+  font-family: var(--ide-font);
+  font-size: 10px;
+}
+
+.chat-agent-shell .agent-error-retry > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.chat-agent-shell .agent-error-retry strong {
+  color: #a65e55;
+  font-size: 11px;
+}
+
+.chat-agent-shell .agent-error-retry small {
+  overflow: hidden;
+  color: var(--ide-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-agent-shell .agent-error-retry button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  color: #a65e55;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #a65e55 38%, var(--ide-line));
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+.chat-agent-shell .agent-error-retry button:hover:not(:disabled) {
+  color: #fff;
+  background: #a65e55;
+}

@@ -449,7 +449,7 @@ export function AgentEditorTurn({
       <small>{formatAgentDuration(elapsed)}</small>
     </div>}
 
-    {!controlsOnly && <PlanSteps plan={plan} />}
+    <PlanSteps plan={plan} />
 
     {!controlsOnly && <div className="agent-transcript">
       {protocolItems.map((item) => <TranscriptItem
@@ -478,6 +478,17 @@ export function AgentEditorTurn({
     {controlsOnly && view.suggestedChoicePrompt && onFollowup && <section className="agent-transcript-question agent-suggested-followup" data-item-type="suggestedFollowup">
       <AgentChoicePrompt prompt={view.suggestedChoicePrompt} disabled={choiceDisabled} onChoose={onFollowup} variant="followup" />
     </section>}
+
+    {controlsOnly && ['failed', 'cancelled', 'interrupted'].includes(run.status) && <div className="agent-error-retry">
+      <div>
+        <strong>{turnStatusLabels[view.effectiveStatus] || '运行失败'}</strong>
+        {run.text || run.statusMessage ? <small>{run.text || run.statusMessage}</small> : null}
+      </div>
+      {onRegenerate && <button type="button" disabled={regenerateDisabled} onClick={() => onRegenerate(run)}>
+        <RotateCcw size={13} />
+        <span>重试</span>
+      </button>}
+    </div>}
 
     {run.status !== 'running' && !view.choicePrompt && Boolean(view.outputText || view.answerText) && <div className="agent-answer-actions">
       <button type="button" onClick={copyAnswer} title="复制回复" aria-label="复制回复">

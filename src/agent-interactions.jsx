@@ -75,15 +75,12 @@ export function AgentChoicePrompt({ prompt, disabled, onChoose, variant = 'block
 
   function choose(option) {
     if (disabled) return
-    setSelected(option.key)
     if (option.isOther) {
+      setSelected(option.key)
       setCustomValue(customAnswers[currentQuestion.id] || '')
+      return
     }
-  }
-
-  function submitSelected() {
-    if (disabled || !selectedOption || selectedOption.isOther) return
-    completeAnswer(selectedOption.reply)
+    completeAnswer(option.reply, option.key)
   }
 
   function submitCustom(event) {
@@ -101,19 +98,17 @@ export function AgentChoicePrompt({ prompt, disabled, onChoose, variant = 'block
       aria-describedby={`agent-choice-question-${currentQuestion.id}`}
     >
       <header>
-        <span>{currentQuestion.header || (suggestedFollowup ? '快捷回复' : '需要你确认')}</span>
-        <small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length}` : suggestedFollowup ? '发送为新消息' : '选择一项继续'}</small>
+        <span>{currentQuestion.header || (suggestedFollowup ? '快捷回复' : '需要你选择')}</span>
+        <small>{questions.length > 1 ? `${questionIndex + 1} / ${questions.length}` : suggestedFollowup ? '发送为新消息' : '点击选项即可'}</small>
       </header>
       <p id={`agent-choice-question-${currentQuestion.id}`}>{currentQuestion.question}</p>
-      <div className="agent-choice-options" role="radiogroup" aria-label={currentQuestion.question}>
-        {options.map((option, index) => <button
+      <div className="agent-choice-options" role="group" aria-label={currentQuestion.question}>
+        {options.map((option) => <button
           type="button"
-          role="radio"
-          aria-checked={selected === option.key}
           key={option.key}
           className={selected === option.key ? 'selected' : ''}
           disabled={disabled}
-          tabIndex={selected === option.key || (!selected && index === 0) ? 0 : -1}
+          tabIndex={0}
           onClick={() => choose(option)}
         >
           <strong>{option.key}</strong>
@@ -135,9 +130,7 @@ export function AgentChoicePrompt({ prompt, disabled, onChoose, variant = 'block
         />
         <button type="submit" disabled={!customValue.trim()}>继续</button>
       </form>}
-      {selectedOption && !selectedOption.isOther && <button type="button" className="agent-choice-confirm" disabled={disabled} onClick={submitSelected}>
-        继续
-      </button>}
+      
       {prompt.hint && <small className="agent-choice-hint">{prompt.hint}</small>}
     </section>
   </div>

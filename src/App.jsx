@@ -99,6 +99,7 @@ import {
   normalizeReviewReport,
   reconcileAgentTurnItems,
   resolveEditorAgentCommand,
+  shouldShowAgentDiff,
   waitForAgentPoll,
 } from './editor-agent.mjs'
 import { AgentEditorTurn, YemuAssistantTranscript } from './agent-editor.jsx'
@@ -216,11 +217,6 @@ function reasoningOptionsForCapabilities(capabilities) {
 function reasoningOptionLabel(value) {
   return agentReasoningOptions.find((option) => option.value === value)?.label || 'Auto'
 }
-
-const agentTeamOptions = [
-  { value: 'solo', label: '单智能体', description: '由夜雨直接完成，响应更快、消耗更低', badge: '默认' },
-  { value: 'team', label: '多智能体', description: '两个子智能体并行审阅，再由夜雨汇总最终回复', badge: '协作' },
-]
 
 const authQuotes = [
   { chapter: '第 8 章', title: '风从旧码头来', text: '“她终于明白，潮水从来不是为了带走什么。它只是一次次回来，提醒岸边的人，时间仍在往前。”' },
@@ -2285,8 +2281,8 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
   const [agentCompaction, setAgentCompaction] = useState({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000 })
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
-  const [agentWebFetch, setAgentWebFetch] = useState(false)
-  const [agentMultiAgent, setAgentMultiAgent] = useState(false)
+  const [agentWebFetch, setAgentWebFetch] = useState(true)
+  
   const agentMode = 'build'
   const [agentPickerOpen, setAgentPickerOpen] = useState(null)
   const [, setHistoryVersion] = useState(0)
@@ -2302,6 +2298,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const assistantFileInputRef = useRef(null)
   const requestedAssistantThreadRef = useRef(null)
   const artifactSyncRef = useRef(new Set())
+  const autoAppliedRunsRef = useRef(new Set())
   const assistantNotificationRef = useRef({ ready: false, seen: new Set() })
   const agentControlsRef = useRef(null)
   const editorLayoutRef = useRef(null)
@@ -2564,6 +2561,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setSearchQuery('')
     setAssistantMessages([])
     setAssistantThread(null)
+    autoAppliedRunsRef.current = new Set()
     assistantNotificationRef.current = { ready: false, seen: new Set() }
     setAssistantLoading(true)
     setAssistantRunning(false)
@@ -2595,6 +2593,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantThread(thread || null)
     const restored = agentThreadMessages(thread)
     setAssistantMessages(restored)
+    autoAppliedRunsRef.current = new Set(
+      restored
+        .filter((item) => item.role === 'agent' && !['queued', 'running'].includes(item.status))
+        .map((item) => item.taskId || item.id),
+    )
     const running = [...restored].reverse().find((item) => item.role === 'agent' && ['queued', 'running'].includes(item.status))
     if (!running?.taskId) return
     setAssistantRunning(true)
@@ -2737,10 +2740,32 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       : status === 'failed'
         ? { title: `${ASSISTANT_NAME} 运行失败`, body: `${displayChapter.title} · 返回工作台查看详情` }
         : latestRun.editRequested
-          ? { title: `${ASSISTANT_NAME} 已生成修改`, body: `${displayChapter.title} · 修改已准备好，等待你审阅` }
+          ? { title: `${ASSISTANT_NAME} 已写入`, body: `${displayChapter.title} · AI 修改已直接写入正文` }
           : { title: `${ASSISTANT_NAME} 已完成`, body: `${displayChapter.title} · Agent 回复已生成` }
     void sendAgentNotification(notification).catch(() => undefined)
   }, [assistantLoading, assistantMessages, assistantThread, displayChapter.title])
+
+  useEffect(() => {
+    if (assistantLoading || assistantRunning) return
+    const runs = assistantMessages.filter((message) => message.role === 'agent')
+    const latest = runs.at(-1)
+    if (!latest || agentRunEffectiveStatus(latest) !== 'completed' || latest.applied) return
+    const view = buildAgentTurnView(latest)
+    if (shouldShowAgentDiff(latest, view)) {
+      const key = latest.taskId || latest.id
+      if (!autoAppliedRunsRef.current.has(key)) {
+        autoAppliedRunsRef.current.add(key)
+        void applyAssistantRevision(latest, view.outputText)
+      }
+    }
+    if (latest.artifactPreview && !latest.artifactApplication?.applied) {
+      const key = `artifact:${latest.taskId || latest.id}`
+      if (!autoAppliedRunsRef.current.has(key)) {
+        autoAppliedRunsRef.current.add(key)
+        void applyAssistantArtifacts(latest)
+      }
+    }
+  }, [assistantLoading, assistantMessages, assistantRunning])
 
   useEffect(() => {
     if (historyLoading) return
@@ -3706,6 +3731,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         : command.skill
     // 联网是工具权限，不能覆盖 /write 等命令已经选定的 Story Skill。
     const effectiveSkill = modeSkill
+    const useMultiAgent = requestMode === 'plan'
+      || /review|analyze|scan|诊断|分析|规划|审阅|评审/.test(effectiveSkill || '')
+      || message.length > 160
     const textarea = textareaRef.current
     const selectionStart = textarea?.selectionStart ?? draft.length
     const selectionEnd = textarea?.selectionEnd ?? selectionStart
@@ -3718,7 +3746,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       chapterId: displayChapter.id,
       chapterTitle: displayChapter.title,
       mode: requestMode,
-      multiAgent: agentMultiAgent,
+      multiAgent: useMultiAgent,
       webFetch: agentWebFetch,
       sourceText: draft,
       selectionStart,
@@ -3760,7 +3788,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           selected_text: selectedText,
           attached_files: attachedFiles,
           collaboration_mode: requestMode,
-          multi_agent: agentMultiAgent,
+          multi_agent: useMultiAgent,
           selection_start: selectionStart,
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
@@ -3963,15 +3991,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     setAssistantRunning(false)
   }
 
-  function toggleAgentWebFetch() {
-    if (assistantRunning) return
-    const next = !agentWebFetch
-    setAgentWebFetch(next)
-    onNotify(next
-      ? '联网读取已开启：夜雨可以直接读取公开网页链接'
-      : '联网读取已关闭')
-  }
-
   async function clearAssistant() {
     const taskId = assistantTaskIdRef.current
     const activeTurnId = assistantTurnIdRef.current
@@ -4136,7 +4155,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, estimated: false })
   const latestAgentRun = [...assistantMessages].reverse().find((message) => message.role === 'agent')
   const latestAgentRunId = latestAgentRun?.id || null
+  const latestUserMessage = [...assistantMessages].reverse().find((message) => message.role === 'user' && !message.steer)?.text?.trim() || '等待你的下一步指示'
   const assistantAwaitingInput = Boolean(latestAgentRun && agentRunEffectiveStatus(latestAgentRun) === 'needs_input')
+  const goalStatusLabel = assistantRunning ? '执行中' : assistantAwaitingInput ? '等待选择' : '就绪'
   const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
   const agentContextUsed = Math.max(0, latestAgentUsage
     ? latestAgentUsage.inputTokens + latestAgentUsage.outputTokens
@@ -4383,12 +4404,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
 
         <div className="workspace-resizer assistant-resizer" role="separator" tabIndex={0} aria-label="调整助手栏宽度" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="520" aria-valuenow={workspaceWidths.assistant} onKeyDown={(event) => nudgeWorkspace('assistant', event)} onPointerDown={(event) => startWorkspaceResize('assistant', event)} onPointerMove={resizeWorkspace} onPointerUp={stopWorkspaceResize} onPointerCancel={stopWorkspaceResize} />
 
-        <aside className={`insight-rail agent-rail tui-agent-shell ${assistantOpen ? '' : 'collapsed'}`}>
+        <aside className={`insight-rail agent-rail tui-agent-shell chat-agent-shell ${assistantOpen ? '' : 'collapsed'}`}>
           {assistantOpen ? <>
             <div className="assistant-panel-heading agent-panel-heading tui-agent-header">
               <div className="assistant-title tui-agent-title">
                 <span className="tui-agent-sigil" aria-hidden="true">◆</span>
-                <span className="tui-agent-title-copy"><strong>{ASSISTANT_NAME}</strong><small>YEMU AGENT · WEB TTY</small></span>
+                <span className="tui-agent-title-copy"><strong>{ASSISTANT_NAME}</strong><small>YEMU AGENT · CHAT</small></span>
               </div>
               <div><button className={`icon-button small ${assistantHistoryOpen ? 'active' : ''}`} aria-label="会话历史" title="会话历史" onClick={openAssistantHistoryView}><History size={15} /></button><button className="icon-button small" disabled={assistantLoading} aria-label="新建会话" title="新建会话" onClick={clearAssistant}><Plus size={15} /></button><button className="icon-button small" aria-label={`收起${ASSISTANT_NAME}`} title={`收起${ASSISTANT_NAME}`} onClick={() => setAssistantOpen(false)}><PanelRight size={15} /></button></div>
             </div>
@@ -4414,6 +4435,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 {assistantRunning ? 'RUNNING' : assistantAwaitingInput ? 'INPUT' : 'READY'}
               </span>
             </div>
+            <div className="agent-goal-line" title={latestUserMessage}>
+              <Target size={12} />
+              <span>当前目标</span>
+              <strong>{latestUserMessage.length > 44 ? `${latestUserMessage.slice(0, 44)}…` : latestUserMessage}</strong>
+              <em className={`${assistantRunning ? 'running' : ''}${assistantAwaitingInput ? ' waiting' : ''}`}>{goalStatusLabel}</em>
+            </div>
             {assistantThread?.compactedTurnCount > 0 && <div className="agent-compaction-note" title={assistantThread.contextSummary || '较早对话已压缩为滚动摘要，并会继续参与后续写作'}>
               <BrainCircuit size={12} />
               <span>已压缩 {assistantThread.compactedTurnCount} 轮上下文 · 摘要持续参与写作</span>
@@ -4437,23 +4464,23 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 choiceDisabled={assistantRunning || assistantLoading}
                 onChoose={(run, reply) => submitAssistantAnswer(run, reply)}
               />}
+              {latestAgentRun && <div className="agent-native-controls chat-run-controls"><AgentEditorTurn
+                key={`${latestAgentRun.id}:controls`}
+                run={latestAgentRun}
+                elapsedMs={latestAgentRun.status === 'running' ? assistantElapsedMs : latestAgentRun.durationMs}
+                assistantName={ASSISTANT_NAME}
+                onApply={applyAssistantRevision}
+                onApplyArtifacts={applyAssistantArtifacts}
+                onChoose={(reply) => submitAssistantAnswer(latestAgentRun, reply)}
+                onFollowup={submitAssistantFollowup}
+                onRegenerate={regenerateAssistant}
+                choiceDisabled={assistantRunning || assistantLoading}
+                regenerateDisabled={assistantRunning || assistantLoading}
+                controlsOnly
+              /></div>}
             </div>
-            {latestAgentRun && <div className="agent-native-controls"><AgentEditorTurn
-              key={`${latestAgentRun.id}:controls`}
-              run={latestAgentRun}
-              elapsedMs={latestAgentRun.status === 'running' ? assistantElapsedMs : latestAgentRun.durationMs}
-              assistantName={ASSISTANT_NAME}
-              onApply={applyAssistantRevision}
-              onApplyArtifacts={applyAssistantArtifacts}
-              onChoose={(reply) => submitAssistantAnswer(latestAgentRun, reply)}
-              onFollowup={submitAssistantFollowup}
-              onRegenerate={regenerateAssistant}
-              choiceDisabled={assistantRunning || assistantLoading}
-              regenerateDisabled={assistantRunning || assistantLoading}
-              controlsOnly
-            /></div>}
             <div className="agent-composer-wrap">
-              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{agentWebFetch && <span className="agent-context-web" aria-live="polite"><Globe size={11} />联网读取已开启</span>}{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
+              <div className="agent-context-line"><span><FileText size={12} />{displayChapter.title}</span>{assistantContextStatus?.missingChapterIds?.length > 0 && <span className="agent-context-warning" title={`有 ${assistantContextStatus.missingChapterIds.length} 个前置章节尚未生成确认摘要，Agent 会使用大纲与章末片段作为回退上下文`}><ShieldAlert size={11} />{assistantContextStatus.missingChapterIds.length} 章缺摘要</span>}<small>{wordCount.toLocaleString()} 字{textareaRef.current?.selectionEnd > textareaRef.current?.selectionStart ? ' · 已关联选区' : ''}</small></div>
               {assistantAwaitingInput && <div className="agent-composer-blocked"><CircleHelp size={13} /><span>当前任务正在等待选择，请先回答上方问题</span></div>}
               <form className={`assistant-form agent-composer ${assistantAwaitingInput ? 'waiting-input' : ''}`} onSubmit={submitAssistant}>
                 <input ref={assistantFileInputRef} className="agent-file-input" type="file" multiple accept=".txt,.md,.markdown,.json,.csv,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.go,.rs,text/*,application/json" onChange={handleExternalFiles} />
@@ -4503,9 +4530,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 </div>}
                 <div className="agent-composer-footer">
                   <div className="agent-composer-controls" ref={agentControlsRef}>
-                    <button type="button" className={`agent-mode-trigger team ${agentMultiAgent ? 'active' : ''} ${agentPickerOpen === 'team' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'team'} onClick={() => toggleAgentPicker('team')} title="选择单智能体或多智能体协作"><UsersRound size={13} /><span>{agentMultiAgent ? '多智能体' : '智能体'}</span><ChevronDown size={11} /></button>
-                    <span className="agent-control-divider" aria-hidden="true" />
-                    <button type="button" className={`agent-mode-trigger web ${agentWebFetch ? 'active' : ''}`} aria-pressed={agentWebFetch} aria-label={agentWebFetch ? '关闭联网读取' : '开启联网读取'} disabled={assistantRunning} onClick={toggleAgentWebFetch} title={assistantRunning ? '当前任务的联网权限已经固定' : agentWebFetch ? '关闭联网读取' : '开启后可直接读取公开网页链接'}><Globe size={13} /><span>{agentWebFetch ? '联网已开' : '联网'}</span></button>
                     <button type="button" className={`agent-control-trigger model ${agentPickerOpen === 'model' ? 'open' : ''}`} aria-haspopup="listbox" aria-expanded={agentPickerOpen === 'model'} disabled={agentSettingSaving} onClick={() => toggleAgentPicker('model')} title="选择模型">
                       <AgentModelGlyph model={agentModel} />
                       <span>{agentModel || (agentModelsLoading ? '读取中…' : '默认模型')}</span>
@@ -4528,14 +4552,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                       value={agentReasoningEffort}
                       loading={false}
                       onSelect={(value) => { setAgentPickerOpen(null); updateAgentSetting('reasoningEffort', value) }}
-                    />}
-                    {agentPickerOpen === 'team' && <AgentComposerMenu
-                      title="智能体协作"
-                      description="多智能体会额外消耗 token，但会先并行审阅再统一回答"
-                      options={agentTeamOptions}
-                      value={agentMultiAgent ? 'team' : 'solo'}
-                      loading={false}
-                      onSelect={(value) => { setAgentMultiAgent(value === 'team'); setAgentPickerOpen(null) }}
                     />}
                     <button type="button" className="agent-tool-button icon-only" onClick={onOpenSettings} title="打开模型设置" aria-label="打开模型设置"><Settings2 size={14} /></button>
                   </div>
