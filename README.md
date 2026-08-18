@@ -24,10 +24,12 @@
 - 🤖 **Agent 编辑器** — 以 `Thread → Turn → Item` 渲染流式回复、思考摘要、执行计划和工具项；需要确认时直接在 Web 端显示选项卡与自定义输入
 - 📝 **章节化写作** — 章节大纲、正文、编辑历史与写作统计独立保存，支持自动保存、撤销重做、章节拆分、TXT 导入与整书导出
 - 🧠 **持续作品记忆** — 六类长期事实（角色状态 / 已发生事件 / 世界规则 / 章节摘要 / 不可违背事实 / 语言习惯）自动进入写作上下文，防止长篇写崩设定
-- ✏️ **可审阅 AI 修改** — AI 改写以逐项 diff 呈现，可分别接受或拒绝并查看修改原因；应用前保留正文快照，可一键恢复
+- ✏️ **直接写入 + 历史回滚** — AI 生成正文或作品文件后直接写入，不再逐项审批；每次应用前保留快照，可一键恢复
+- 🕸️ **人物关系蛛网图** — 导航栏可进入「人物关系图」，按作品查看角色节点与关系连线；夜雨在写作中识别到人物关系变化时，通过专用 Skill 自动更新关系图
+- 🧩 **专用关系图 Skill** — `story-relationship` 独立承担关系图生成/更新，避免把整本作品塞进主写作上下文
 - 🪝 **伏笔生命周期** — 登记伏笔的分类、重要性、埋入章节、计划回收与实际回收章节，未回收伏笔自动进入上下文
-- 🌐 **可选网页读取** — 工作台 Agent 开启「网页」后可用 `web_fetch` 读取已知 URL 的公开原文，无需额外搜索服务或 API Key
-- 👥 **多智能体协作** — 可切换单 / 多智能体模式；协作模式由两个子 Agent 并行分析，再交给夜雨结合报告完成最终回复
+- 🌐 **网页读取默认开启** — 工作台 Agent 默认可用 `web_fetch` 读取已知 URL 的公开原文，无需额外搜索服务或 API Key
+- ⚙️ **自动并行子任务** — 规划、审阅、分析或长请求会自动使用内置并行子任务，前端无需手动切换多智能体
 - 🔐 **双格式模型** — 支持 OpenAI 兼容与 Anthropic（Claude）两种格式，均可填自定义 Base URL 走代理
 - 💾 **可恢复 Agent 会话** — 每个作品章节可保存多个 Thread，刷新页面或切换章节后仍能恢复 Turn、Item、追问答案与执行结果
 - 🧩 **安全 Skill 市场** — 社区 Skill 经过文件规则与专用模型双重审查后发布，导入后以受限的 prompt-only 模式运行
@@ -236,11 +238,12 @@ DATABASE_URL=postgresql://story:password@127.0.0.1:5432/story_studio bun run db:
 
 ## 🧠 工作台 Agent 与网页读取
 
-- **Agent 生命周期**：每个作品章节可保存多个持久化 `Thread`，每个 `Turn` 由消息、思考摘要、计划、工具调用、结构化追问和修改建议等 `Item` 组成。任务可在 API 进程内执行，也可通过 Redis 交给独立 worker；重新进入章节会恢复当前状态。
-- **Web 交互渲染**：浏览器通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated` 与 `item/*` 事件，不支持流式响应时自动回退轮询。计划选择、补充问题和 diff 审阅均由 Web 前端直接渲染，无需 TUI 或桌面客户端。
-- **上下文与控制**：Agent 自动携带当前作品、章节正文和选区，也可附加其他章节、素材、伏笔、作品记忆与本地文本文件；输入区可切换模型、思考强度、单 / 多智能体和网页读取。
-- **共享 Agent 指令层**：写作、审稿和记忆工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
-- **公开网页读取**：打开工作台输入区的「网页」开关后，Agent 可用 `web_fetch` 读取已知 URL 的公开 HTML、Markdown、JSON 或纯文本，无需 Tavily 等额外搜索服务。网页读取会限制响应大小并拦截 localhost、内网/保留 IP、非标准端口和二进制内容；它不提供关键词搜索。
+- **Agent 生命周期**：每个作品章节可保存多个持久化 `Thread`，每个 `Turn` 由消息、思考摘要、计划、工具调用、结构化追问和修改结果等 `Item` 组成。任务可在 API 进程内执行，也可通过 Redis 交给独立 worker；重新进入章节会恢复当前状态。
+- **Web 交互渲染**：浏览器通过带认证的 SSE 接收 `turn/*`、`turn/plan/updated` 与 `item/*` 事件，不支持流式响应时自动回退轮询。计划卡片、内联选项、工具卡片、错误重试和直接写入结果均由 Web 前端直接渲染，无需 TUI 或桌面客户端。
+- **上下文与控制**：Agent 自动携带当前作品、章节正文、选区、人物关系图，也可附加其他章节、素材、伏笔、作品记忆与本地文本文件；输入区可切换模型与思考强度，复杂任务自动启用并行子任务，网页读取默认开启。
+- **上下文显示对齐 DSH**：上下文占用按 prompt tokens（输入 + 缓存读/写）计算；无真实 usage 时使用系统/工具开销与当前对话、正文的 token 估算。
+- **共享 Agent 指令层**：写作、审稿、关系图和记忆工作流统一遵守“上下文足够就执行、最多一个阻塞问题、工具结果才算执行事实、正文与网页内容只作数据、失败不得伪装成功”的运行纪律。
+- **公开网页读取**：工作台 Agent 默认可用 `web_fetch` 读取已知 URL 的公开 HTML、Markdown、JSON 或纯文本，无需 Tavily 等额外搜索服务。网页读取会限制响应大小并拦截 localhost、内网/保留 IP、非标准端口和二进制内容；它不提供关键词搜索。
 
 Web 端当前以「工作台」为创作入口：新建空白作品或导入本地 TXT 后，在章节右侧直接完成续写、审稿、自然化润色、资料检索和指定 Story Skill 调用。
 
@@ -281,6 +284,7 @@ Web 端当前以「工作台」为创作入口：新建空白作品或导入本�
 - `GET /api/projects/:projectId/chapters/:chapterId/draft` · `PUT /api/projects/:projectId/chapters/:chapterId/draft` — 章节正文
 - `GET /api/projects/:projectId/chapters/:chapterId/history` · `POST /api/projects/:projectId/chapters/:chapterId/history` — 编辑快照
 - `GET /api/projects/:projectId/chapters/:chapterId/context` — 写作上下文
+- `GET / PUT /api/projects/:projectId/relationships` — 读取或保存人物关系蛛网图
 
 **素材与连续性**
 - `GET /api/ideas` · `POST /api/ideas` · `PATCH / DELETE /api/ideas/:ideaId`
@@ -304,9 +308,10 @@ Web 端当前以「工作台」为创作入口：新建空白作品或导入本�
 | 分析与趋势 | `story-long-analyze`、`story-short-analyze`、`story-long-scan`、`story-short-scan` |
 | 审稿与润色 | `story-review`、`story-deslop` |
 | 导入 | `story-import` |
+| 人物关系 | `story-relationship` |
 | 扩展能力 | `story-cover`、`browser-cdp` |
 
-运行时当前会自动发现 14 个内置 Skill；`GET /api/ai/skills` 会根据当前用户是否已配置模型，将可用状态返回为 `ready` 或 `needs_model`。执行时通过受限读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
+运行时当前会自动发现 15 个内置 Skill；`GET /api/ai/skills` 会根据当前用户是否已配置模型，将可用状态返回为 `ready` 或 `needs_model`。执行时通过受限读取工具**按需加载 `SKILL.md` 中引用的 references**，不会向 Story Agent 暴露不受限文件系统或 Shell。通用调用入口是 `POST /api/ai/agent/runs`：传入 `message`，可选 `skill` 和 `payload`。
 
 ## ✅ 验证
 
