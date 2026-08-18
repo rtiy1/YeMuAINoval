@@ -49,6 +49,21 @@
 
 > **📌 说明**：本项目依赖外部 AI API，不需要本地 GPU。本地开发不配置 `DATABASE_URL` 和 `REDIS_URL` 时，核心状态写入 `server/data/db.json`，无需额外启动数据库或队列服务。
 
+## 🖥️ 桌面端
+
+项目内置 **桌面版**（Tauri v2 + Bun sidecar）：免登录、无 PostgreSQL/Redis、数据全部落在本机。
+直接看 [桌面端文档](docs/desktop.md)。
+
+```bash
+# 只跑本地服务（无需 Rust 工具链）
+bun run desktop:start
+# 跑桌面壳（需要 Rust）：tauri dev / tauri build
+bun run desktop:tauri:dev
+```
+
+> 桌面端本地模式由 `AUTH_MODE=local` 驱动：服务端自动以隐式本地用户响应所有请求，
+> 前端登录页天然不再出现，也不依赖任何外部服务。
+
 ## 🚀 快速开始
 
 ### 前置要求

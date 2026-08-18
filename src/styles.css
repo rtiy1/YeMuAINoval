@@ -1109,6 +1109,7 @@ input[type="range"].settings-slider::-moz-range-track { height: 4px; background:
 .auth-back-button { align-self: center; display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; color: #7f837b; background: transparent; font-size: 10px; }
 .auth-back-button:hover, .auth-back-button:focus-visible { color: #353a35; outline: none; }
 @keyframes auth-quote-slide-in { from { opacity: 0; transform: translateX(34px); } to { opacity: 1; transform: translateX(0); } }
+/* ========================================================================== */
 @media (prefers-reduced-motion: reduce) { .auth-quote-slide { animation: none; } .auth-progress-art span, .sidebar { transition: none; } }
 .mobile-menu-button, .mobile-nav { display: none; }
 @media (max-width: 1050px) { .page { padding-left: 28px; padding-right: 28px; }.topbar { padding: 0 24px; }.focus-project { grid-template-columns: 135px minmax(0,1fr); }.focus-side-note { display: none; }.editor-layout, .editor-page.assistant-hidden .editor-layout { grid-template-columns: 180px minmax(0,1fr); }.insight-rail { display: none; }.project-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.project-grid .project-card:last-child { display: none; }.idea-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
@@ -8203,6 +8204,1786 @@ html[data-theme='dark'] .tui-agent-shell.collapsed .assistant-reopen {
     background: var(--tui-accent);
     border-color: rgba(255, 255, 255, .2);
   }
+}
+
+/* ========================================================================== */
+/* 全量暗色覆盖扩充：把遗留的浅色表面映射到夜色调色板（仅在暗色模式生效）            */
+/* 覆盖范围：仪表盘/作品/素材、技能市场/技能运行器、弹窗与菜单、内嵌 Agent 表面、     */
+/* 设置/分析/个人主页/认证/搜索、统一 composer 等。与上方 7586 起的基础暗色块分工：  */
+/* 这里的规则均带 html[data-theme='dark'] 前缀，仅当暗色主题激活时生效。           */
+html[data-theme='dark'] {
+  --night-green-bg: color-mix(in srgb, var(--ide-green) 16%, var(--ide-paper));
+  --night-green-text: color-mix(in srgb, var(--ide-green) 74%, var(--ide-text));
+  --night-green-line: color-mix(in srgb, var(--ide-green) 40%, var(--ide-line));
+  --night-red-bg: color-mix(in srgb, var(--ide-red) 15%, var(--ide-paper));
+  --night-red-text: color-mix(in srgb, var(--ide-red) 78%, var(--ide-text));
+  --night-red-line: color-mix(in srgb, var(--ide-red) 42%, var(--ide-line));
+  --night-warm-bg: color-mix(in srgb, #a16b55 18%, var(--ide-paper));
+  --night-warm-text: color-mix(in srgb, #d6a06f 80%, var(--ide-text));
+  --night-warm-line: color-mix(in srgb, #a16b55 42%, var(--ide-line));
+  --night-yellow-bg: color-mix(in srgb, #d6a06f 18%, var(--ide-paper));
+  --night-yellow-text: #d9b078;
+  --night-yellow-line: color-mix(in srgb, #d6a06f 42%, var(--ide-line));
+  --night-purple-bg: color-mix(in srgb, var(--ide-purple) 18%, var(--ide-paper));
+  --night-purple-text: color-mix(in srgb, var(--ide-purple) 74%, var(--ide-text));
+  --night-purple-line: color-mix(in srgb, var(--ide-purple) 42%, var(--ide-line));
+  --night-blue-bg: color-mix(in srgb, var(--ide-blue) 18%, var(--ide-paper));
+  --night-blue-text: color-mix(in srgb, var(--ide-blue) 74%, var(--ide-text));
+  --night-blue-line: color-mix(in srgb, var(--ide-blue) 42%, var(--ide-line));
+}
+
+/* ---------- 全局控件 ---------- */
+html[data-theme='dark'] .secondary-button,
+html[data-theme='dark'] .primary-button {
+  color: var(--ide-text);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .secondary-button:hover,
+html[data-theme='dark'] .primary-button:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .icon-button:hover,
+html[data-theme='dark'] .search-button:hover,
+html[data-theme='dark'] .icon-button.active {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .search-button kbd {
+  color: var(--ide-muted);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .text-button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .text-button:hover,
+html[data-theme='dark'] .filter-tabs button.selected,
+html[data-theme='dark'] .filter-button:hover {
+  color: var(--ide-text);
+}
+
+/* ---------- 仪表盘 / 作品 / 素材 ---------- */
+html[data-theme='dark'] .dashboard-summary,
+html[data-theme='dark'] .dashboard-stat-strip {
+  background: var(--ide-line);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] :is(.summary-card, .dashboard-stat-strip .summary-card) {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .summary-card strong,
+html[data-theme='dark'] .focus-metrics strong,
+html[data-theme='dark'] .focus-project h3,
+html[data-theme='dark'] .focus-side-note p {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .summary-card small,
+html[data-theme='dark'] .summary-card em,
+html[data-theme='dark'] .focus-copy p,
+html[data-theme='dark'] .focus-metrics,
+html[data-theme='dark'] .focus-side-note .icon-button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .summary-icon.coral,
+html[data-theme='dark'] .quick-action-icon.coral,
+html[data-theme='dark'] .workflow-icon.coral,
+html[data-theme='dark'] .tool-icon.coral,
+html[data-theme='dark'] .material-picker-mark.coral,
+html[data-theme='dark'] .skill-card-icon.coral {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .summary-icon.teal,
+html[data-theme='dark'] .quick-action-icon.teal,
+html[data-theme='dark'] .workflow-icon.teal,
+html[data-theme='dark'] .tool-icon.teal,
+html[data-theme='dark'] .material-picker-mark.teal,
+html[data-theme='dark'] .skill-card-icon.teal {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .summary-icon.yellow,
+html[data-theme='dark'] .quick-action-icon.yellow,
+html[data-theme='dark'] .workflow-icon.yellow,
+html[data-theme='dark'] .tool-icon.yellow,
+html[data-theme='dark'] .material-picker-mark.yellow,
+html[data-theme='dark'] .skill-card-icon.yellow {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .summary-icon.purple,
+html[data-theme='dark'] .quick-action-icon.purple,
+html[data-theme='dark'] .workflow-icon.purple,
+html[data-theme='dark'] .tool-icon.purple,
+html[data-theme='dark'] .material-picker-mark.purple,
+html[data-theme='dark'] .skill-card-icon.purple {
+  color: var(--night-purple-text);
+  background: var(--night-purple-bg);
+  border-color: var(--night-purple-line);
+}
+html[data-theme='dark'] .workflow-icon.blue,
+html[data-theme='dark'] .tool-icon.blue,
+html[data-theme='dark'] .skill-card-icon.blue,
+html[data-theme='dark'] .skill-card-icon.blue {
+  color: var(--night-blue-text);
+  background: var(--night-blue-bg);
+  border-color: var(--night-blue-line);
+}
+html[data-theme='dark'] .workflow-icon.pink,
+html[data-theme='dark'] .tool-icon.pink {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] :is(.dashboard-quick-actions > button, .overview-link-list > button) {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.dashboard-quick-actions > button, .overview-link-list > button):hover {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.dashboard-quick-actions, .overview-link-list) small,
+html[data-theme='dark'] :is(.dashboard-quick-actions, .overview-link-list) > button > svg {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .focus-project {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .progress-line,
+html[data-theme='dark'] .mini-progress,
+html[data-theme='dark'] .row-progress,
+html[data-theme='dark'] .banner-progress > div {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .note-label {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .focus-side-note {
+  border-left-color: var(--ide-line);
+}
+html[data-theme='dark'] .project-card:hover {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .work-row {
+  color: var(--ide-text);
+  border-bottom-color: var(--ide-line);
+}
+html[data-theme='dark'] .work-row:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .work-row h3,
+html[data-theme='dark'] .work-row .row-stat strong,
+html[data-theme='dark'] .work-row .row-updated strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] :is(.row-main p, .row-stat span, .row-updated span, .row-arrow, .workflow-index, .workflow-arrow) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .works-toolbar,
+html[data-theme='dark'] .material-filter-row,
+html[data-theme='dark'] .assistant-chat-header,
+html[data-theme='dark'] .editor-heading {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .material-project-filter {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .material-pin-filter {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .material-pin-filter.selected {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+}
+html[data-theme='dark'] .idea-card:hover {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .idea-card p,
+html[data-theme='dark'] .idea-card-foot,
+html[data-theme='dark'] .analysis-card p,
+html[data-theme='dark'] .analysis-number,
+html[data-theme='dark'] .tool-card p,
+html[data-theme='dark'] .tool-arrow,
+html[data-theme='dark'] .tool-footer,
+html[data-theme='dark'] .skill-card p,
+html[data-theme='dark'] .skill-card-foot,
+html[data-theme='dark'] .material-card .card-content p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .idea-card .idea-card-top,
+html[data-theme='dark'] .idea-card .idea-card-top.coral {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .idea-card .idea-card-top.teal {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] .idea-card .idea-card-top.yellow {
+  color: var(--night-yellow-text);
+}
+html[data-theme='dark'] .idea-card .idea-card-top.purple {
+  color: var(--night-purple-text);
+}
+/* 卡片顶边强调色：暗色下改用对应色调的边框线 */
+html[data-theme='dark'] .idea-card {
+  border-top-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .idea-card.teal {
+  border-top-color: var(--night-green-line);
+}
+html[data-theme='dark'] .idea-card.yellow {
+  border-top-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .idea-card.purple {
+  border-top-color: var(--night-purple-line);
+}
+html[data-theme='dark'] .material-card.pinned {
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+  box-shadow: inset 0 0 0 1px var(--ide-line);
+}
+html[data-theme='dark'] .material-tags span {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .material-picker-subtitle,
+html[data-theme='dark'] .material-picker-copy small,
+html[data-theme='dark'] .material-picker-copy p,
+html[data-theme='dark'] .material-detail-path,
+html[data-theme='dark'] .material-picker-item > svg {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .material-picker-item {
+  color: var(--ide-text);
+  border-bottom-color: var(--ide-line);
+}
+html[data-theme='dark'] .material-picker-item:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .material-detail-body {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .deconstruct-banner {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .banner-icon {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .deconstruct-banner p,
+html[data-theme='dark'] .banner-progress span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .analysis-card h3,
+html[data-theme='dark'] .tool-card h3,
+html[data-theme='dark'] .skill-card h3 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .analysis-card:hover,
+html[data-theme='dark'] .tool-card:hover,
+html[data-theme='dark'] .skill-card:hover {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .toolkit-status-bar {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .toolkit-redirect-card {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .toolkit-redirect-card p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-catalog,
+html[data-theme='dark'] .skill-capability-list,
+html[data-theme='dark'] .skill-capability-row {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .skill-capability-row strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .skill-capability-row > div span,
+html[data-theme='dark'] .skill-capability-row p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-status {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-status.ready {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .skill-status.needs_model {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .skill-status.unavailable {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .skill-platform-select {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-capability-row.clickable:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .skill-deslop-button {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+
+/* ---------- 弹窗 / 菜单 / 对话框 ---------- */
+html[data-theme='dark'] .modal label,
+html[data-theme='dark'] .modal-subtitle,
+html[data-theme='dark'] .modal .confirm-text,
+html[data-theme='dark'] .skill-runner-desc,
+html[data-theme='dark'] .skill-runner-field > span,
+html[data-theme='dark'] .settings-subtitle,
+html[data-theme='dark'] .settings-loading,
+html[data-theme='dark'] .settings-field > span,
+html[data-theme='dark'] .settings-field small {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .modal-note {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .skill-runner-selection {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .skill-runner-validation,
+html[data-theme='dark'] .skill-result-error {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .skill-runner-content-toggle button,
+html[data-theme='dark'] .skill-runner-rewrite-modes button {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-runner-content-toggle button.active,
+html[data-theme='dark'] .skill-runner-rewrite-modes button.active {
+  color: #f8f5ec;
+  background: #3d746a;
+  border-color: #3d746a;
+}
+html[data-theme='dark'] .skill-runner-field textarea,
+html[data-theme='dark'] .skill-runner-content-input {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-result-panel {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] .skill-result-status.completed {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .skill-result-status.needs_model,
+html[data-theme='dark'] .skill-result-status.needs_input {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+}
+html[data-theme='dark'] .skill-result-status.failed {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+}
+html[data-theme='dark'] .skill-result-status.needs_adapter {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .skill-result-skill {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .skill-result-route,
+html[data-theme='dark'] .skill-result-refs-label,
+html[data-theme='dark'] .skill-result-checks-label,
+html[data-theme='dark'] .skill-result-output-label,
+html[data-theme='dark'] .skill-result-findings-label {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .skill-result-notice {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+}
+html[data-theme='dark'] .skill-result-ref-chip {
+  color: var(--ide-text);
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-result-check {
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .skill-result-check > span:last-child {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .skill-result-output-actions button {
+  color: var(--ide-text);
+  background: var(--ide-active);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .skill-result-output-actions button:hover {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .skill-result-output-actions .replace-output {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .skill-result-output-actions .replace-output:hover {
+  color: var(--night-warm-text);
+  background: color-mix(in srgb, var(--night-warm-bg) 78%, #000);
+}
+html[data-theme='dark'] .skill-result-output-text {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-result-comparison span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-result-comparison pre {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-result-comparison > div:last-child pre {
+  background: color-mix(in srgb, var(--ide-green) 7%, var(--ide-paper));
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .skill-result-finding {
+  border-bottom-color: var(--ide-line);
+}
+html[data-theme='dark'] .skill-result-finding strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .skill-result-finding p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-file-picker {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-file-picker:hover,
+html[data-theme='dark'] .skill-file-picker.selected {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .skill-file-picker > svg {
+  color: var(--night-green-text);
+}
+
+html[data-theme='dark'] .empty-state {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .empty-state-icon {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .empty-state h2 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .empty-state p,
+html[data-theme='dark'] .confirm-text {
+  color: var(--ide-muted);
+}
+
+html[data-theme='dark'] .chapter-menu,
+html[data-theme='dark'] .chapter-menu-btn:hover,
+html[data-theme='dark'] .work-row-menu:hover {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .chapter-menu button {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .chapter-menu button:hover,
+html[data-theme='dark'] .chapter-menu button.danger:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .chapter-menu button.danger {
+  color: var(--night-red-text);
+}
+html[data-theme='dark'] .work-row-menu {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .smart-create-button {
+  color: var(--night-purple-text);
+  background: var(--night-purple-bg);
+  border-color: var(--night-purple-line);
+}
+html[data-theme='dark'] .smart-create-button:hover {
+  background: color-mix(in srgb, var(--night-purple-bg) 82%, #000);
+}
+html[data-theme='dark'] .rail-tabs {
+  background: var(--ide-active);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .rail-tabs button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .rail-tabs button.active {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .rail-header-actions .icon-button.active {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+}
+html[data-theme='dark'] :is(.rail-outline-list > button, .rail-entity-list > button, .rail-foreshadow-item),
+html[data-theme='dark'] :is(.rail-outline-list > button, .rail-entity-list > button, .rail-foreshadow-item) strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] :is(.rail-outline-list > button, .rail-entity-list > button, .rail-foreshadow-item) small,
+html[data-theme='dark'] :is(.rail-outline-list > button > span, .rail-entity-list > button > span, .rail-outline-list button .rail-outline-num) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] :is(.rail-outline-list > button, .rail-entity-list > button, .rail-foreshadow-item):hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .rail-file-item:hover,
+html[data-theme='dark'] .rail-file-item:focus-within {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .rail-file-open,
+html[data-theme='dark'] .rail-file-list strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .rail-file-list small,
+html[data-theme='dark'] .rail-file-delete {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .foreshadow-importance {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+}
+html[data-theme='dark'] .editor-page .chapter-item-wrap {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .editor-page .chapter-item-wrap:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .editor-page .chapter-item-wrap.current {
+  color: var(--ide-text);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] :is(.editor-page .chapter-item, .editor-page .chapter-name, .editor-page .rail-header strong) {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .danger-toolbar {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .danger-toolbar:hover {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+}
+
+/* ---------- 内嵌 Agent（编辑器 rail 里的独立表面） ---------- */
+html[data-theme='dark'] .assistant-form {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-form textarea,
+html[data-theme='dark'] .agent-choice-custom input {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .assistant-form > div > span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] :is(.assistant-quick-actions, .assistant-context-card) {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-quick-actions button:hover,
+html[data-theme='dark'] .anchor-list button:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .assistant-quick-actions button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .assistant-context-card strong,
+html[data-theme='dark'] .assistant-welcome strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .assistant-context-card span,
+html[data-theme='dark'] .assistant-context-card small,
+html[data-theme='dark'] .assistant-welcome p,
+html[data-theme='dark'] .assistant-message,
+html[data-theme='dark'] .agent-reasoning,
+html[data-theme='dark'] .agent-answer > p,
+html[data-theme='dark'] .agent-markdown {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .assistant-title {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .assistant-title span {
+  color: var(--night-blue-text);
+  background: var(--night-blue-bg);
+}
+html[data-theme='dark'] .agent-empty-mark {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-empty > strong,
+html[data-theme='dark'] .agent-answer-heading strong,
+html[data-theme='dark'] .agent-choice-card > header span,
+html[data-theme='dark'] .agent-choice-card > p,
+html[data-theme='dark'] .agent-choice-options button,
+html[data-theme='dark'] .agent-finding-list p {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .agent-empty > p,
+html[data-theme='dark'] .agent-choice-card > header small,
+html[data-theme='dark'] .agent-finding-list small,
+html[data-theme='dark'] .agent-choice-hint {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-starters button {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-starters button:hover {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .agent-user-turn p {
+  color: var(--ide-text);
+  background: var(--ide-active);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .agent-markdown h1,
+html[data-theme='dark'] .agent-markdown h2,
+html[data-theme='dark'] .agent-markdown h3,
+html[data-theme='dark'] .agent-markdown h4 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .agent-markdown blockquote {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-markdown code {
+  color: #a9d2c2;
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .agent-markdown th {
+  color: var(--ide-text);
+  background: var(--ide-active);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .agent-markdown-table-wrap {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .agent-reasoning-summary {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-plan {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-plan-heading,
+html[data-theme='dark'] .agent-plan li {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-choice-options button:hover:not(:disabled) {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .agent-choice-options button.selected {
+  color: var(--night-green-text);
+  background: color-mix(in srgb, var(--ide-green) 22%, var(--ide-paper));
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .agent-choice-options button strong {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .agent-choice-options button.selected strong {
+  color: #fff;
+  background: #4d7b6e;
+}
+html[data-theme='dark'] .agent-diff,
+html[data-theme='dark'] .agent-diff > header {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .agent-diff-hunk-heading {
+  color: var(--ide-muted);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .agent-diff-hunk-heading button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-diff-hunk-heading button.active {
+  color: #fff;
+  background: #4d7b6e;
+}
+html[data-theme='dark'] .agent-diff-hunk-heading button.active.reject {
+  background: var(--night-red-line);
+}
+html[data-theme='dark'] .agent-diff-hunk {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .diff-line {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .diff-line.removed {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+}
+html[data-theme='dark'] .diff-line.added {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .agent-diff > footer {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .agent-diff > footer button {
+  color: var(--ide-text);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .edit-proposal-summary,
+html[data-theme='dark'] .edit-hunk {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .edit-hunk header {
+  background: var(--ide-hover);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .edit-hunk-copy.original {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .edit-hunk-copy.replacement {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .assistant-send.stop {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+}
+html[data-theme='dark'] .assistant-form.agent-composer .assistant-send.steer {
+  background: #486d62;
+}
+html[data-theme='dark'] .assistant-reopen {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .assistant-reopen:hover {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .agent-context-line {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-answer.notice {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .agent-answer-heading button:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .agent-answer-actions button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-answer-actions button:hover:not(:disabled) {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+
+/* ---------- 大纲 / 历史 / 词频 / 分章 / 导入 / 智能创建 ---------- */
+html[data-theme='dark'] :is(.outline-list li, .history-item, .smart-outline-item, .import-preview > span) {
+  color: var(--ide-text);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .outline-num,
+html[data-theme='dark'] .outline-words,
+html[data-theme='dark'] .history-item > svg,
+html[data-theme='dark'] .history-item-copy small,
+html[data-theme='dark'] .history-empty,
+html[data-theme='dark'] .import-preview small,
+html[data-theme='dark'] .smart-outline-index,
+html[data-theme='dark'] .split-preview span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .outline-title {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .outline-title:hover,
+html[data-theme='dark'] .history-item-version {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .outline-state {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .outline-state.done {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .history-item:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .history-item-copy strong,
+html[data-theme='dark'] .split-preview strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .history-empty p,
+html[data-theme='dark'] .split-preview p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .toast.loading {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .toast.error {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .frequency-cloud {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .frequency-chip {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .frequency-chip small {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] :is(.split-preview > div, .import-file-picker > span, .skill-file-picker) {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .import-file-picker:hover > span {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .import-file-picker svg {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .import-file-picker small {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .import-detection {
+  color: var(--ide-muted);
+  background: color-mix(in srgb, var(--ide-green) 10%, var(--ide-paper));
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .import-detection strong {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] .import-preview b,
+html[data-theme='dark'] .smart-outline-index {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .smart-outline-heading {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .smart-outline-list,
+html[data-theme='dark'] .smart-outline-item {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .smart-outline-item > .icon-button {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .smart-result-button {
+  color: var(--night-green-text) !important;
+  background: var(--night-green-bg) !important;
+  border-color: var(--night-green-line) !important;
+}
+
+/* ---------- 全页聊天助手 ---------- */
+html[data-theme='dark'] .assistant-chat-title h1,
+html[data-theme='dark'] .assistant-chat-empty h2 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .assistant-chat-title small {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .assistant-chat-empty p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] :is(.assistant-chat-starters button, .assistant-chat-suggestions button) {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.assistant-chat-starters button, .assistant-chat-suggestions button):hover:not(:disabled) {
+  color: var(--night-green-text);
+  border-color: var(--night-green-line);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .assistant-chat-avatar {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .assistant-chat-message.user .assistant-chat-avatar {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .assistant-chat-bubble {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .assistant-chat-message.user .assistant-chat-bubble {
+  color: #dcefea;
+  background: var(--chat-bubble-user);
+  border-color: var(--chat-bubble-user-border);
+}
+html[data-theme='dark'] .assistant-chat-message.loading .assistant-chat-bubble {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .assistant-chat-complete {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .assistant-chat-form {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+  box-shadow: 0 8px 28px rgba(0,0,0,.28);
+}
+html[data-theme='dark'] .assistant-chat-form textarea,
+html[data-theme='dark'] .assistant-plan-custom input {
+  color: var(--ide-text);
+  background: transparent;
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .assistant-chat-form .assistant-send {
+  color: #f8f5ec;
+  background: #2a2f2b;
+}
+html[data-theme='dark'] .assistant-plan-question {
+  border-bottom-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-plan-question > span {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .assistant-plan-question h3,
+html[data-theme='dark'] .assistant-plan-question button strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .assistant-plan-question > div {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-plan-question button {
+  color: var(--ide-muted);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-plan-question button:hover {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .assistant-plan-question button small {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .composer-toggle {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .composer-toggle:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .composer-toggle.active {
+  color: #f8f5ec;
+  background: #3d746a;
+  border-color: #3d746a;
+}
+html[data-theme='dark'] :is(.assistant-composer-tools label, .assistant-composer-tools select) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .assistant-chat-hint {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .idea-label-row button {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .idea-label-row button.selected {
+  color: #f8f5ec;
+  background: #3d746a;
+  border-color: #3d746a;
+}
+html[data-theme='dark'] .guide-content h3 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .guide-content p {
+  color: var(--ide-muted);
+}
+
+/* ---------- 搜索 / 认证 ---------- */
+html[data-theme='dark'] .search-input-wrap {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .search-input-wrap svg,
+html[data-theme='dark'] .search-hint,
+html[data-theme='dark'] .search-group-label,
+html[data-theme='dark'] .search-result-meta,
+html[data-theme='dark'] .search-result-item svg {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .search-input-wrap input {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .search-result-item:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .search-result-title {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .auth-page,
+html[data-theme='dark'] .auth-loading {
+  background: var(--ide-bg);
+}
+html[data-theme='dark'] .auth-mode {
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .auth-mode button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .auth-mode button.active {
+  color: var(--ide-text);
+  background: var(--ide-paper);
+}
+html[data-theme='dark'] .auth-input .auth-password-toggle {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .auth-input .auth-password-toggle:hover,
+html[data-theme='dark'] .auth-input .auth-password-toggle:focus-visible {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .auth-input .auth-code-button {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .auth-input .auth-code-button:hover:not(:disabled),
+html[data-theme='dark'] .auth-input .auth-code-button:focus-visible:not(:disabled) {
+  color: var(--night-warm-text);
+  background: color-mix(in srgb, var(--night-warm-bg) 82%, #000);
+}
+html[data-theme='dark'] .auth-input .auth-code-button:disabled {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .auth-notice {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .auth-error {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .auth-label-row button {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .auth-label-row button:hover,
+html[data-theme='dark'] .auth-label-row button:focus-visible {
+  color: var(--night-warm-text);
+}
+html[data-theme='dark'] .auth-back-button {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .auth-back-button:hover,
+html[data-theme='dark'] .auth-back-button:focus-visible {
+  color: var(--ide-text);
+}
+
+/* ---------- 编辑器浮动菜单/杂项 ---------- */
+html[data-theme='dark'] .editor-searchbar input {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .editor-searchbar > span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .toolbar-button.speaking {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+}
+html[data-theme='dark'] .toolbar-divider {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .editor-clean-markers {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .editor-clean-markers:hover {
+  color: var(--night-warm-text);
+  background: color-mix(in srgb, var(--night-warm-bg) 82%, #000);
+}
+html[data-theme='dark'] .editor-style-menu-heading button:hover,
+html[data-theme='dark'] .editor-style-menu-heading button.active {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .editor-style-options button {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .editor-style-options button:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .editor-style-options button.active {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .workspace-chapter-picker select {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .mobile-chapter-button {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .workspace-resizer {
+  background: var(--ide-line);
+}
+
+/* ---------- 设置 - 进阶框（部分在 3453-6166 已定义） ---------- */
+html[data-theme='dark'] .settings-fetch-models {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-fetch-models:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .settings-fetch-models.success {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] input[type="range"].settings-slider,
+html[data-theme='dark'] input[type="range"].settings-slider::-moz-range-track {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-actions {
+  background: transparent;
+  border-top-color: var(--ide-line);
+}
+
+/* ---------- 评审对话框 ---------- */
+html[data-theme='dark'] .review-verdict {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .review-verdict-label {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .review-verdict p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .verdict-mark {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .verdict-mark.concerns {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .verdict-mark.reject {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .severity-pill {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .severity-pill.s1 {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .severity-pill.s2 {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .severity-pill.s3 {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .severity-pill.s4 {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .review-finding blockquote {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line);
+}
+
+/* ---------- 技能市场 ---------- */
+html[data-theme='dark'] :is(.skill-market-overview > div, .skill-market-overview > p) {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-market-overview strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .skill-market-overview small {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-market-overview > div > svg,
+html[data-theme='dark'] .market-skill-icon {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .skill-market-overview > p {
+  background: color-mix(in srgb, var(--ide-green) 9%, var(--ide-panel));
+}
+html[data-theme='dark'] .skill-market-overview > p.review-basic {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .skill-market-overview > p svg {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] :is(.skill-market-toolbar select, .skill-market-toolbar > button) {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.skill-market-toolbar > button:hover, .skill-market-toolbar > button.selected) {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .market-skill-card {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .market-skill-card:hover {
+  border-color: var(--ide-line-strong);
+  box-shadow: 0 12px 28px rgba(0,0,0,.28);
+}
+html[data-theme='dark'] .market-skill-card.pending {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.market-category, .market-owner, .market-review-badge) {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .market-review-badge.verified,
+html[data-theme='dark'] .market-owner,
+html[data-theme='dark'] .market-installed {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .market-installed:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--night-green-bg) 82%, #000);
+}
+html[data-theme='dark'] .market-review-badge.basic {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .market-review-badge.pending {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .market-skill-card h2 {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .market-skill-card > p,
+html[data-theme='dark'] .market-skill-tags,
+html[data-theme='dark'] .market-skill-card dt,
+html[data-theme='dark'] .market-skill-card dd,
+html[data-theme='dark'] .market-skill-card footer > span {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .market-skill-card dl,
+html[data-theme='dark'] .market-skill-card footer {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] .market-delete {
+  color: var(--night-red-text);
+  border-color: var(--night-red-line);
+}
+html[data-theme='dark'] .market-delete:hover {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
+}
+html[data-theme='dark'] .skill-market-loading {
+  color: var(--ide-muted);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .skill-upload-author {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .skill-upload-safety {
+  color: var(--ide-muted);
+  background: color-mix(in srgb, var(--ide-green) 9%, var(--ide-panel));
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .skill-upload-safety svg {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] .skill-upload-error {
+  color: var(--night-red-text);
+}
+
+/* ---------- 写作分析 / 个人主页 ---------- */
+html[data-theme='dark'] :is(.analytics-page, .profile-page) {
+  color: var(--ide-text);
+  background: var(--ide-bg);
+}
+html[data-theme='dark'] .analytics-heading p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .analytics-period {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .writing-calendar-card {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+  box-shadow: 0 4px 18px rgba(0,0,0,.28);
+}
+html[data-theme='dark'] .calendar-summary {
+  border-bottom-color: var(--ide-line);
+}
+html[data-theme='dark'] .writing-days-total strong,
+html[data-theme='dark'] .writing-days-total > div span {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] :is(.writing-days-total > small, .writing-days-total p) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .streak-summary > div {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .streak-icon.current {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] .streak-icon.best {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] :is(.streak-summary small, .calendar-months, .calendar-weekdays, .calendar-legend) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .streak-summary strong,
+html[data-theme='dark'] .analytics-metric-card strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .calendar-cell {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .calendar-cell.level-1,
+html[data-theme='dark'] .calendar-cell.level-2,
+html[data-theme='dark'] .calendar-cell.level-3,
+html[data-theme='dark'] .calendar-cell.level-4 {
+  background: color-mix(in srgb, var(--ide-green) 30%, var(--ide-paper));
+}
+html[data-theme='dark'] .calendar-cell.level-2 {
+  background: color-mix(in srgb, var(--ide-green) 46%, var(--ide-paper));
+}
+html[data-theme='dark'] .calendar-cell.level-3 {
+  background: color-mix(in srgb, var(--ide-green) 64%, var(--ide-paper));
+}
+html[data-theme='dark'] .calendar-cell.level-4 {
+  background: var(--ide-green);
+}
+html[data-theme='dark'] .analytics-metric-card {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .metric-icon.coral {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] :is(.metric-icon.teal, .metric-icon.green) {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .metric-icon.purple {
+  color: var(--night-purple-text);
+  background: var(--night-purple-bg);
+  border-color: var(--night-purple-line);
+}
+html[data-theme='dark'] .metric-icon.yellow {
+  color: var(--night-yellow-text);
+  background: var(--night-yellow-bg);
+  border-color: var(--night-yellow-line);
+}
+html[data-theme='dark'] .metric-icon.blue {
+  color: var(--night-blue-text);
+  background: var(--night-blue-bg);
+  border-color: var(--night-blue-line);
+}
+html[data-theme='dark'] :is(.analytics-metric-card > small, .analytics-metric-card > div span) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .project-ranking {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .ranking-item {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] :is(.ranking-index, .ranking-item > div > span, .ranking-item > p small, .ranking-empty) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .ranking-item > div strong,
+html[data-theme='dark'] .ranking-item > p strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .ranking-item > div > span {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .ranking-item > div i {
+  background: var(--night-green-text);
+}
+html[data-theme='dark'] .ranking-empty p {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .profile-avatar-large {
+  color: var(--night-warm-text);
+  background: var(--night-warm-bg);
+  border-color: var(--night-warm-line);
+}
+html[data-theme='dark'] :is(.profile-overview-grid article, .profile-panel, .profile-project-list > button) {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.profile-overview-grid small, .profile-overview-grid p,
+                            .profile-overview-grid article > div span, .profile-project-list small) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] :is(.profile-overview-grid strong, .profile-project-list strong) {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .profile-project-list > button:hover {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .profile-project-list em {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] .milestone-card {
+  color: var(--ide-muted);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .milestone-card > span {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .milestone-card strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .milestone-card.earned {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .milestone-card.earned > span,
+html[data-theme='dark'] .milestone-card.earned strong {
+  color: var(--night-green-text);
+  background: color-mix(in srgb, var(--ide-green) 26%, var(--ide-paper));
+}
+html[data-theme='dark'] .account-panel dl > div {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] .account-panel dt {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .account-panel dd {
+  color: var(--ide-text);
+}
+
+/* ---------- 统一 composer 与上下文行（编辑器 rail 内，非 TUI 作用域的附加面） ---------- */
+html[data-theme='dark'] .agent-context-line,
+html[data-theme='dark'] .agent-context-line small {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-composer-wrap {
+  border-top-color: var(--ide-line);
+}
+html[data-theme='dark'] .assistant-form.agent-composer textarea,
+html[data-theme='dark'] .assistant-form.agent-composer textarea::placeholder {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .assistant-form.agent-composer .assistant-send {
+  color: #fff;
+  background: #4d7b6e;
+}
+html[data-theme='dark'] .assistant-form.agent-composer .assistant-send:hover:not(:disabled) {
+  background: #315f57;
+}
+html[data-theme='dark'] .assistant-form.agent-composer .assistant-send:disabled {
+  color: var(--ide-muted);
+  background: var(--ide-active);
+}
+html[data-theme='dark'] .agent-control-divider {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-control-trigger.model {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .agent-model-glyph {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] :is(.agent-composer-controls .agent-mode-trigger,
+                          .agent-composer-controls .agent-tool-button,
+                          .agent-composer-controls .agent-control-trigger.model,
+                          .agent-composer-controls .agent-control-trigger.reasoning) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .agent-composer-controls .agent-control-trigger.model:hover:not(:disabled),
+html[data-theme='dark'] .agent-composer-controls .agent-control-trigger.model.open,
+html[data-theme='dark'] .agent-composer-controls .agent-control-trigger.reasoning:hover:not(:disabled),
+html[data-theme='dark'] .agent-composer-controls .agent-control-trigger.reasoning.open {
+  color: var(--ide-text);
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .agent-attention-banner {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+  box-shadow: 0 7px 20px rgba(0,0,0,.2);
+}
+html[data-theme='dark'] .agent-attention-banner > svg,
+html[data-theme='dark'] .agent-attention-banner strong {
+  color: var(--night-green-text);
+}
+html[data-theme='dark'] .agent-attention-banner small,
+html[data-theme='dark'] .agent-attention-banner > span {
+  color: var(--night-green-text);
+  background: color-mix(in srgb, var(--ide-green) 26%, var(--ide-paper));
+}
+html[data-theme='dark'] .agent-run-progress {
+  background: var(--ide-line-strong);
+}
+html[data-theme='dark'] .agent-run-progress > span {
+  background: var(--night-green-text);
+}
+html[data-theme='dark'] .agent-composer-blocked {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .assistant-form.agent-composer.waiting-input,
+html[data-theme='dark'] .assistant-form.agent-composer.waiting-input textarea:disabled {
+  color: var(--ide-muted);
+  background: color-mix(in srgb, var(--ide-green) 7%, var(--ide-paper));
+  border-color: var(--night-green-line);
+}
+
+/* ---------- 设置（Codex 模型设置对话框内部面板） ---------- */
+html[data-theme='dark'] .settings-header {
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .settings-title-icon {
+  color: var(--ide-text);
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] :is(.settings-subtitle, .settings-section-heading p, .settings-fetch-models,
+                          .settings-range-labels, .settings-actions .settings-save-note,
+                          .settings-connection-state strong, .settings-connection-state small,
+                          .settings-nav small, .settings-provider-picker small, .settings-section-heading h3) {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .settings-nav {
+  background: var(--ide-active);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-nav > button:hover,
+html[data-theme='dark'] .settings-nav > button.active {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-connection-state {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-connection-state > span {
+  color: var(--ide-text);
+  background: var(--ide-muted);
+}
+html[data-theme='dark'] .settings-pane {
+  background: var(--ide-paper);
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .settings-section + .settings-section {
+  border-color: var(--ide-line);
+}
+html[data-theme='dark'] .settings-provider-picker button {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-provider-picker button:hover {
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-provider-picker button.active {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+html[data-theme='dark'] .settings-provider-picker strong {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .settings-field > span,
+html[data-theme='dark'] .settings-thinking-budgets-heading {
+  color: var(--ide-text);
+}
+html[data-theme='dark'] .settings-range-labels {
+  color: var(--ide-muted);
+}
+html[data-theme='dark'] .settings-fetch-models {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+html[data-theme='dark'] .settings-fetch-models:hover {
+  background: var(--ide-hover);
+}
+html[data-theme='dark'] .settings-fetch-models.success {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+
+/* ---------- 可调整宽度分隔条激活态 ---------- */
+html[data-theme='dark'] .workspace-resizer:hover,
+html[data-theme='dark'] .workspace-resizer:active,
+html[data-theme='dark'] .workspace-resizer:focus-visible {
+  background: color-mix(in srgb, var(--ide-green) 40%, var(--ide-line));
+  border-color: color-mix(in srgb, var(--ide-green) 60%, var(--ide-line));
+}
+
+/* ---------- 危险按钮 / 危险文字按钮 ---------- */
+html[data-theme='dark'] .danger-button {
+  color: var(--night-red-text) !important;
+  background: var(--night-red-bg) !important;
+  border-color: var(--night-red-line) !important;
+}
+html[data-theme='dark'] .danger-button:hover {
+  background: color-mix(in srgb, var(--night-red-bg) 84%, #000) !important;
+}
+html[data-theme='dark'] .danger-text-button {
+  color: var(--night-red-text);
+}
+html[data-theme='dark'] .danger-text-button:hover:not(:disabled) {
+  color: var(--night-red-text);
+  background: var(--night-red-bg);
 }
 
 @media (prefers-reduced-motion: reduce) {

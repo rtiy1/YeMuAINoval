@@ -1,0 +1,22 @@
+[package]
+name = "yemu-novel-desktop"
+version = "0.1.0"
+description = "叙事工坊 · YeMu AI Novel 桌面端"
+authors = ["YeMu"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+getrandom = "0.2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

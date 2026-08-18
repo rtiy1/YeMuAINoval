@@ -1,7 +1,6 @@
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const Redis = require('ioredis')
 
 export const TASK_STREAM = 'ai-tasks:v1:stream'
 export const TASK_GROUP = 'ai-task-workers:v1'
@@ -29,6 +28,8 @@ export function isTaskQueueEnabled() {
 
 export function createTaskRedis(options = {}) {
   if (!isTaskQueueEnabled()) return null
+  // 惰性加载：只在真正启用 Redis 队列时才引入 ioredis
+  const Redis = require('ioredis')
   const client = new Redis(String(process.env.REDIS_URL).trim(), {
     lazyConnect: false,
     maxRetriesPerRequest: null,

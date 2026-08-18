@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "YeMu AI Novel",
+  "version": "0.1.0",
+  "identifier": "com.yemu.novel-agent.desktop",
+  "build": {
+    "beforeDevCommand": "bun run desktop:api",
+    "devUrl": "http://127.0.0.1:8787",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "msi", "nsis"],
+    "category": "Productivity",
+    "shortDescription": "叙事工坊 · YeMu AI Novel 桌面端",
+    "longDescription": "本地优先的 AI 小说创作工作台。无需登录、无数据库依赖，模型 Key 由你自己配置并保存在本地。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../server",
+      "../src",
+      "../skills",
+      "../node_modules",
+      "../dist"
+    ],
+    "externalBin": [
+      "binaries/bun"
+    ]
+  }
+}

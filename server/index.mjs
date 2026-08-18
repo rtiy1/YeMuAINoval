@@ -97,6 +97,11 @@ const GENRE_SUGGESTIONS = [
 ]
 const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克苏鲁悬疑', '群像成长', '职场现实', '无限流']
 const writingTaskControllers = new Map()
+// 桌面/本地模式：不校验登录，所有请求统一走一个隐式本地用户，数据只落本地 JSON。
+// 由桌面壳（Tauri sidecar）或 scripts/desktop-start.mjs 设置。
+const localMode = process.env.AUTH_MODE === 'local'
+const LOCAL_USER_ID = 'local-user'
+
 if (isTaskQueueEnabled() && !String(process.env.DATABASE_URL || '').trim()) {
   throw new Error('Redis AI task queue requires DATABASE_URL so API and workers share transactional state')
 }
@@ -104,10 +109,10 @@ const registrationMode = process.env.REGISTRATION_MODE || (process.env.NODE_ENV 
 if (!['open', 'owner-only', 'closed'].includes(registrationMode)) {
   throw new Error('REGISTRATION_MODE must be open, owner-only, or closed')
 }
-if (process.env.NODE_ENV === 'production' && registrationMode !== 'closed' && !emailConfig.configured) {
+if (process.env.NODE_ENV === 'production' && !localMode && registrationMode !== 'closed' && !emailConfig.configured) {
   throw new Error('Email delivery must be configured when registration is enabled in production')
 }
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !localMode) {
   if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error('AUTH_SECRET must contain at least 32 characters in production')
 }
 const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
@@ -772,8 +777,49 @@ async function issueSession(user, req, res) {
   return { accessToken, user: publicUser(user) }
 }
 
+// 本地模式：确保存在一个隐式本地用户（并为其创建一本入门作品），
+// 供所有无登录请求共用；重试幂等，不会重复建用户/作品。
+async function ensureLocalUser() {
+  return updateDb((db) => {
+    let user = db.users.find((item) => item.id === LOCAL_USER_ID)
+    if (user) return user
+    const timestamp = new Date().toISOString()
+    user = {
+      id: LOCAL_USER_ID,
+      name: '本地作者',
+      email: 'local@yemu.local',
+      passwordHash: null,
+      authVersion: 0,
+      settings: {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    db.users.push(user)
+    if (!db.projects.some((project) => project.userId === user.id)) {
+      const project = {
+        id: crypto.randomUUID(), userId: user.id, title: '我的第一本书', type: '长篇', genre: '现代言情', status: '构思中', progress: 0,
+        words: '0', updated: '刚刚', chapters: 0, style: '', tone: '等待你的第一笔设定', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
+      }
+      db.projects.push(project)
+      db.chapters[project.id] = []
+      db.drafts[project.id] = {}
+      createChapterRecord(db, project, '第一章')
+    }
+    return user
+  })
+}
+
+async function localSessionPayload() {
+  return { accessToken: null, user: publicUser(await ensureLocalUser()) }
+}
+
 async function authenticate(req, _res, next) {
   try {
+    if (localMode) {
+      req.user = await ensureLocalUser()
+      next()
+      return
+    }
     const authorization = req.get('authorization') || ''
     if (!authorization.startsWith('Bearer ')) throw unauthorized()
     const payload = await verifyAccessToken(authorization.slice(7))
@@ -813,6 +859,7 @@ const registrationCodeResponseMessage = '如果该邮箱可以注册，我们会
 
 app.post('/api/auth/register/code', async (req, res, next) => {
   try {
+    if (localMode) return res.status(202).json({ message: registrationCodeResponseMessage })
     const email = cleanEmail(req.body?.email)
     const verificationRequest = await updateDb((db) => {
       if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
@@ -862,6 +909,7 @@ app.post('/api/auth/register/code', async (req, res, next) => {
 
 app.post('/api/auth/register', async (req, res, next) => {
   try {
+    if (localMode) return res.json(await localSessionPayload())
     const name = cleanText(req.body?.name, '昵称', 40)
     const email = cleanEmail(req.body?.email)
     const password = cleanPassword(req.body?.password)
@@ -921,6 +969,7 @@ app.post('/api/auth/register', async (req, res, next) => {
 
 app.post('/api/auth/login', async (req, res, next) => {
   try {
+    if (localMode) return res.json(await localSessionPayload())
     const email = cleanEmail(req.body?.email)
     const password = cleanPassword(req.body?.password)
     const db = await loadDb()
@@ -1005,6 +1054,7 @@ app.post('/api/auth/password/reset', async (req, res, next) => {
 
 app.post('/api/auth/refresh', async (req, res, next) => {
   try {
+    if (localMode) return res.json(await localSessionPayload())
     const rawToken = req.cookies[refreshCookie.name]
     if (!rawToken) throw unauthorized()
     const tokenHash = hashRefreshToken(rawToken)
@@ -1029,6 +1079,10 @@ app.post('/api/auth/refresh', async (req, res, next) => {
 
 app.post('/api/auth/logout', async (req, res, next) => {
   try {
+    if (localMode) {
+      clearRefreshCookie(res, req)
+      return res.status(204).end()
+    }
     const rawToken = req.cookies[refreshCookie.name]
     if (rawToken) {
       const tokenHash = hashRefreshToken(rawToken)
@@ -3886,6 +3940,19 @@ const server = app.listen(port, host, () => {
   const storage = storeInfo()
   console.log(`Storage: ${storage.backend}${storage.dataFile ? ` (${storage.dataFile})` : ''}`)
   if (usesDefaultSecret) console.warn('AUTH_SECRET is not set; use a strong secret in production.')
+  if (process.env.STORY_PORT_FILE) {
+    // 桌面壳/启动器通过该文件获知实际监听端口（配合 PORT=0 使用）。
+    const portFile = process.env.STORY_PORT_FILE
+    void (async () => {
+      try {
+        const { mkdir, writeFile } = await import('node:fs/promises')
+        await mkdir(path.dirname(portFile), { recursive: true })
+        await writeFile(portFile, String(actualPort), 'utf8')
+      } catch (error) {
+        console.error(`Failed to write port file ${portFile}: ${error.message}`)
+      }
+    })()
+  }
 })
 server.on('error', (error) => {
   console.error(`Story API failed to listen on ${host}:${port}: ${error.message}`)

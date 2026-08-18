@@ -40,6 +40,12 @@ coverage/
 .nyc_output/
 packages/ai/test/.temp-images/
 
+# Desktop local workspace / data
+.data/
+.toolchain/
+src-tauri/target/
+src-tauri/binaries/
+
 # Project specific
 !.yemu/
 .yemu/plugins/
