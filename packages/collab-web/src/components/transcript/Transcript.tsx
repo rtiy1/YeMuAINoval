@@ -377,9 +377,9 @@ export function Transcript(props: TranscriptProps): ReactNode {
 					))}
 				</Row>
 			)}
-			{working && stream === null && activeTools.size === 0 && (
+			{working && (
 				<Row kind="assistant" gutter={agentLabel}>
-					<div className="tr-shimmer">正在思考…</div>
+					<div className="tr-shimmer">正在思考中…</div>
 				</Row>
 			)}
 		</div>

@@ -37,6 +37,7 @@ import {
 } from './story-agent.mjs'
 import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
 import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './task-stream.mjs'
+import { purgeReasoningData } from './purge-reasoning.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { compactAgentThread } from './context-compaction.mjs'
 import { buildWritingContext, STORY_MEMORY_ORDER } from './writing-context.mjs'
@@ -1267,7 +1268,7 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
     id, userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
     skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt, threadId,
     status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
-    result: null, partialOutput: '', reasoningSummary: '', reasoningHistory: [], interactionAttempt: 1,
+    result: null, partialOutput: '', interactionAttempt: 1,
     executionGeneration: 1, activeExecutionId: null,
     steerRevision: 0, appliedSteerRevision: 0, steerRequested: false, steeringHistory: [],
     subagents: [],
@@ -1620,7 +1621,6 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
     task.interactionAttempt = Math.max(1, Number(task.interactionAttempt) || 1) + 1
     task.result = null
     task.partialOutput = ''
-    task.reasoningSummary = ''
     task.reasoningStartedAt = null
     task.reasoningCompletedAt = null
     task.inputRequestStartedAt = null
@@ -3906,8 +3906,12 @@ await startTaskStreamBridge().catch((error) => {
   console.error(`AI task progress bridge unavailable: ${error.message}`)
 })
 
+let reasoningPurge = null
 const recoverableTasks = await updateDb((db) => {
   const timestamp = new Date().toISOString()
+  // Reasoning/CoT is never persisted; strip any leftover fields written by
+  // older builds so db.json stops growing with thinking content.
+  reasoningPurge = purgeReasoningData(db)
   const recoverable = []
   for (const task of db.writingTasks) {
     if (!['queued', 'running'].includes(task.status)) continue
@@ -3928,6 +3932,13 @@ const recoverableTasks = await updateDb((db) => {
   }
   return recoverable
 })
+if (reasoningPurge?.changed) {
+  console.log(
+    `[purge-reasoning] 已清理 db.json 中的思考持久化数据：`
+    + `${reasoningPurge.purgedTasks} 个任务/线程、${reasoningPurge.purgedEvents} 条思考事件、`
+    + `${reasoningPurge.purgedHistory} 条思考历史`,
+  )
+}
 for (const task of recoverableTasks) {
   if (isTaskQueueEnabled()) await enqueueWritingTask(task.id)
   else queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })

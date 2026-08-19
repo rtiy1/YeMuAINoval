@@ -2282,15 +2282,90 @@ function RelationshipGraphPage({ projects, onNotify }) {
 
   const nodes = graph?.nodes || []
   const edges = graph?.edges || []
+  // Force-directed layout: scatter nodes instead of a tight ring so edges and
+  // their labels stop piling into the center (Fruchterman-Reingold style).
   const positionedNodes = useMemo(() => {
     if (!nodes.length) return []
-    const center = { x: 300, y: 260 }
-    const radius = Math.min(220, Math.max(150, nodes.length * 24))
-    return nodes.map((node, index) => {
+    const W = 600
+    const H = 520
+    const pad = 52
+    const byId = new Map(nodes.map((node) => [node.id, node]))
+    const pos = new Map()
+    nodes.forEach((node, index) => {
       const angle = (Math.PI * 2 * index) / nodes.length - Math.PI / 2
-      return { ...node, x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) }
+      const rX = Math.min(230, 90 + nodes.length * 9)
+      const rY = Math.min(190, 70 + nodes.length * 7)
+      pos.set(node.id, { x: W / 2 + rX * Math.cos(angle), y: H / 2 + rY * Math.sin(angle) })
     })
-  }, [nodes])
+    const pairs = edges
+      .filter((edge) => byId.has(edge?.source) && byId.has(edge?.target))
+      .map((edge) => [edge.source, edge.target])
+    const k = Math.max(36, Math.min(90, Math.sqrt(W * H) / (Math.sqrt(nodes.length) || 1)))
+    const iterations = 180
+    for (let iter = 0; iter < iterations; iter += 1) {
+      const temp = Math.max(0.4, (1 - iter / iterations) * 2.4)
+      const force = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]))
+      const push = (id, fx, fy) => {
+        const f = force.get(id)
+        if (f) { f.x += fx; f.y += fy }
+      }
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const a = pos.get(nodes[i].id)
+          const b = pos.get(nodes[j].id)
+          if (!a || !b) continue
+          let dx = a.x - b.x
+          let dy = a.y - b.y
+          let sq = dx * dx + dy * dy
+          if (sq < 1) {
+            dx = Math.random() - 0.5
+            dy = Math.random() - 0.5
+            sq = dx * dx + dy * dy
+            if (sq < 1) sq = 1
+          }
+          const d = Math.sqrt(sq)
+          const rep = (k * k) / d
+          const nx = (dx / d) * rep
+          const ny = (dy / d) * rep
+          push(nodes[i].id, nx, ny)
+          push(nodes[j].id, -nx, -ny)
+        }
+      }
+      for (const [s, t] of pairs) {
+        const a = pos.get(s)
+        const b = pos.get(t)
+        if (!a || !b) continue
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+        const pull = (d - k) * 0.06
+        const nx = (dx / d) * pull
+        const ny = (dy / d) * pull
+        push(s, nx, ny)
+        push(t, -nx, -ny)
+      }
+      for (const node of nodes) {
+        const p = pos.get(node.id)
+        if (!p) continue
+        push(node.id, (W / 2 - p.x) * 0.01, (H / 2 - p.y) * 0.01)
+      }
+      for (const node of nodes) {
+        const p = pos.get(node.id)
+        const f = force.get(node.id)
+        if (!p || !f) continue
+        const len = Math.sqrt(f.x * f.x + f.y * f.y)
+        const cap = len > temp ? temp / len : 1
+        p.x += f.x * cap
+        p.y += f.y * cap
+        p.x = Math.min(W - pad, Math.max(pad, p.x))
+        p.y = Math.min(H - pad, Math.max(pad, p.y))
+      }
+    }
+    return nodes.map((node) => {
+      const p = pos.get(node.id)
+      return { ...node, x: p ? p.x : W / 2, y: p ? p.y : H / 2 }
+    })
+  }, [nodes, edges])
 
   return <div className="page relationship-page">
     <div className="page-heading">
@@ -2311,11 +2386,16 @@ function RelationshipGraphPage({ projects, onNotify }) {
           const source = positionedNodes.find((node) => node.id === edge.source)
           const target = positionedNodes.find((node) => node.id === edge.target)
           if (!source || !target) return null
-          const midX = (source.x + target.x) / 2
-          const midY = (source.y + target.y) / 2
+          const label = String(edge.label || edge.kind || '').trim()
+          const t = 0.42
+          const lx = source.x + (target.x - source.x) * t
+          const ly = source.y + (target.y - source.y) * t
           return <g key={`${edge.source}-${edge.target}-${index}`}>
             <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="relationship-edge" />
-            <text x={midX} y={midY - 4} className="relationship-edge-label" textAnchor="middle">{edge.label || edge.kind || ''}</text>
+            {label && <g>
+              <rect x={lx - label.length * 2.8 - 3} y={ly - 9} width={label.length * 5.6 + 6} height={15} rx={3} className="relationship-edge-label-bg" />
+              <text x={lx} y={ly + 2} className="relationship-edge-label" textAnchor="middle">{label}</text>
+            </g>}
           </g>
         })}
         {positionedNodes.map((node) => <g key={node.id} className="relationship-node" transform={`translate(${node.x}, ${node.y})`}>
@@ -4005,6 +4085,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : item.reasoningHistory || [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : item.inputHistory || [],
       usage: task.usage || item.usage || null,
+      usageHistory: Array.isArray(task.usageHistory) ? task.usageHistory : item.usageHistory || [],
       artifactPreview: task.artifactPreview || null,
       artifactApplication: task.artifactApplication || item.artifactApplication || null,
       durationMs: terminal ? agentTaskDurationMs(task) : performance.now() - startedAt,
@@ -4014,11 +4095,69 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
 
   async function monitorAssistantTurn(threadId, turnId, taskId, requestId, controller, startedAt) {
     let latestTurn = null
+    // Coalesce streamed deltas so dense bursts (especially thinking deltas)
+    // render as a few state updates per animation frame instead of one full
+    // transcript re-render per model token. Deltas are keyed per event+item so
+    // merging stays semantically identical to applying them one by one.
+    const pendingDeltas = new Map()
+    let pendingChars = 0
+    let flushScheduled = false
+    const flushPendingDeltas = () => {
+      if (!pendingDeltas.size) return
+      const entries = [...pendingDeltas.entries()]
+      pendingDeltas.clear()
+      pendingChars = 0
+      const itemUpdates = []
+      let outputAccum = ''
+      let reasoningAccum = ''
+      for (const [key, delta] of entries) {
+        const separator = key.indexOf('|')
+        const type = key.slice(0, separator)
+        const itemId = key.slice(separator + 1)
+        itemUpdates.push({ type, itemId, delta })
+        if (type === 'item/reasoning/summaryTextDelta') reasoningAccum += delta
+        else outputAccum += delta
+      }
+      if (!outputAccum && !reasoningAccum) return
+      setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+        ...item,
+        text: outputAccum ? `${item.text || ''}${outputAccum}` : item.text,
+        reasoningSummary: reasoningAccum ? `${item.reasoningSummary || ''}${reasoningAccum}` : item.reasoningSummary,
+        statusMessage: outputAccum ? '正在生成回复' : item.statusMessage,
+        items: itemUpdates.reduce((items, update) => applyAgentItemStreamEvent(items, update.type, {
+          turnId,
+          itemId: update.itemId,
+          delta: update.delta,
+        }), item.items || []),
+      } : item))
+    }
+    const scheduleDeltaFlush = () => {
+      if (flushScheduled) return
+      flushScheduled = true
+      requestAnimationFrame(() => {
+        flushScheduled = false
+        flushPendingDeltas()
+      })
+    }
+    const queueDelta = (type, itemId, delta) => {
+      const key = `${type}|${itemId}`
+      pendingDeltas.set(key, `${pendingDeltas.get(key) || ''}${delta}`)
+      pendingChars += delta.length
+      // Under a throttled/hidden tab requestAnimationFrame can stall; bound the
+      // buffer so a long thinking phase never accumulates unbounded memory.
+      if (pendingChars >= 100_000) {
+        flushScheduled = false
+        flushPendingDeltas()
+        return
+      }
+      scheduleDeltaFlush()
+    }
     try {
       await api.streamAgentTurn(threadId, turnId, {
         signal: controller.signal,
         onEvent: (event, payload) => {
           if (['item/started', 'item/completed'].includes(event) && payload?.turnId === turnId && payload.item) {
+            flushPendingDeltas()
             setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
               ...item,
               items: applyAgentItemStreamEvent(item.items, event, payload),
@@ -4026,22 +4165,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
             return
           }
           if (['item/agentMessage/delta', 'item/plan/delta'].includes(event) && payload?.turnId === turnId && typeof payload.delta === 'string') {
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
-              ...item,
-              text: `${item.text || ''}${payload.delta}`,
-              items: applyAgentItemStreamEvent(item.items, event, payload),
-              statusMessage: '正在生成回复',
-            } : item))
+            queueDelta(event, payload.itemId, payload.delta)
             return
           }
           if (event === 'item/reasoning/summaryTextDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
-              ...item,
-              reasoningSummary: `${item.reasoningSummary || ''}${payload.delta}`,
-              items: applyAgentItemStreamEvent(item.items, event, payload),
-            } : item))
+            queueDelta(event, payload.itemId, payload.delta)
             return
           }
+          // Every non-delta event flushes pending deltas first to preserve order.
+          flushPendingDeltas()
           if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
             setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
               ...item,
@@ -4289,10 +4421,19 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const latestUserMessage = [...assistantMessages].reverse().find((message) => message.role === 'user' && !message.steer)?.text?.trim() || '等待你的下一步指示'
   const assistantAwaitingInput = Boolean(latestAgentRun && agentRunEffectiveStatus(latestAgentRun) === 'needs_input')
   const goalStatusLabel = assistantRunning ? '执行中' : assistantAwaitingInput ? '等待选择' : '就绪'
-  const latestAgentUsage = latestAgentRun ? agentRunTokenUsage(latestAgentRun) : null
-  const agentContextUsed = Math.max(0, latestAgentUsage && !latestAgentUsage.estimated
-    ? latestAgentUsage.promptTokens
-    : estimateStoryContextTokens(assistantMessages, draft))
+  // Context gauge reflects the LATEST execution's prompt footprint, not the
+  // thread-cumulative `task.usage` (which grows across turns and would exceed
+  // the window). Cached reads genuinely occupy the window (input+cached are
+  // disjoint in this stack); cache *write* tokens are a separate production
+  // cost and are deliberately excluded.
+  const lastAttemptUsage = (Array.isArray(latestAgentRun?.usageHistory) ? latestAgentRun.usageHistory : [])
+    .filter((entry) => entry?.usage && typeof entry.usage === 'object')
+    .at(-1)
+  const lastAttemptTokens = lastAttemptUsage
+    ? Math.max(0, Number(lastAttemptUsage.usage.input_tokens || 0))
+      + Math.max(0, Number(lastAttemptUsage.usage.cached_input_tokens || 0))
+    : null
+  const agentContextUsed = Math.max(0, lastAttemptTokens ?? estimateStoryContextTokens(assistantMessages, draft))
   const agentContextPercent = Math.min(100, Math.round((agentContextUsed / Math.max(100, agentContextWindow)) * 100))
   const agentContextLabel = `上下文已使用 ${agentContextPercent}% · ${compactTokenCount(agentContextUsed)} / ${compactTokenCount(agentContextWindow)} Tokens`
   const agentFileOptions = [

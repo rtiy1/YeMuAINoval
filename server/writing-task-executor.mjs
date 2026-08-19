@@ -5,6 +5,7 @@ import { maybeCompactAgentThread } from './context-compaction.mjs'
 import { applyStoryArtifacts, summarizeStoryArtifacts } from './story-artifacts.mjs'
 import { updateDb } from './store.mjs'
 import { publishTaskStreamEvent } from './task-stream.mjs'
+import { createDeltaRunLog, isDeltaRunLogEnabled, resumeAssistantTail } from './delta-run-log.mjs'
 
 const toolCallIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/
 const messageToolHistoryLimit = 6
@@ -24,8 +25,9 @@ function resumeTaskFromCheckpoint(task) {
   const partialOutput = typeof task.partialOutput === 'string' ? task.partialOutput : ''
   const payload = task.input?.payload && typeof task.input.payload === 'object' ? task.input.payload : {}
   const continuation = Array.isArray(payload.continuation_conversation) ? payload.continuation_conversation : []
+  const assistantTail = resumeAssistantTail(task)
   const recoveryMessages = [
-    ...(partialOutput.trim() ? [{ role: 'assistant', text: partialOutput.slice(-12_000) }] : []),
+    ...(assistantTail ? [{ role: 'assistant', text: assistantTail }] : []),
     {
       role: 'user',
       text: '系统恢复：上一次执行因 worker 退出而中断。保留已经写入的作品文件，先检查文件清单，然后从未完成处直接继续；不要重做已完成的文件，也不要道歉或重复之前的过程。',
@@ -49,15 +51,6 @@ function resumeTaskFromCheckpoint(task) {
 function positiveInteger(value) {
   const number = Number(value)
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0
-}
-
-function mergeReasoningSummaries(...values) {
-  const summaries = []
-  for (const value of values) {
-    const summary = String(value || '').trim()
-    if (summary && !summaries.includes(summary)) summaries.push(summary)
-  }
-  return summaries.join('\n\n').slice(0, 12_000)
 }
 
 function executionMatches(task, executionId, executionGeneration) {
@@ -108,7 +101,6 @@ function applySteersAtBoundary(task, turnId, { assistantText = '', timestamp = n
   task.steerRequested = false
   task.result = null
   task.partialOutput = ''
-  task.reasoningSummary = ''
   task.reasoningStartedAt = null
   task.reasoningCompletedAt = null
   task.inputRequestStartedAt = null
@@ -331,7 +323,6 @@ export async function executeWritingTask(taskId, {
       task.pendingInputRequest = null
       task.progress = 15
       task.partialOutput = checkpointOutput
-      task.reasoningSummary = ''
       task.reasoningStartedAt = new Date().toISOString()
       task.reasoningCompletedAt = null
       task.statusMessage = '正在构建写作上下文'
@@ -366,7 +357,6 @@ export async function executeWritingTask(taskId, {
       ? controller.signal
       : AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)])
     let partialOutput = prepared.checkpointOutput
-    let reasoningSummary = ''
     let reasoningSegmentOrdinal = 0
     const reasoningSegments = new Map()
     let outputSegmentOrdinal = 0
@@ -374,17 +364,28 @@ export async function executeWritingTask(taskId, {
     let checkpointTimer = null
     let checkpointDirty = false
     let checkpointQueue = Promise.resolve()
+    // Optional bounded per-delta run log (YEMU_DELTA_RUN_LOG=1): packed, capped,
+    // written on checkpoints, deleted at finalization. TEXT-ONLY by privacy
+    // design — reasoning/CoT is never persisted (see delta-run-log.mjs), and is
+    // streamed live only. Aggregate fields remain the canonical durable state;
+    // this log is a lossless tail for exact resume.
+    const deltaRunLog = isDeltaRunLogEnabled() ? createDeltaRunLog() : null
+    // P0 telemetry (YEMU_STREAM_TELEMETRY=1): where the first visible/reasoning
+    // token actually lands, without persisting anything.
+    const streamTelemetry = {
+      outputDeltas: 0,
+      reasoningDeltas: 0,
+      outputChars: 0,
+      reasoningChars: 0,
+      firstOutputDeltaAt: null,
+      firstReasoningDeltaAt: null,
+    }
     const flushCheckpoint = () => {
       if (checkpointTimer) clearTimeout(checkpointTimer)
       checkpointTimer = null
       if (!checkpointDirty) return checkpointQueue
       checkpointDirty = false
       const outputSnapshot = partialOutput
-      const reasoningSnapshot = reasoningSummary.slice(0, 12_000)
-      const reasoningSegmentSnapshots = [...reasoningSegments.values()].map((segment) => ({
-        ...segment,
-        meta: { ...segment.meta },
-      }))
       const outputSegmentSnapshots = [...outputSegments.values()].map((segment) => ({
         ...segment,
         meta: { ...segment.meta },
@@ -394,13 +395,8 @@ export async function executeWritingTask(taskId, {
         if (!task || task.status !== 'running' || task.cancelRequested
           || !executionMatches(task, executionId, prepared.executionGeneration)) return
         task.partialOutput = outputSnapshot
-        task.reasoningSummary = reasoningSnapshot
+        if (deltaRunLog) task.deltaRuns = deltaRunLog.snapshot()
         task.events ||= []
-        for (const segment of reasoningSegmentSnapshots) {
-          const existing = task.events.find((event) => event.id === segment.id)
-          if (existing) Object.assign(existing, segment)
-          else task.events.push(segment)
-        }
         for (const segment of outputSegmentSnapshots) {
           const existing = task.events.find((event) => event.id === segment.id)
           if (existing) Object.assign(existing, segment)
@@ -498,6 +494,10 @@ export async function executeWritingTask(taskId, {
           interactionAttempt: prepared.interactionAttempt,
           executionGeneration: prepared.executionGeneration,
         })
+        deltaRunLog?.record('text', segment.meta.messageId, acceptedDelta, Date.now())
+        streamTelemetry.outputDeltas += 1
+        streamTelemetry.outputChars += acceptedDelta.length
+        if (streamTelemetry.firstOutputDeltaAt === null) streamTelemetry.firstOutputDeltaAt = Date.now()
       }
       scheduleCheckpoint()
     }
@@ -506,7 +506,6 @@ export async function executeWritingTask(taskId, {
       const previousLength = segment.meta.summary.length
       segment.meta.summary = `${segment.meta.summary}${delta}`.slice(0, reasoningSegmentMaxChars)
       const acceptedDelta = segment.meta.summary.slice(previousLength)
-      reasoningSummary = `${reasoningSummary}${acceptedDelta}`.slice(0, reasoningSegmentMaxChars)
       if (acceptedDelta) {
         publishTaskStreamEvent(taskId, {
           type: 'reasoning_event',
@@ -517,6 +516,12 @@ export async function executeWritingTask(taskId, {
           interactionAttempt: prepared.interactionAttempt,
           executionGeneration: prepared.executionGeneration,
         })
+        // NOTE: reasoning/CoT is deliberately NOT recorded into deltaRuns —
+        // it is never persisted (see delta-run-log.mjs): streamed live + counted
+        // in memory only.
+        streamTelemetry.reasoningDeltas += 1
+        streamTelemetry.reasoningChars += acceptedDelta.length
+        if (streamTelemetry.firstReasoningDeltaAt === null) streamTelemetry.firstReasoningDeltaAt = Date.now()
       }
       scheduleCheckpoint()
     }
@@ -612,6 +617,7 @@ export async function executeWritingTask(taskId, {
         ...(reports.length ? { _agent_reports: reports } : {}),
       },
     }
+    const modelCallStartedAt = Date.now()
     const result = await invokeStoryAgent(prepared.user, executionInput, signal, flushOutputSegment, flushReasoningSummary, async (event) => {
       if (event?.phase === 'start') {
         for (const segment of reasoningSegments.values()) {
@@ -628,6 +634,21 @@ export async function executeWritingTask(taskId, {
       )
     }, completeAssistantMessageSegments)
     await flushCheckpoint()
+    if (process.env.YEMU_STREAM_TELEMETRY === '1') {
+      const elapsedMs = Date.now() - modelCallStartedAt
+      console.log('[ai-task-delta]', JSON.stringify({
+        taskId,
+        turnId: prepared.turnId,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
+        elapsedMs,
+        ...streamTelemetry,
+        firstOutputDeltaAfterMs: streamTelemetry.firstOutputDeltaAt === null
+          ? null : streamTelemetry.firstOutputDeltaAt - modelCallStartedAt,
+        firstReasoningDeltaAfterMs: streamTelemetry.firstReasoningDeltaAt === null
+          ? null : streamTelemetry.firstReasoningDeltaAt - modelCallStartedAt,
+      }))
+    }
     const privateContinuation = responseContinuation(result)
     const resultContinuationMode = continuationMode(result, privateContinuation)
     if (result?.result && typeof result.result === 'object' && !Array.isArray(result.result)) {
@@ -640,6 +661,9 @@ export async function executeWritingTask(taskId, {
         finalOutcome = { status: 'skipped' }
         return
       }
+      // Turn is terminal (cancelled / superseded / steer/requeued / completed):
+      // the lossy-safe aggregates are the durable truth from here on.
+      if (deltaRunLog) delete task.deltaRuns
       if (task.status === 'cancelled' || task.cancelRequested) {
         finalOutcome = { status: 'cancelled' }
         return
@@ -652,7 +676,6 @@ export async function executeWritingTask(taskId, {
       const checks = Array.isArray(result?.result?.checks) ? result.result.checks : []
       const timestamp = new Date().toISOString()
       if (pendingSteers(task).length) {
-        task.reasoningSummary = (reasoningSummary || task.reasoningSummary || '').slice(0, 12_000)
         task.reasoningCompletedAt = timestamp
         accumulateTaskUsage(task, result, timestamp)
         finishRunningEvent(task, 'interrupted', {
@@ -706,10 +729,6 @@ export async function executeWritingTask(taskId, {
       task.progress = 100
       task.statusMessage = result.status === 'needs_input' ? '等待用户回答' : 'AI Skill 执行完成'
       task.partialOutput = partialOutput || task.partialOutput || ''
-      task.reasoningSummary = mergeReasoningSummaries(
-        reasoningSummary || task.reasoningSummary,
-        result?.result?.reasoning_summary,
-      )
       task.reasoningCompletedAt = timestamp
       task.inputRequestStartedAt = result.status === 'needs_input' ? timestamp : null
       task.pendingInputRequest = null
@@ -733,15 +752,18 @@ export async function executeWritingTask(taskId, {
       const task = db.writingTasks.find((item) => item.id === taskId)
       if (!task) return
       if (task.status === 'cancelled' && task.cancelRequested) {
+        if (deltaRunLog) delete task.deltaRuns
         outcome = 'cancelled'
         return
       }
       if (claimedGeneration == null || !executionMatches(task, executionId, claimedGeneration)) {
+        if (deltaRunLog) delete task.deltaRuns
         outcome = 'superseded'
         return
       }
       task.pendingInputRequest = null
       if (pendingSteers(task).length) {
+        if (deltaRunLog) delete task.deltaRuns
         finishRunningEvent(task, 'interrupted')
         applySteersAtBoundary(task, task.turnId, {
           assistantText: task.partialOutput || '',
@@ -775,6 +797,10 @@ export async function executeWritingTask(taskId, {
         reason = 'worker'
         return
       }
+      // Terminal failure / user cancel: drop the transient delta log here too.
+      // (The requeue-on-worker-abort branch above intentionally keeps it so the
+      // next claim can resume at the exact token boundary.)
+      if (deltaRunLog) delete task.deltaRuns
       // Only an explicit task cancellation is a user cancel. AbortSignal.timeout()
       // also aborts the combined signal, but must remain a retryable timeout.
       const classified = classifyTaskError(error, task.cancelRequested === true)

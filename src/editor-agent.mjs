@@ -692,8 +692,13 @@ export function reconcileAgentTurnItems(currentItems, nextItems) {
     return item
   })
   const nextIds = new Set(next.map((item) => item.id))
+  // Reasoning is live-only (never persisted — see the no-CoT-to-storage rule),
+  // so the server snapshot no longer carries in-progress reasoning segments.
+  // Treat them like in-progress output: transient, owned by the live stream,
+  // and preserved across reconciliation to avoid the block flickering on every
+  // turn/* sync while it is still streaming.
   const transient = current
-    .filter((item) => ['agentMessage', 'plan'].includes(item?.type)
+    .filter((item) => ['agentMessage', 'plan', 'reasoning'].includes(item?.type)
       && item.status === 'inProgress'
       && !nextIds.has(item.id))
   return [...reconciled, ...transient]

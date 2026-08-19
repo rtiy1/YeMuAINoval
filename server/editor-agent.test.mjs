@@ -396,6 +396,39 @@ test('editor agent applies Item SSE deltas and reconciles transient output', () 
   assert.equal(nonRegressing[0].summary[0].text, '先读取文件，再执行写入。')
 })
 
+test('editor agent keeps live-only in-progress reasoning when the server snapshot omits it', () => {
+  // No-CoT storage rule: the server snapshot no longer carries reasoning
+  // segments at all, so a reconcile against it must NOT drop an in-flight
+  // thinking block (that would make it flicker on every turn/* sync).
+  let items = applyAgentItemStreamEvent([], 'item/started', {
+    item: { id: 'reasoning-live', type: 'reasoning', status: 'inProgress', summary: [] },
+  })
+  items = applyAgentItemStreamEvent(items, 'item/reasoning/summaryTextDelta', {
+    itemId: 'reasoning-live',
+    delta: '先检查连续性数据，再落盘。',
+  })
+  const reconciled = reconcileAgentTurnItems(items, [
+    { id: 'tool-1', type: 'dynamicToolCall', status: 'running', summary: '读取作品文件' },
+  ])
+  const live = reconciled.find((item) => item.id === 'reasoning-live')
+  assert.ok(live, 'in-progress reasoning must survive a reasoning-less snapshot')
+  assert.equal(live.summary[0].text, '先检查连续性数据，再落盘。')
+
+  // Once completed, the reasoning block leaves no trace (thinking is live-only).
+  const completed = applyAgentItemStreamEvent(reconciled, 'item/completed', {
+    item: {
+      id: 'reasoning-live',
+      type: 'reasoning',
+      status: 'completed',
+      summary: [{ type: 'summary_text', text: 'done' }],
+    },
+  })
+  const after = reconcileAgentTurnItems(completed, [
+    { id: 'tool-1', type: 'dynamicToolCall', status: 'completed', summary: '读取完成' },
+  ])
+  assert.ok(!after.some((item) => item.id === 'reasoning-live'))
+})
+
 test('editor agent segments reasoning and tools like the native TUI timeline', () => {
   const items = [
     { id: 'reasoning-1', type: 'reasoning', meta: { messageId: 'assistant-1' } },

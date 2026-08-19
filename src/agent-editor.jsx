@@ -89,10 +89,8 @@ function tuiAssistantMessage(run, items, { includeFallback = false, terminal = f
   const content = []
   for (const item of items || []) {
     if (item.type === 'reasoning') {
-      // Keep the browser transcript aligned with the native TUI: remove provider
-      // comment sentinels and collapse fenced implementation detail to prose.
-      const thinking = formatThinkingForDisplay(agentReasoningText(item), true)
-      if (thinking) content.push({ type: 'thinking', thinking })
+      // Reasoning is live-only and never surfaced: hide thinking content from the
+      // transcript; the bottom "正在思考中…" working indicator covers the phase.
       continue
     }
     if (item.type === 'dynamicToolCall' || item.type === 'collabAgentToolCall') {

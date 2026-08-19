@@ -10381,11 +10381,14 @@ html[data-theme='dark'] .chat-agent-shell .yemu-collab-transcript .tr-body > .tv
   background: var(--ide-hover);
 }
 
-/* Make the conversation itself the single scroll container in chat mode. */
+/* Make the conversation itself the single scroll container in chat mode.
+ * Background matches the composer wrap below, so the gap under the last row
+ * (e.g. the "正在思考中…" working indicator) is seamless instead of a gray
+ * band meeting a white input box. */
 .chat-agent-shell .agent-conversation.collab-native {
   overflow-y: auto;
   padding: 12px 12px 20px;
-  background: transparent;
+  background: color-mix(in srgb, var(--ide-paper) 96%, var(--ide-bg));
 }
 
 .chat-agent-shell .yemu-collab-transcript {
@@ -10400,7 +10403,7 @@ html[data-theme='dark'] .chat-agent-shell .yemu-collab-transcript .tr-body > .tv
 }
 
 html[data-theme='dark'] .chat-agent-shell .agent-conversation.collab-native {
-  background: transparent;
+  background: color-mix(in srgb, var(--ide-paper) 96%, var(--ide-bg));
 }
 
 /* Chat assistant: goal/status line and explicit error retry. */
@@ -10563,6 +10566,12 @@ html[data-theme='dark'] .chat-agent-shell .agent-conversation.collab-native {
 .relationship-edge-label {
   fill: var(--ide-muted);
   font-size: 10px;
+}
+
+.relationship-edge-label-bg {
+  fill: color-mix(in srgb, var(--ide-paper) 92%, transparent);
+  stroke: var(--ide-line);
+  stroke-width: 1;
 }
 
 .relationship-node circle {
