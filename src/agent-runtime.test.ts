@@ -588,6 +588,7 @@ test("writing skills keep their route while only the CLI-style web fetch tool is
 	];
 	const fetchedUrls: string[] = [];
 	const requestPayloads: Array<Record<string, unknown>> = [];
+	const toolEvents: Array<{ phase: string; toolName: string; output?: string }> = [];
 	let calls = 0;
 	const mockedFetch = Object.assign(
 		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -609,6 +610,7 @@ test("writing skills keep their route while only the CLI-style web fetch tool is
 				model: "deepseek-v4-flash",
 			},
 		}, {
+			onToolEvent: event => toolEvents.push(event),
 			fetchWeb: async (params) => {
 				fetchedUrls.push(params.url);
 				return {
@@ -633,6 +635,8 @@ test("writing skills keep their route while only the CLI-style web fetch tool is
 		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).toContain("web_fetch");
 		expect(firstTools.map(tool => tool?.function?.name ?? tool?.name)).not.toContain("web_search");
 		expect(JSON.stringify(requestPayloads[1]?.messages)).toContain("夜市可营业至三更");
+		expect(toolEvents.find(event => event.phase === "end" && event.toolName === "web_fetch")?.output)
+			.toContain("夜市可营业至三更");
 	} finally {
 		fetchSpy.mockRestore();
 	}
@@ -779,7 +783,12 @@ test("file requests are corrected when the model only describes a plan", async (
 		}),
 		deepSeekSseResponse("已创建 `设定/世界规则.md`。"),
 	];
-	const toolEvents: Array<{ phase: string; toolName: string }> = [];
+	const toolEvents: Array<{
+		phase: string;
+		toolName: string;
+		arguments: Record<string, unknown>;
+		output?: string;
+	}> = [];
 	const persistedFiles: Array<{ path: string; content?: string }> = [];
 	let calls = 0;
 	const mockedFetch = Object.assign(
@@ -816,6 +825,8 @@ test("file requests are corrected when the model only describes a plan", async (
 			"start:write_story_file",
 			"end:write_story_file",
 		]);
+		expect(toolEvents[0]?.arguments.content).toContain("能力必须遵守等价交换");
+		expect(toolEvents[1]?.output).toContain("已暂存 设定/世界规则.md");
 	} finally {
 		fetchSpy.mockRestore();
 	}

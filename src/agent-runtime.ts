@@ -293,6 +293,7 @@ export interface StoryToolEvent {
 	toolName: string;
 	arguments: Record<string, unknown>;
 	details?: Record<string, unknown>;
+	output?: string;
 	isError?: boolean;
 }
 
@@ -1186,7 +1187,10 @@ function compactToolArguments(value: unknown): Record<string, unknown> {
 		if (args[key] !== undefined) compact[key] = args[key];
 	}
 	for (const key of ["content", "old_text", "new_text"]) {
-		if (typeof args[key] === "string") compact[`${key}_chars`] = args[key].length;
+		if (typeof args[key] === "string") {
+			compact[key] = headTailExcerpt(args[key], 4_000);
+			compact[`${key}_chars`] = args[key].length;
+		}
 	}
 	if (Array.isArray(args.questions)) compact.questions = args.questions.length;
 	return compact;
@@ -1232,6 +1236,19 @@ function compactToolDetails(value: unknown): Record<string, unknown> | undefined
 	const details = result.details;
 	if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
 	return compactToolArguments(details);
+}
+
+function compactToolOutput(value: unknown): string | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const content = (value as Record<string, unknown>).content;
+	if (!Array.isArray(content)) return undefined;
+	const text = content.flatMap(block => {
+		if (!block || typeof block !== "object" || Array.isArray(block)) return [];
+		const record = block as Record<string, unknown>;
+		return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
+	}).join("\n");
+	if (!text.trim()) return undefined;
+	return String(headTailExcerpt(text, 12_000));
 }
 
 async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
@@ -1391,6 +1408,7 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				toolName: event.toolName,
 				arguments: inputArguments,
 				details: compactToolDetails(event.result),
+				output: compactToolOutput(event.result),
 				isError: event.isError === true,
 			});
 			const completedInputRequest = event.toolName === "request_user_input" &&

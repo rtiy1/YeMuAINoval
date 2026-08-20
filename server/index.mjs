@@ -2517,6 +2517,7 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
           toolName: event.toolName,
           arguments: event.arguments || {},
           details: event.details || {},
+          ...(event.output ? { output: event.output } : {}),
           ...(event.isError ? { error: '工具执行失败' } : {}),
         },
         ...(completed ? { completedAt: new Date().toISOString() } : {}),

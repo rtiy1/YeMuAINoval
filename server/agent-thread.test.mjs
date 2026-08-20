@@ -205,7 +205,7 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
     events: [
       { id: 'event-1', type: 'context', label: '读取上下文', status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:00:01.000Z' },
       { id: 'event-2', type: 'skill', label: '执行写作 Skill', status: 'completed', startedAt: '2026-01-01T00:00:01.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
-      { id: 'turn-1:tool:write-1', type: 'tool', label: '写入作品文件 · 设定/人物.md', status: 'completed', meta: { toolName: 'write_story_file', arguments: { path: '设定/人物.md' }, details: { path: '设定/人物.md', chars: 1200 } }, startedAt: '2026-01-01T00:00:01.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
+      { id: 'turn-1:tool:write-1', type: 'tool', label: '写入作品文件 · 设定/人物.md', status: 'completed', meta: { toolName: 'write_story_file', arguments: { path: '设定/人物.md' }, details: { path: '设定/人物.md', chars: 1200 }, output: '已写入 1200 字符。' }, startedAt: '2026-01-01T00:00:01.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
       { id: 'event-3', type: 'result', label: '整理结果', status: 'completed', startedAt: '2026-01-01T00:00:02.000Z', completedAt: '2026-01-01T00:00:02.000Z' },
     ],
     result: { result: { output: '续写结果' } },
@@ -221,6 +221,7 @@ test('turn public response exposes Codex-style items and lifecycle', () => {
   const fileTool = agentTurnItems(turn, task).find((item) => item.id === 'turn-1:tool:write-1')
   assert.equal(fileTool.tool, 'write_story_file')
   assert.equal(fileTool.arguments.path, '设定/人物.md')
+  assert.equal(fileTool.meta.output, '已写入 1200 字符。')
   const output = agentTurnPublic(thread, turn, task, (value) => ({ id: value.id }))
   assert.equal(output.status, 'completed')
   assert.equal(output.threadId, 'thread-1')

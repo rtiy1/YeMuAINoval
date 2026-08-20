@@ -6,6 +6,7 @@ export const tuiToolNames = {
   read_story_skill: 'read',
   request_user_input: 'ask',
   submit_story_result: 'resolve',
+  web_fetch: 'fetch',
 }
 
 export function tuiToolArgs(item) {
@@ -28,4 +29,11 @@ export function tuiToolArgs(item) {
     }
   }
   return args
+}
+
+export function tuiToolResultText(item) {
+  const output = typeof item.meta?.output === 'string' ? item.meta.output : ''
+  if (output.trim()) return output
+  const failed = ['failed', 'interrupted', 'cancelled'].includes(item.status)
+  return failed ? item.meta?.error || '工具执行失败' : item.summary || '执行完成'
 }

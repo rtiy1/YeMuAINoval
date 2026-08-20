@@ -34,7 +34,7 @@ import {
   AgentDiffReview,
 } from './agent-interactions.jsx'
 import AgentMarkdown from './agent-markdown.jsx'
-import { tuiToolArgs, tuiToolNames } from './agent-tool-args.mjs'
+import { tuiToolArgs, tuiToolNames, tuiToolResultText } from './agent-tool-args.mjs'
 import { formatThinkingForDisplay } from '../packages/coding-agent/src/utils/thinking-display.ts'
 import { Transcript as YemuTranscript } from '../packages/collab-web/src/components/transcript/Transcript.tsx'
 
@@ -132,7 +132,7 @@ function tuiToolResult(item) {
     role: 'toolResult',
     toolCallId: item.id,
     toolName: tuiToolNames[item.tool] || item.tool || 'tool',
-    content: [{ type: 'text', text: failed ? item.meta?.error || '工具执行失败' : item.summary || '执行完成' }],
+    content: [{ type: 'text', text: tuiToolResultText({ ...item, status: itemStatus(item) }) }],
     details: item.meta?.details || {},
     isError: failed,
   }

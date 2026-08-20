@@ -13,6 +13,7 @@ const steeringHistoryLimit = 8
 const maximumWritingTaskTimeoutMs = 30 * 24 * 60 * 60 * 1000
 const reasoningSegmentMaxChars = 200_000
 const outputSegmentMaxChars = 200_000
+const toolOutputMaxChars = 12_000
 
 export function writingTaskTimeoutMs(value = process.env.AI_TASK_TIMEOUT_MS) {
   if (value === undefined || value === null || String(value).trim() === '') return null
@@ -120,6 +121,14 @@ function boundedRecord(value, limit = 24_000) {
   } catch {
     return null
   }
+}
+
+function boundedToolOutput(value) {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  if (value.length <= toolOutputMaxChars) return value
+  const headChars = Math.floor(toolOutputMaxChars * 0.3)
+  const tailChars = toolOutputMaxChars - headChars
+  return `${value.slice(0, headChars)}\n…（工具输出省略 ${value.length - toolOutputMaxChars} 字符）…\n${value.slice(-tailChars)}`
 }
 
 function messageToolExchange(value, { output = false } = {}) {
@@ -231,6 +240,7 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
     const timestamp = new Date().toISOString()
     const argumentsValue = event.arguments && typeof event.arguments === 'object' ? event.arguments : {}
     const details = event.details && typeof event.details === 'object' ? event.details : {}
+    const output = boundedToolOutput(event.output)
     const inputQuestions = event.toolName === 'request_user_input'
       && event.phase === 'end'
       && Array.isArray(argumentsValue.questions)
@@ -243,6 +253,7 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
       interactionAttempt: Math.max(1, positiveInteger(task.interactionAttempt) || 1),
       arguments: Object.keys(argumentsValue).length ? argumentsValue : existing?.meta?.arguments || {},
       ...(Object.keys(details).length ? { details } : {}),
+      ...(output ? { output } : {}),
       ...(event.isError ? { error: '工具执行失败' } : {}),
     }
     const status = event.phase === 'end' ? (event.isError ? 'failed' : 'completed') : 'running'
@@ -277,6 +288,7 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
       status,
       arguments: meta.arguments,
       details: meta.details || {},
+      output: meta.output || '',
       isError: event.isError === true,
       interactionAttempt: task.interactionAttempt || 1,
       executionGeneration,
