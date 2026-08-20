@@ -47,6 +47,7 @@ import {
   Menu,
   Minimize2,
   Moon,
+  MousePointer2,
   MoreHorizontal,
   Network,
   PanelLeft,
@@ -108,6 +109,13 @@ import AgentMarkdown from './agent-markdown.jsx'
 import { canReplaceActiveDraft, shouldRefreshActiveDraft } from './artifact-sync.mjs'
 import { resolveModelIcon } from './model-icons.mjs'
 import { recordsWithoutProject } from './project-records.mjs'
+import {
+  RELATIONSHIP_KINDS,
+  buildRelationshipLayout,
+  relationshipEdgeCurve,
+  relationshipGraphText,
+  relationshipKind,
+} from './relationship-graph.mjs'
 import {
   saveTextDocument,
   sendAgentNotification,
@@ -1457,7 +1465,7 @@ function App() {
           {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} onDeleteIdea={deleteIdea} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onArtifactsApplied={refreshGeneratedArtifacts} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page workspace-empty"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>还没有作品</h2><p>新建或导入作品后，工作台会直接显示正文和助手。</p><div className="empty-state-actions"><button className="primary-button" onClick={() => setShowNew(true)}><BookPlus size={17} />新建作品</button><button className="secondary-button" onClick={() => setImportProjectOpen(true)}><Download size={16} />导入文稿</button></div></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
-          {activeSection === 'relations' && <RelationshipGraphPage projects={projects} onNotify={notify} />}
+          {activeSection === 'relations' && <RelationshipGraphPage projects={projects} onNotify={notify} onCreateProject={() => setShowNew(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
           {activeSection === 'skill-market' && <SkillMarket user={user} onNotify={notify} onSkillsChanged={refreshSkills} />}
           {activeSection === 'stats' && <WritingStats stats={dashboard} projects={projects} />}
@@ -2232,11 +2240,15 @@ function AgentThreadHistory({ threads, chapters, currentThreadId, loading, switc
   </div>
 }
 
-function RelationshipGraphPage({ projects, onNotify }) {
+function RelationshipGraphPage({ projects, onNotify, onCreateProject }) {
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id || '')
   const [graph, setGraph] = useState({ nodes: [], edges: [] })
   const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [reloadVersion, setReloadVersion] = useState(0)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeRelation, setActiveRelation] = useState('all')
+  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [zoom, setZoom] = useState(1)
 
   useEffect(() => {
     if (!projects.length) {
@@ -2245,6 +2257,7 @@ function RelationshipGraphPage({ projects, onNotify }) {
       return
     }
     if (!selectedProjectId || !projects.some((project) => project.id === selectedProjectId)) {
+      setGraph({ nodes: [], edges: [] })
       setSelectedProjectId(projects[0].id)
     }
   }, [projects, selectedProjectId])
@@ -2258,164 +2271,354 @@ function RelationshipGraphPage({ projects, onNotify }) {
         if (!cancelled) setGraph(response.relationships || { nodes: [], edges: [] })
       })
       .catch((error) => {
-        if (!cancelled) onNotify(error.message || '人物关系图读取失败')
+        if (!cancelled) {
+          setGraph({ nodes: [], edges: [] })
+          onNotify(error.message || '人物关系图读取失败')
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [selectedProjectId])
+  }, [selectedProjectId, reloadVersion])
 
-  async function handleSave(next) {
-    if (!selectedProjectId) return
-    setSaving(true)
-    try {
-      const response = await api.saveProjectRelationships(selectedProjectId, next)
-      setGraph(response.relationships || { nodes: [], edges: [] })
-      onNotify('人物关系图已保存')
-    } catch (error) {
-      onNotify(error.message || '人物关系图保存失败')
-    } finally {
-      setSaving(false)
-    }
-  }
+  useEffect(() => {
+    setSearchQuery('')
+    setActiveRelation('all')
+    setSelectedNodeId('')
+    setZoom(1)
+  }, [selectedProjectId])
 
   const nodes = graph?.nodes || []
   const edges = graph?.edges || []
-  // Force-directed layout: scatter nodes instead of a tight ring so edges and
-  // their labels stop piling into the center (Fruchterman-Reingold style).
-  const positionedNodes = useMemo(() => {
-    if (!nodes.length) return []
-    const W = 600
-    const H = 520
-    const pad = 52
-    const byId = new Map(nodes.map((node) => [node.id, node]))
-    const pos = new Map()
-    nodes.forEach((node, index) => {
-      const angle = (Math.PI * 2 * index) / nodes.length - Math.PI / 2
-      const rX = Math.min(230, 90 + nodes.length * 9)
-      const rY = Math.min(190, 70 + nodes.length * 7)
-      pos.set(node.id, { x: W / 2 + rX * Math.cos(angle), y: H / 2 + rY * Math.sin(angle) })
-    })
-    const pairs = edges
-      .filter((edge) => byId.has(edge?.source) && byId.has(edge?.target))
-      .map((edge) => [edge.source, edge.target])
-    const k = Math.max(36, Math.min(90, Math.sqrt(W * H) / (Math.sqrt(nodes.length) || 1)))
-    const iterations = 180
-    for (let iter = 0; iter < iterations; iter += 1) {
-      const temp = Math.max(0.4, (1 - iter / iterations) * 2.4)
-      const force = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]))
-      const push = (id, fx, fy) => {
-        const f = force.get(id)
-        if (f) { f.x += fx; f.y += fy }
-      }
-      for (let i = 0; i < nodes.length; i += 1) {
-        for (let j = i + 1; j < nodes.length; j += 1) {
-          const a = pos.get(nodes[i].id)
-          const b = pos.get(nodes[j].id)
-          if (!a || !b) continue
-          let dx = a.x - b.x
-          let dy = a.y - b.y
-          let sq = dx * dx + dy * dy
-          if (sq < 1) {
-            dx = Math.random() - 0.5
-            dy = Math.random() - 0.5
-            sq = dx * dx + dy * dy
-            if (sq < 1) sq = 1
-          }
-          const d = Math.sqrt(sq)
-          const rep = (k * k) / d
-          const nx = (dx / d) * rep
-          const ny = (dy / d) * rep
-          push(nodes[i].id, nx, ny)
-          push(nodes[j].id, -nx, -ny)
-        }
-      }
-      for (const [s, t] of pairs) {
-        const a = pos.get(s)
-        const b = pos.get(t)
-        if (!a || !b) continue
-        const dx = b.x - a.x
-        const dy = b.y - a.y
-        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
-        const pull = (d - k) * 0.06
-        const nx = (dx / d) * pull
-        const ny = (dy / d) * pull
-        push(s, nx, ny)
-        push(t, -nx, -ny)
-      }
-      for (const node of nodes) {
-        const p = pos.get(node.id)
-        if (!p) continue
-        push(node.id, (W / 2 - p.x) * 0.01, (H / 2 - p.y) * 0.01)
-      }
-      for (const node of nodes) {
-        const p = pos.get(node.id)
-        const f = force.get(node.id)
-        if (!p || !f) continue
-        const len = Math.sqrt(f.x * f.x + f.y * f.y)
-        const cap = len > temp ? temp / len : 1
-        p.x += f.x * cap
-        p.y += f.y * cap
-        p.x = Math.min(W - pad, Math.max(pad, p.x))
-        p.y = Math.min(H - pad, Math.max(pad, p.y))
-      }
+  const positionedNodes = useMemo(() => buildRelationshipLayout(nodes, edges), [nodes, edges])
+  const nodeById = useMemo(() => new Map(positionedNodes.map((node) => [node.id, node])), [positionedNodes])
+  const relationKindById = useMemo(() => new Map(RELATIONSHIP_KINDS.map((kind) => [kind.id, kind])), [])
+  const edgeRecords = useMemo(() => edges.map((edge, index) => {
+    const source = nodeById.get(edge?.source)
+    const target = nodeById.get(edge?.target)
+    if (!source || !target) return null
+    const kind = relationshipKind(edge)
+    return {
+      edge,
+      index,
+      source,
+      target,
+      kind,
+      curve: relationshipEdgeCurve(source, target, edge, index),
     }
-    return nodes.map((node) => {
-      const p = pos.get(node.id)
-      return { ...node, x: p ? p.x : W / 2, y: p ? p.y : H / 2 }
+  }).filter(Boolean), [edges, nodeById])
+  const relationCounts = useMemo(() => Object.fromEntries(RELATIONSHIP_KINDS.map((kind) => [
+    kind.id,
+    edgeRecords.filter((record) => record.kind === kind.id).length,
+  ])), [edgeRecords])
+  const selectedNode = nodeById.get(selectedNodeId) || null
+  const selectedConnections = useMemo(() => {
+    if (!selectedNodeId) return []
+    return edgeRecords
+      .filter((record) => record.edge.source === selectedNodeId || record.edge.target === selectedNodeId)
+      .map((record) => ({
+        ...record,
+        otherNode: record.edge.source === selectedNodeId ? record.target : record.source,
+      }))
+      .filter((record) => record.otherNode)
+      .sort((first, second) => String(first.otherNode.name).localeCompare(String(second.otherNode.name), 'zh-CN'))
+  }, [edgeRecords, selectedNodeId])
+  const focusedNodeIds = useMemo(() => {
+    if (!selectedNodeId) return null
+    return new Set([selectedNodeId, ...selectedConnections.map((connection) => connection.otherNode.id)])
+  }, [selectedConnections, selectedNodeId])
+  const filteredNodeIds = useMemo(() => {
+    if (activeRelation === 'all') return null
+    const ids = new Set()
+    edgeRecords.forEach((record) => {
+      if (record.kind !== activeRelation) return
+      ids.add(record.edge.source)
+      ids.add(record.edge.target)
     })
-  }, [nodes, edges])
+    return ids
+  }, [activeRelation, edgeRecords])
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase('zh-CN')
+  const matchingNodeIds = useMemo(() => {
+    if (!normalizedQuery) return null
+    return new Set(positionedNodes
+      .filter((node) => (String(node.name) + ' ' + String(node.role || '')).toLocaleLowerCase('zh-CN').includes(normalizedQuery))
+      .map((node) => node.id))
+  }, [normalizedQuery, positionedNodes])
+  const coreNode = useMemo(() => [...positionedNodes].sort((first, second) => second.degree - first.degree)[0] || null, [positionedNodes])
+  const relationVariety = RELATIONSHIP_KINDS.filter((kind) => relationCounts[kind.id] > 0).length
+  const possibleEdges = Math.max(1, (nodes.length * (nodes.length - 1)) / 2)
+  const relationshipDensity = Math.min(100, Math.round((edgeRecords.length / possibleEdges) * 100))
+  const selectedKinds = new Set(selectedConnections.map((connection) => connection.kind))
+  const graphWidth = 920
+  const graphHeight = 620
+  const zoomedWidth = graphWidth / zoom
+  const zoomedHeight = graphHeight / zoom
+  const viewBox = [
+    (graphWidth - zoomedWidth) / 2,
+    (graphHeight - zoomedHeight) / 2,
+    zoomedWidth,
+    zoomedHeight,
+  ].join(' ')
+  const selectedProject = projects.find((project) => project.id === selectedProjectId)
+  const searchResultCount = matchingNodeIds?.size || 0
+
+  function selectProject(projectId) {
+    setGraph({ nodes: [], edges: [] })
+    setSelectedProjectId(projectId)
+  }
+
+  function selectFirstSearchResult(event) {
+    if (event.key !== 'Enter' || !matchingNodeIds?.size) return
+    const match = positionedNodes.find((node) => matchingNodeIds.has(node.id))
+    if (match) setSelectedNodeId(match.id)
+  }
 
   return <div className="page relationship-page">
-    <div className="page-heading">
-      <div><span className="section-overline">作品关系</span><h1>人物关系图</h1><p>选择作品查看角色蛛网图；夜雨在写作中发现人物关系变化时会自动更新。</p></div>
+    <div className="page-heading relationship-page-heading">
+      <div className="relationship-heading-copy">
+        <span className="section-overline">STORY RELATIONSHIP</span>
+        <h1>人物关系图</h1>
+        <p>从全局看清人物阵营、情感牵引与冲突脉络，点击角色即可追踪他的关系链。</p>
+      </div>
       {projects.length > 0 && <div className="relationship-project-picker">
-        <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} aria-label="选择作品">
-          {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-        </select>
+        <span>当前作品</span>
+        <label>
+          <BookOpen size={15} />
+          <select value={selectedProjectId} onChange={(event) => selectProject(event.target.value)} aria-label="选择作品">
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+          </select>
+          <ChevronDown size={14} />
+        </label>
       </div>}
     </div>
 
-    <div className="relationship-canvas-wrap">
-      {loading && <div className="relationship-loading"><LoaderCircle size={22} className="spin" /><span>正在读取关系图</span></div>}
-      {!loading && !projects.length && <div className="empty-state"><div className="empty-state-icon"><Network size={28} /></div><h2>还没有作品</h2><p>先创建或导入作品，才能查看人物关系图。</p><button className="primary-button" onClick={() => {}}>新建作品</button></div>}
-      {!loading && projects.length > 0 && !positionedNodes.length && <div className="empty-state"><div className="empty-state-icon"><Network size={28} /></div><h2>还没有关系数据</h2><p>让夜雨在写作中识别人物关系后，这里会自动生成蛛网图。</p></div>}
-      {!loading && positionedNodes.length > 0 && <svg className="relationship-graph" viewBox="0 0 600 520" role="img" aria-label="人物关系蛛网图">
-        {edges.map((edge, index) => {
-          const source = positionedNodes.find((node) => node.id === edge.source)
-          const target = positionedNodes.find((node) => node.id === edge.target)
-          if (!source || !target) return null
-          const label = String(edge.label || edge.kind || '').trim()
-          const t = 0.42
-          const lx = source.x + (target.x - source.x) * t
-          const ly = source.y + (target.y - source.y) * t
-          return <g key={`${edge.source}-${edge.target}-${index}`}>
-            <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="relationship-edge" />
-            {label && <g>
-              <rect x={lx - label.length * 2.8 - 3} y={ly - 9} width={label.length * 5.6 + 6} height={15} rx={3} className="relationship-edge-label-bg" />
-              <text x={lx} y={ly + 2} className="relationship-edge-label" textAnchor="middle">{label}</text>
-            </g>}
-          </g>
-        })}
-        {positionedNodes.map((node) => <g key={node.id} className="relationship-node" transform={`translate(${node.x}, ${node.y})`}>
-          <circle r={26} />
-          <text y={4} textAnchor="middle">{node.name.slice(0, 4)}</text>
-          {node.role && <text y={42} textAnchor="middle" className="relationship-node-role">{node.role.slice(0, 6)}</text>}
-        </g>)}
-      </svg>}
-    </div>
+    {!projects.length && <section className="relationship-empty-shell">
+      <div className="relationship-empty-visual" aria-hidden="true">
+        <span className="relationship-empty-node main">主角</span>
+        <span className="relationship-empty-node ally">同伴</span>
+        <span className="relationship-empty-node rival">对手</span>
+        <i className="line-one" />
+        <i className="line-two" />
+      </div>
+      <div className="empty-state">
+        <div className="empty-state-icon"><Network size={28} /></div>
+        <h2>先创建一部作品</h2>
+        <p>有了作品和人物设定后，夜雨会在创作过程中持续整理关系网络。</p>
+        <button type="button" className="primary-button" onClick={onCreateProject}><BookPlus size={17} />新建作品</button>
+      </div>
+    </section>}
 
-    {!loading && positionedNodes.length > 0 && <div className="relationship-legend">
-      <span><Network size={13} />{positionedNodes.length} 个角色</span>
-      <span>⚡ {edges.length} 条关系</span>
-      <span className="relationship-updated">{graph.updatedAt ? `更新于 ${formatRelativeTime(graph.updatedAt)}` : ''}</span>
-      <button className="secondary-button small" disabled={saving} onClick={() => handleSave({ nodes, edges })}>{saving ? '保存中' : '保存当前关系图'}</button>
-    </div>}
+    {projects.length > 0 && <>
+      {!loading && positionedNodes.length > 0 && <div className="relationship-overview-strip" aria-label="关系图概览">
+        <article><span><UsersRound size={16} /></span><div><strong>{positionedNodes.length}</strong><small>登场角色</small></div></article>
+        <article><span><Network size={16} /></span><div><strong>{edgeRecords.length}</strong><small>人物关系</small></div></article>
+        <article><span><Zap size={16} /></span><div><strong>{relationVariety}</strong><small>关系类型</small></div></article>
+        <article className="relationship-core-stat"><span>{relationshipGraphText(coreNode?.name, 1) || '—'}</span><div><strong>{coreNode?.name || '暂无'}</strong><small>网络核心 · {coreNode?.degree || 0} 条连接</small></div></article>
+      </div>}
+
+      <section className="relationship-explorer" aria-label={(selectedProject?.title || '当前作品') + '人物关系'}>
+        <header className="relationship-explorer-toolbar">
+          <div className="relationship-network-title">
+            <span className="relationship-live-dot" />
+            <div><strong>关系网络</strong><small>{graph.updatedAt ? '更新于 ' + formatRelativeTime(graph.updatedAt) : '由夜雨随创作进度自动维护'}</small></div>
+          </div>
+          {positionedNodes.length > 0 && <div className="relationship-toolbar-actions">
+            <label className="relationship-search">
+              <Search size={14} />
+              <input
+                value={searchQuery}
+                onChange={(event) => { setSearchQuery(event.target.value); setSelectedNodeId('') }}
+                onKeyDown={selectFirstSearchResult}
+                placeholder="查找人物或身份"
+                aria-label="查找人物或身份"
+              />
+              {normalizedQuery && <span>{searchResultCount}</span>}
+              {searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="清除搜索"><X size={12} /></button>}
+            </label>
+            <div className="relationship-zoom-controls" aria-label="视图缩放">
+              <button type="button" onClick={() => setZoom((current) => Math.max(0.7, Number((current - 0.15).toFixed(2))))} disabled={zoom <= 0.7} aria-label="缩小">−</button>
+              <span>{Math.round(zoom * 100)}%</span>
+              <button type="button" onClick={() => setZoom((current) => Math.min(1.6, Number((current + 0.15).toFixed(2))))} disabled={zoom >= 1.6} aria-label="放大"><Plus size={12} /></button>
+              <button type="button" onClick={() => setZoom(1)} disabled={zoom === 1} aria-label="重置缩放"><Maximize2 size={12} /></button>
+            </div>
+          </div>}
+          <button type="button" className="relationship-refresh-button" onClick={() => setReloadVersion((current) => current + 1)} disabled={loading}>
+            <Redo2 size={14} className={loading ? 'spin' : ''} />
+            <span>刷新</span>
+          </button>
+        </header>
+
+        {loading && <div className="relationship-loading relationship-loading-panel"><LoaderCircle size={22} className="spin" /><span>正在梳理人物关系…</span></div>}
+
+        {!loading && !positionedNodes.length && <div className="relationship-empty-data">
+          <div className="relationship-empty-orbit" aria-hidden="true"><Network size={32} /><i /><i /><i /></div>
+          <span className="section-overline">RELATIONSHIP DATA</span>
+          <h2>这部作品还没有关系数据</h2>
+          <p>在工作台告诉夜雨“分析当前作品的人物关系并更新关系图”，人物与连线就会出现在这里。</p>
+          <div><span>01</span>建立人物设定<i /><span>02</span>让夜雨分析关系<i /><span>03</span>随正文自动更新</div>
+        </div>}
+
+        {!loading && positionedNodes.length > 0 && <>
+          <div className="relationship-filterbar">
+            <div className="relationship-relation-filters" role="group" aria-label="筛选关系类型">
+              <button type="button" className={activeRelation === 'all' ? 'active' : ''} onClick={() => setActiveRelation('all')}>
+                全部 <span>{edgeRecords.length}</span>
+              </button>
+              {RELATIONSHIP_KINDS.map((kind) => <button
+                type="button"
+                key={kind.id}
+                className={(activeRelation === kind.id ? 'active ' : '') + 'relation-' + kind.id}
+                onClick={() => setActiveRelation(kind.id)}
+              >
+                <i />{kind.label}<span>{relationCounts[kind.id] || 0}</span>
+              </button>)}
+            </div>
+            <small><MousePointer2 size={12} />选择人物，查看他的完整关系链</small>
+          </div>
+
+          <div className="relationship-explorer-main">
+            <div className="relationship-canvas-wrap">
+              <div className="relationship-canvas-meta">
+                <span>关系密度 <strong>{relationshipDensity}%</strong></span>
+                {normalizedQuery && <span>匹配 <strong>{searchResultCount}</strong> 人</span>}
+              </div>
+              <svg className="relationship-graph" viewBox={viewBox} role="img" aria-label="可交互人物关系图">
+                <g className="relationship-edges">
+                  {edgeRecords.map((record) => {
+                    const label = relationshipGraphText(record.edge.label || record.edge.kind, 12)
+                    const labelWidth = Math.min(138, Math.max(38, Array.from(label).reduce((width, character) => width + ((character.codePointAt(0) || 0) > 255 ? 11 : 6), 12)))
+                    const isFilteredOut = activeRelation !== 'all' && record.kind !== activeRelation
+                    const isSelectedConnection = selectedNodeId && (record.edge.source === selectedNodeId || record.edge.target === selectedNodeId)
+                    const missesSearch = matchingNodeIds && !matchingNodeIds.has(record.edge.source) && !matchingNodeIds.has(record.edge.target)
+                    const isMuted = (selectedNodeId && !isSelectedConnection) || missesSearch
+                    const edgeClassName = [
+                      'relationship-edge-group',
+                      'relation-' + record.kind,
+                      isFilteredOut ? 'is-hidden' : '',
+                      isSelectedConnection ? 'is-active' : '',
+                      isMuted ? 'is-muted' : '',
+                    ].filter(Boolean).join(' ')
+                    return <g key={record.edge.source + '-' + record.edge.target + '-' + record.index} className={edgeClassName}>
+                      <path d={record.curve.path} className="relationship-edge-hitarea" />
+                      <path d={record.curve.path} className="relationship-edge" />
+                      {label && <g className="relationship-edge-label-wrap" transform={'translate(' + record.curve.labelX + ' ' + record.curve.labelY + ')'}>
+                        <rect x={-labelWidth / 2} y="-11" width={labelWidth} height="22" rx="11" className="relationship-edge-label-bg" />
+                        <text y="3.5" className="relationship-edge-label" textAnchor="middle">{label}</text>
+                      </g>}
+                    </g>
+                  })}
+                </g>
+                <g className="relationship-nodes">
+                  {positionedNodes.map((node) => {
+                    const isSelected = node.id === selectedNodeId
+                    const isMuted = (focusedNodeIds && !focusedNodeIds.has(node.id))
+                      || (filteredNodeIds && !filteredNodeIds.has(node.id))
+                      || (matchingNodeIds && !matchingNodeIds.has(node.id))
+                    const nodeClassName = [
+                      'relationship-node',
+                      'role-' + node.roleKind,
+                      isSelected ? 'is-selected' : '',
+                      isMuted ? 'is-muted' : '',
+                    ].filter(Boolean).join(' ')
+                    return <g
+                      key={node.id}
+                      className={nodeClassName}
+                      transform={'translate(' + node.x + ' ' + node.y + ')'}
+                      role="button"
+                      tabIndex="0"
+                      aria-label={(node.name || node.id) + (node.role ? '，' + node.role : '') + '，' + node.degree + ' 条关系'}
+                      onClick={() => setSelectedNodeId(isSelected ? '' : node.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          setSelectedNodeId(isSelected ? '' : node.id)
+                        }
+                      }}
+                    >
+                      <title>{node.name}{node.role ? ' · ' + node.role : ''}</title>
+                      <rect className="relationship-node-halo" x="-65" y="-34" width="130" height="68" rx="18" />
+                      <rect className="relationship-node-card" x="-59" y="-28" width="118" height="56" rx="14" />
+                      <circle className="relationship-node-avatar" cx="-35" cy="0" r="16" />
+                      <text className="relationship-node-initial" x="-35" y="4" textAnchor="middle">{relationshipGraphText(node.name, 1) || '?'}</text>
+                      <text className="relationship-node-name" x="-10" y="-3">{relationshipGraphText(node.name, 6)}</text>
+                      <text className="relationship-node-role" x="-10" y="14">{relationshipGraphText(node.role || '身份未标注', 8)}</text>
+                      {node.degree > 0 && <g className="relationship-node-degree">
+                        <circle cx="53" cy="-23" r="9" />
+                        <text x="53" y="-20" textAnchor="middle">{node.degree}</text>
+                      </g>}
+                    </g>
+                  })}
+                </g>
+              </svg>
+              <div className="relationship-canvas-legend" aria-label="人物类型图例">
+                <span className="role-lead"><i />核心人物</span>
+                <span className="role-support"><i />主要配角</span>
+                <span className="role-antagonist"><i />对立人物</span>
+                <span className="role-neutral"><i />其他角色</span>
+              </div>
+            </div>
+
+            <aside className={'relationship-detail-panel ' + (selectedNode ? 'has-selection' : '')}>
+              {selectedNode ? <>
+                <div className="relationship-detail-heading">
+                  <span className={'relationship-detail-avatar role-' + selectedNode.roleKind}>{relationshipGraphText(selectedNode.name, 1)}</span>
+                  <div><small>已选择人物</small><h2>{selectedNode.name}</h2><p>{selectedNode.role || '身份暂未标注'}</p></div>
+                  <button type="button" onClick={() => setSelectedNodeId('')} aria-label="关闭人物详情"><X size={15} /></button>
+                </div>
+                <div className="relationship-detail-metrics">
+                  <div><strong>{selectedConnections.length}</strong><span>直接关系</span></div>
+                  <div><strong>{selectedKinds.size}</strong><span>关系类型</span></div>
+                </div>
+                <div className="relationship-connection-heading"><strong>关系链</strong><span>{selectedConnections.length}</span></div>
+                <div className="relationship-connection-list">
+                  {selectedConnections.map((connection) => {
+                    const kind = relationKindById.get(connection.kind)
+                    return <button
+                      type="button"
+                      key={connection.edge.source + '-' + connection.edge.target + '-' + connection.index}
+                      className={'relation-' + connection.kind}
+                      onClick={() => setSelectedNodeId(connection.otherNode.id)}
+                    >
+                      <i />
+                      <span><strong>{connection.otherNode.name}</strong><small>{connection.edge.label || kind?.label || '人物关系'}</small></span>
+                      <em>{relationshipGraphText(connection.otherNode.role || '角色', 8)}</em>
+                      <ChevronRight size={14} />
+                    </button>
+                  })}
+                  {!selectedConnections.length && <p className="relationship-no-connections">暂时没有与其他人物建立直接关系。</p>}
+                </div>
+              </> : <>
+                <div className="relationship-overview-heading">
+                  <span className="section-overline">NETWORK OVERVIEW</span>
+                  <h2>关系概览</h2>
+                  <p>选择画布中的人物，查看与他直接相关的角色和关系。</p>
+                </div>
+                {coreNode && <button type="button" className="relationship-core-person" onClick={() => setSelectedNodeId(coreNode.id)}>
+                  <span>{relationshipGraphText(coreNode.name, 1)}</span>
+                  <div><small>当前网络核心</small><strong>{coreNode.name}</strong><em>{coreNode.role || '角色'} · {coreNode.degree} 条关系</em></div>
+                  <ChevronRight size={15} />
+                </button>}
+                <div className="relationship-distribution">
+                  <div className="relationship-connection-heading"><strong>关系构成</strong><span>{edgeRecords.length}</span></div>
+                  {RELATIONSHIP_KINDS.map((kind) => {
+                    const count = relationCounts[kind.id] || 0
+                    const percentage = edgeRecords.length ? Math.round((count / edgeRecords.length) * 100) : 0
+                    return <button type="button" key={kind.id} className={'relation-' + kind.id} onClick={() => setActiveRelation(kind.id)}>
+                      <span><i />{kind.label}<em>{count}</em></span>
+                      <b><i style={{ width: percentage + '%' }} /></b>
+                    </button>
+                  })}
+                </div>
+                <div className="relationship-panel-tip"><Info size={14} /><span>关系图会在夜雨识别到结盟、决裂或情感变化后自动更新。</span></div>
+              </>}
+            </aside>
+          </div>
+        </>}
+      </section>
+    </>}
   </div>
 }
-
-
 function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, onDeleteIdea, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
