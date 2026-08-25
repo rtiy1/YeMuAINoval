@@ -13,7 +13,6 @@ import {
   createPasswordResetToken,
   createRefreshSession,
   decryptSecret,
-  encryptSecret,
   hashPasswordResetToken,
   hashRefreshToken,
   hashPassword,
@@ -47,7 +46,6 @@ import {
   agentTurnPublic,
   archiveTaskReasoning,
   normalizeAgentInputAnswers,
-  normalizeThreadCompactionSettings,
   reasoningItemId,
   taskInputHistory,
   taskReasoningHistory,
@@ -55,6 +53,15 @@ import {
   taskSubagents,
   threadConversation,
 } from './agent-thread.mjs'
+import {
+  activeModelProfile,
+  activeModelSettings,
+  cleanModelBaseUrl,
+  hasActiveModelCredential,
+  modelProfiles,
+  publicModelProfile,
+  sanitizeModelSettings,
+} from './model-settings.mjs'
 import { readSkillPackage, removeSkillPackage, validateSkillPackage, writeSkillPackage } from './skill-market-storage.mjs'
 import { reviewSkillPackage, skillReviewPublicConfig } from './skill-review.mjs'
 import { isMarketSkillPublished, marketSkillKey } from './market-skill-runtime.mjs'
@@ -233,23 +240,6 @@ function cleanIntegerRange(value, field, min, max, fallback = null) {
     throw Object.assign(new Error(`${field}必须是 ${min} 到 ${max} 之间的整数`), { status: 400 })
   }
   return number
-}
-
-function cleanModelBaseUrl(value) {
-  if (value == null || value === '') return ''
-  if (typeof value !== 'string') throw Object.assign(new Error('API Base URL 必须是文本'), { status: 400 })
-  const text = value.trim().replace(/\/$/, '')
-  if (!text) return ''
-  let parsed
-  try {
-    parsed = new URL(text)
-  } catch {
-    throw Object.assign(new Error('API Base URL 格式不正确'), { status: 400 })
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw Object.assign(new Error('API Base URL 仅支持不带认证信息的 HTTP/HTTPS 地址'), { status: 400 })
-  }
-  return text
 }
 
 function isNetworkError(error) {
@@ -1126,98 +1116,27 @@ app.use(rateLimit({
   message: { error: 'AI 请求过于频繁，请稍后再试' },
 }))
 
-function sanitizeSettings(input, existing) {
-  const settings = { ...(existing || {}) }
-  if (input.apiBaseUrl !== undefined) {
-    settings.apiBaseUrl = cleanModelBaseUrl(input.apiBaseUrl)
-  }
-  if (input.provider !== undefined) {
-    settings.provider = input.provider === 'anthropic' ? 'anthropic' : 'openai'
-  }
-  if (input.model !== undefined) {
-    settings.model = typeof input.model === 'string' ? input.model.trim().slice(0, 80) : ''
-  }
-  if (input.reasoningEffort !== undefined) {
-    const effort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim().toLowerCase() : ''
-    const allowed = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-    if (allowed.has(effort)) settings.reasoningEffort = effort
-    else delete settings.reasoningEffort
-  }
-  if (input.thinkingBudgets !== undefined) {
-    const budgets = input.thinkingBudgets && typeof input.thinkingBudgets === 'object' && !Array.isArray(input.thinkingBudgets)
-      ? input.thinkingBudgets
-      : {}
-    settings.thinkingBudgets = {}
-    for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
-      const budget = Number(budgets[level])
-      if (Number.isFinite(budget) && budget >= 0) settings.thinkingBudgets[level] = Math.min(128000, Math.round(budget))
-    }
-  }
-  if (input.compaction !== undefined) {
-    const incoming = input.compaction && typeof input.compaction === 'object' && !Array.isArray(input.compaction)
-      ? input.compaction
-      : {}
-    const previous = settings.compaction && typeof settings.compaction === 'object' && !Array.isArray(settings.compaction)
-      ? settings.compaction
-      : {}
-    const compaction = { ...previous }
-    if (incoming.enabled !== undefined) compaction.enabled = incoming.enabled !== false
-    if (incoming.strategy !== undefined) compaction.strategy = incoming.strategy === 'off' ? 'off' : 'context-full'
-    for (const [field, minimum, maximum] of [
-      ['thresholdPercent', -1, 99],
-      ['thresholdTokens', -1, 1000000],
-      ['reserveTokens', 0, 1000000],
-      ['keepRecentTokens', 1, 1000000],
-    ]) {
-      if (incoming[field] === undefined) continue
-      if (field === 'reserveTokens' && (incoming[field] === null || incoming[field] === '')) {
-        compaction[field] = null
-        continue
-      }
-      const number = Number(incoming[field])
-      if (Number.isFinite(number)) compaction[field] = Math.min(maximum, Math.max(minimum, Math.round(number)))
-    }
-    settings.compaction = normalizeThreadCompactionSettings(compaction)
-  }
-  if (input.temperature !== undefined) {
-    const temp = Number(input.temperature)
-    if (Number.isFinite(temp)) settings.temperature = Math.min(2, Math.max(0, temp))
-  }
-  if (input.maxTokens !== undefined) {
-    const mt = Number(input.maxTokens)
-    if (Number.isFinite(mt) && mt > 0) settings.maxTokens = Math.min(128000, Math.round(mt))
-  }
-  if (input.contextWindow !== undefined) {
-    const cw = Number(input.contextWindow)
-    if (Number.isFinite(cw) && cw > 0) settings.contextWindow = Math.min(1000000, Math.round(cw))
-  }
-  if (input.apiKey !== undefined && input.apiKey !== null && String(input.apiKey).trim()) {
-    settings.apiKeyEnc = encryptSecret(String(input.apiKey).trim())
-  }
-  return settings
-}
-
 function publicSettings(settings) {
-  if (!settings) {
-    const defaults = { provider: 'openai', apiBaseUrl: '', model: '', reasoningEffort: '' }
-    return { ...defaults, apiKeyMask: null, thinkingBudgets: null, temperature: null, maxTokens: null, contextWindow: null, compaction: normalizeThreadCompactionSettings(null), modelCapabilities: storyAgentModelCapabilities(defaults) }
-  }
-  const modelCapabilities = storyAgentModelCapabilities(settings)
-  const configuredEffort = settings.reasoningEffort || ''
+  const resolved = activeModelSettings(settings)
+  const profiles = modelProfiles(settings)
+  const modelCapabilities = storyAgentModelCapabilities(resolved)
+  const configuredEffort = resolved.reasoningEffort || ''
   const effectiveReasoningEffort = configuredEffort && configuredEffort !== 'off'
     ? modelCapabilities.effectiveEffort || ''
     : configuredEffort
   return {
-    provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
-    apiBaseUrl: settings.apiBaseUrl || '',
-    apiKeyMask: maskKey(decryptSecret(settings.apiKeyEnc)),
-    model: settings.model || '',
+    activeModelProfileId: resolved.id,
+    modelProfiles: profiles.map(publicModelProfile),
+    provider: resolved.provider,
+    vendor: resolved.vendor,
+    apiBaseUrl: resolved.apiBaseUrl || '',
+    apiKeyMask: maskKey(decryptSecret(resolved.apiKeyEnc)),
+    model: resolved.model || '',
     reasoningEffort: effectiveReasoningEffort,
-    thinkingBudgets: settings.thinkingBudgets ?? null,
-    temperature: settings.temperature ?? null,
-    maxTokens: settings.maxTokens ?? null,
-    contextWindow: settings.contextWindow ?? null,
-    compaction: normalizeThreadCompactionSettings(settings.compaction),
+    thinkingBudgets: resolved.thinkingBudgets ?? null,
+    temperature: resolved.temperature ?? null,
+    contextWindow: resolved.contextWindow ?? modelCapabilities.contextWindow ?? null,
+    compaction: resolved.compaction,
     modelCapabilities,
   }
 }
@@ -1847,7 +1766,7 @@ app.put('/api/settings', async (req, res, next) => {
     const result = await updateDb((db) => {
       const user = db.users.find((item) => item.id === req.user.id)
       if (!user) throw Object.assign(new Error('账号不存在'), { status: 404 })
-      user.settings = sanitizeSettings(req.body || {}, user.settings)
+      user.settings = sanitizeModelSettings(req.body || {}, user.settings)
       return user.settings
     })
     res.json({ settings: publicSettings(result) })
@@ -1859,14 +1778,21 @@ app.put('/api/settings', async (req, res, next) => {
 app.post('/api/ai/models', async (req, res, next) => {
   try {
     const s = req.user.settings || {}
+    const profiles = modelProfiles(s)
+    const requestedProfileId = typeof req.body?.profileId === 'string' ? req.body.profileId : ''
+    const storedProfile = requestedProfileId
+      ? profiles.find((profile) => profile.id === requestedProfileId)
+      : null
+    const selected = storedProfile || activeModelProfile(s)
     const provider = req.body?.provider === 'anthropic'
       ? 'anthropic'
       : req.body?.provider === 'openai'
         ? 'openai'
-        : s.provider === 'anthropic' ? 'anthropic' : 'openai'
-    const apiKey = String(req.body?.apiKey || '').trim() || decryptSecret(s.apiKeyEnc)
+        : selected.provider === 'anthropic' ? 'anthropic' : 'openai'
+    const apiKey = String(req.body?.apiKey || '').trim()
+      || (req.body?.clearApiKey === true || (requestedProfileId && !storedProfile) ? '' : decryptSecret(selected.apiKeyEnc))
     if (!apiKey) throw Object.assign(new Error('请先在设置中配置 API Key'), { status: 400 })
-    const requestedBaseUrl = req.body?.apiBaseUrl !== undefined ? cleanModelBaseUrl(req.body.apiBaseUrl) : s.apiBaseUrl
+    const requestedBaseUrl = req.body?.apiBaseUrl !== undefined ? cleanModelBaseUrl(req.body.apiBaseUrl) : selected.apiBaseUrl
     let models = []
     if (provider === 'anthropic') {
       const baseUrl = (requestedBaseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '')
@@ -1898,7 +1824,7 @@ app.post('/api/ai/models', async (req, res, next) => {
     const modelCapabilities = Object.fromEntries(models.map((model) => [
       model,
       storyAgentModelCapabilities({
-        ...s,
+        ...selected,
         provider,
         apiBaseUrl: requestedBaseUrl || '',
         model,
@@ -1916,7 +1842,7 @@ app.post('/api/ai/models', async (req, res, next) => {
 
 app.get('/api/ai/skills', async (req, res, next) => {
   try {
-    const modelReady = Boolean(req.user.settings?.apiKeyEnc || sharedModelAccessAllowed)
+    const modelReady = Boolean(hasActiveModelCredential(req.user.settings) || sharedModelAccessAllowed)
     const builtInCatalog = await listStoryAgentSkills()
     const db = await loadDb()
     const installedIds = new Set((db.skillMarketInstalls || [])

@@ -6165,6 +6165,67 @@ const TUI_COMPACTION_DEFAULTS = Object.freeze({
   keepRecentTokens: 20000,
 })
 
+const MODEL_VENDOR_OPTIONS = [
+  { id: 'openai', label: 'OpenAI', provider: 'openai', apiBaseUrl: '', description: '官方 API' },
+  { id: 'anthropic', label: 'Anthropic', provider: 'anthropic', apiBaseUrl: '', description: 'Claude 官方 API' },
+  { id: 'deepseek', label: 'DeepSeek', provider: 'openai', apiBaseUrl: 'https://api.deepseek.com/v1', description: 'OpenAI 兼容' },
+  { id: 'openrouter', label: 'OpenRouter', provider: 'openai', apiBaseUrl: 'https://openrouter.ai/api/v1', description: '多模型聚合' },
+  { id: 'custom', label: '自定义', provider: 'openai', apiBaseUrl: '', description: '代理或私有服务' },
+]
+
+function freshModelProfile(index, source = null) {
+  const id = globalThis.crypto?.randomUUID?.() || `profile-${Date.now()}-${index}`
+  return {
+    id,
+    name: source ? `${source.name || '模型连接'} 副本`.slice(0, 60) : `新连接 ${index + 1}`,
+    vendor: source?.vendor || 'openai',
+    provider: source?.provider === 'anthropic' ? 'anthropic' : 'openai',
+    apiBaseUrl: source?.apiBaseUrl || '',
+    apiKey: '',
+    apiKeyMask: null,
+    clearApiKey: false,
+    model: source?.model || '',
+    reasoningEffort: source?.reasoningEffort || '',
+    thinkingBudgets: { ...TUI_THINKING_BUDGETS, ...(source?.thinkingBudgets || {}) },
+    temperature: source?.temperature ?? 0.7,
+    contextWindow: source?.contextWindow ?? '',
+  }
+}
+
+function settingsFormValue(settings = {}) {
+  const sourceProfiles = Array.isArray(settings.modelProfiles) && settings.modelProfiles.length
+    ? settings.modelProfiles
+    : [{
+        id: 'default',
+        name: '默认连接',
+        vendor: settings.vendor || (settings.provider === 'anthropic' ? 'anthropic' : 'openai'),
+        provider: settings.provider,
+        apiBaseUrl: settings.apiBaseUrl,
+        apiKeyMask: settings.apiKeyMask,
+        model: settings.model,
+        reasoningEffort: settings.reasoningEffort,
+        thinkingBudgets: settings.thinkingBudgets,
+        temperature: settings.temperature,
+        contextWindow: settings.contextWindow,
+      }]
+  const modelProfiles = sourceProfiles.map((profile) => ({
+    ...profile,
+    apiKey: '',
+    clearApiKey: false,
+    thinkingBudgets: { ...TUI_THINKING_BUDGETS, ...(profile.thinkingBudgets || {}) },
+    temperature: profile.temperature ?? 0.7,
+    contextWindow: profile.contextWindow ?? '',
+  }))
+  const activeModelProfileId = modelProfiles.some((profile) => profile.id === settings.activeModelProfileId)
+    ? settings.activeModelProfileId
+    : modelProfiles[0].id
+  return {
+    activeModelProfileId,
+    modelProfiles,
+    compaction: { ...TUI_COMPACTION_DEFAULTS, ...(settings.compaction || {}) },
+  }
+}
+
 function SettingsModal({ onClose, onNotify }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -6175,7 +6236,7 @@ function SettingsModal({ onClose, onNotify }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [activePane, setActivePane] = useState('connection')
   const [connectionStatus, setConnectionStatus] = useState('idle')
-  const [form, setForm] = useState({ provider: 'openai', apiBaseUrl: '', apiKey: '', model: '', reasoningEffort: '', thinkingBudgets: { ...TUI_THINKING_BUDGETS }, temperature: 0.7, contextWindow: 100000, compaction: { ...TUI_COMPACTION_DEFAULTS } })
+  const [form, setForm] = useState(() => settingsFormValue())
 
   useEffect(() => {
     let mounted = true
@@ -6185,40 +6246,45 @@ function SettingsModal({ onClose, onNotify }) {
         const s = response.settings || {}
         setSettings(s)
         setModelCapabilities(s.modelCapabilities || null)
-        setForm({
-          provider: s.provider === 'anthropic' ? 'anthropic' : 'openai',
-          apiBaseUrl: s.apiBaseUrl || '',
-          apiKey: '',
-          model: s.model || '',
-          reasoningEffort: s.reasoningEffort || '',
-          thinkingBudgets: { ...TUI_THINKING_BUDGETS, ...(s.thinkingBudgets || {}) },
-          temperature: s.temperature ?? 0.7,
-          contextWindow: s.contextWindow ?? 100000,
-          compaction: { ...TUI_COMPACTION_DEFAULTS, ...(s.compaction || {}) },
-        })
+        setForm(settingsFormValue(s))
       })
       .catch(() => { if (mounted) onNotify('读取设置失败') })
       .finally(() => { if (mounted) setLoading(false) })
     return () => { mounted = false }
   }, [])
 
+  const selectedProfile = form.modelProfiles.find((profile) => profile.id === form.activeModelProfileId) || form.modelProfiles[0]
+
   async function handleSave(event) {
     event.preventDefault()
     setSaving(true)
     try {
-      const response = await api.updateSettings(form)
+      const response = await api.updateSettings({
+        activeModelProfileId: form.activeModelProfileId,
+        modelProfiles: form.modelProfiles.map((profile) => ({
+          id: profile.id,
+          name: profile.name,
+          vendor: profile.vendor,
+          provider: profile.provider,
+          apiBaseUrl: profile.apiBaseUrl,
+          apiKey: profile.apiKey,
+          clearApiKey: profile.clearApiKey,
+          model: profile.model,
+          reasoningEffort: profile.reasoningEffort,
+          thinkingBudgets: profile.thinkingBudgets,
+          temperature: profile.temperature,
+          contextWindow: profile.contextWindow,
+        })),
+        compaction: form.compaction,
+      })
       setSettings(response.settings)
       setModelCapabilities(response.settings?.modelCapabilities || null)
-      setForm((current) => ({
-        ...current,
-        apiKey: '',
-        reasoningEffort: response.settings?.reasoningEffort ?? current.reasoningEffort,
-      }))
+      setForm(settingsFormValue(response.settings))
       let availableModels = []
       let modelRefreshError = null
       if (response.settings?.apiKeyMask) {
         try {
-          const modelResponse = await api.getModels()
+          const modelResponse = await api.getModels({ profileId: response.settings.activeModelProfileId })
           availableModels = modelResponse.models || []
           setModelList(availableModels)
           setModelCapabilitiesById(modelResponse.modelCapabilities || {})
@@ -6254,13 +6320,15 @@ function SettingsModal({ onClose, onNotify }) {
     setConnectionStatus('testing')
     try {
       const response = await api.getModels({
-        provider: form.provider,
-        apiBaseUrl: form.apiBaseUrl,
-        apiKey: form.apiKey,
+        profileId: selectedProfile.id,
+        provider: selectedProfile.provider,
+        apiBaseUrl: selectedProfile.apiBaseUrl,
+        apiKey: selectedProfile.apiKey,
+        clearApiKey: selectedProfile.clearApiKey,
       })
       setModelList(response.models || [])
       setModelCapabilitiesById(response.modelCapabilities || {})
-      setModelCapabilities(response.modelCapabilities?.[form.model] || modelCapabilities)
+      setModelCapabilities(response.modelCapabilities?.[selectedProfile.model] || modelCapabilities)
       setConnectionStatus('connected')
       if (!(response.models || []).length) onNotify('连接成功，但接口没有返回可用模型')
     } catch (error) {
@@ -6273,14 +6341,18 @@ function SettingsModal({ onClose, onNotify }) {
 
   function updateField(field, value) {
     setForm((current) => {
-      if (field !== 'model') return { ...current, [field]: value }
-      const capabilities = modelCapabilitiesById[value]
-      const supported = new Set(capabilities?.supportedEfforts || [])
-      const configured = current.reasoningEffort
-      const reasoningEffort = configured && configured !== 'off' && capabilities && !supported.has(configured)
-        ? capabilities.effectiveEffort || ''
-        : configured
-      return { ...current, model: value, reasoningEffort }
+      const profiles = current.modelProfiles.map((profile) => {
+        if (profile.id !== current.activeModelProfileId) return profile
+        if (field !== 'model') return { ...profile, [field]: value }
+        const capabilities = modelCapabilitiesById[value]
+        const supported = new Set(capabilities?.supportedEfforts || [])
+        const configured = profile.reasoningEffort
+        const reasoningEffort = configured && configured !== 'off' && capabilities && !supported.has(configured)
+          ? capabilities.effectiveEffort || ''
+          : configured
+        return { ...profile, model: value, reasoningEffort }
+      })
+      return { ...current, modelProfiles: profiles }
     })
     if (field === 'model') setModelCapabilities(modelCapabilitiesById[value] || null)
     if (['provider', 'apiBaseUrl', 'apiKey'].includes(field)) {
@@ -6292,10 +6364,9 @@ function SettingsModal({ onClose, onNotify }) {
   }
 
   function updateThinkingBudget(level, value) {
-    setForm((current) => ({
-      ...current,
-      thinkingBudgets: { ...current.thinkingBudgets, [level]: value },
-    }))
+    setForm((current) => ({ ...current, modelProfiles: current.modelProfiles.map((profile) => profile.id === current.activeModelProfileId
+      ? { ...profile, thinkingBudgets: { ...profile.thinkingBudgets, [level]: value } }
+      : profile) }))
   }
 
   function updateCompaction(field, value) {
@@ -6305,15 +6376,78 @@ function SettingsModal({ onClose, onNotify }) {
     }))
   }
 
-  const apiKeyPlaceholder = settings?.apiKeyMask ? `已配置 ${settings.apiKeyMask}，留空不修改` : '输入 API Key'
+  function selectProfile(profileId) {
+    setForm((current) => ({ ...current, activeModelProfileId: profileId }))
+    setModelList([])
+    setModelCapabilitiesById({})
+    setModelCapabilities(settings?.activeModelProfileId === profileId ? settings.modelCapabilities || null : null)
+    setConnectionStatus('idle')
+  }
+
+  function addProfile(source = null) {
+    if (form.modelProfiles.length >= 12) {
+      onNotify('最多保存 12 个模型连接')
+      return
+    }
+    setForm((current) => {
+      const profile = freshModelProfile(current.modelProfiles.length, source)
+      return { ...current, modelProfiles: [...current.modelProfiles, profile], activeModelProfileId: profile.id }
+    })
+    setModelList([])
+    setModelCapabilities(null)
+    setModelCapabilitiesById({})
+    setConnectionStatus('idle')
+    if (source) onNotify('已复制连接参数；为安全起见，API Key 不会复制')
+  }
+
+  function removeSelectedProfile() {
+    if (form.modelProfiles.length <= 1) {
+      onNotify('至少需要保留一个模型连接')
+      return
+    }
+    setForm((current) => {
+      const index = current.modelProfiles.findIndex((profile) => profile.id === current.activeModelProfileId)
+      const modelProfiles = current.modelProfiles.filter((profile) => profile.id !== current.activeModelProfileId)
+      const next = modelProfiles[Math.min(Math.max(index, 0), modelProfiles.length - 1)]
+      return { ...current, modelProfiles, activeModelProfileId: next.id }
+    })
+    setModelList([])
+    setModelCapabilities(null)
+    setModelCapabilitiesById({})
+    setConnectionStatus('idle')
+  }
+
+  function updateVendor(vendorId) {
+    const option = MODEL_VENDOR_OPTIONS.find((item) => item.id === vendorId) || MODEL_VENDOR_OPTIONS.at(-1)
+    setForm((current) => ({ ...current, modelProfiles: current.modelProfiles.map((profile) => {
+      if (profile.id !== current.activeModelProfileId) return profile
+      if (option.id === 'custom') return { ...profile, vendor: 'custom' }
+      return { ...profile, vendor: option.id, provider: option.provider, apiBaseUrl: option.apiBaseUrl }
+    }) }))
+    setModelList([])
+    setModelCapabilities(null)
+    setModelCapabilitiesById({})
+    setConnectionStatus('idle')
+  }
+
+  function clearSelectedApiKey() {
+    setForm((current) => ({ ...current, modelProfiles: current.modelProfiles.map((profile) => profile.id === current.activeModelProfileId
+      ? { ...profile, apiKey: '', apiKeyMask: null, clearApiKey: true }
+      : profile) }))
+    setConnectionStatus('idle')
+  }
+
+  const apiKeyPlaceholder = selectedProfile.apiKeyMask ? `已配置 ${selectedProfile.apiKeyMask}，留空不修改` : '输入 API Key'
   const connectionCopy = {
-    idle: settings?.apiKeyMask ? '已保存凭据' : '等待配置',
+    idle: selectedProfile.apiKeyMask || selectedProfile.apiKey ? '凭据已填写' : '等待配置',
     testing: '正在连接',
     connected: `连接正常${modelList.length ? ` · ${modelList.length} 个模型` : ''}`,
     error: '连接失败',
   }[connectionStatus]
-  const compactionThreshold = resolveWebCompactionThreshold(form.contextWindow, form.compaction)
+  const effectiveContextWindow = Number(selectedProfile.contextWindow) || Number(modelCapabilities?.contextWindow) || 100000
+  const compactionThreshold = resolveWebCompactionThreshold(effectiveContextWindow, form.compaction)
   const availableReasoningOptions = reasoningOptionsForCapabilities(modelCapabilities)
+  const explicitReasoning = selectedProfile.reasoningEffort && selectedProfile.reasoningEffort !== 'off'
 
   return <div className="modal-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -6322,7 +6456,7 @@ function SettingsModal({ onClose, onNotify }) {
           <div className="settings-title-icon"><Settings2 size={18} /></div>
           <div>
             <h2 id="settings-title">模型与连接</h2>
-            <p className="settings-subtitle">管理 Agent 使用的模型服务和生成参数。</p>
+            <p className="settings-subtitle">保存多套供应商连接，并随时切换当前模型。</p>
           </div>
         </div>
         <button className="icon-button" aria-label="关闭" title="关闭" onClick={onClose}><X size={19} /></button>
@@ -6334,9 +6468,9 @@ function SettingsModal({ onClose, onNotify }) {
         <form className="settings-form" onSubmit={handleSave}>
           <div className="settings-layout">
             <nav className="settings-nav" aria-label="设置分类">
-              <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>连接与模型</strong><small>服务商、地址和密钥</small></span></button>
-              <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>思考强度与上下文</small></span></button>
-              <button type="button" className={activePane === 'context' ? 'active' : ''} onClick={() => setActivePane('context')}><Archive size={16} /><span><strong>上下文维护</strong><small>阈值、保留窗口与压缩</small></span></button>
+              <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>供应商与连接</strong><small>保存、切换和测试</small></span></button>
+              <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>当前连接的模型参数</small></span></button>
+              <button type="button" className={activePane === 'context' ? 'active' : ''} onClick={() => setActivePane('context')}><Archive size={16} /><span><strong>上下文维护</strong><small>自动压缩与保留</small></span></button>
               <div className={`settings-connection-state ${connectionStatus}`}>
                 <span />
                 <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
@@ -6346,30 +6480,52 @@ function SettingsModal({ onClose, onNotify }) {
             <div className="settings-pane">
               {activePane === 'connection' ? <>
                 <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>模型服务</h3><p>兼容官方端点，也支持自定义代理地址。</p></div></div>
-                  <div className="settings-provider-picker">
-                    <button type="button" className={form.provider === 'openai' ? 'active' : ''} onClick={() => updateField('provider', 'openai')}><Bot size={17} /><span><strong>OpenAI 兼容</strong><small>OpenAI、代理及兼容服务</small></span><Check size={15} /></button>
-                    <button type="button" className={form.provider === 'anthropic' ? 'active' : ''} onClick={() => updateField('provider', 'anthropic')}><Sparkles size={17} /><span><strong>Anthropic</strong><small>Claude 官方或兼容服务</small></span><Check size={15} /></button>
+                  <div className="settings-section-heading"><div><h3>已保存连接</h3><p>选中的连接会在保存后成为所有 Story Skills 的当前连接。</p></div><button type="button" className="settings-add-profile" disabled={form.modelProfiles.length >= 12} onClick={() => addProfile()}><Plus size={14} />新增</button></div>
+                  <div className="settings-profile-list">
+                    {form.modelProfiles.map((profile) => <button type="button" key={profile.id} className={`settings-profile-card ${profile.id === form.activeModelProfileId ? 'active' : ''}`} onClick={() => selectProfile(profile.id)}>
+                      <span className="settings-profile-icon">{profile.provider === 'anthropic' ? <Sparkles size={15} /> : <Bot size={15} />}</span>
+                      <span className="settings-profile-copy"><strong>{profile.name || '未命名连接'}</strong><small>{profile.model || MODEL_VENDOR_OPTIONS.find((item) => item.id === profile.vendor)?.label || '尚未选择模型'} · {profile.apiKeyMask || profile.apiKey ? '密钥已配置' : '未配置密钥'}</small></span>
+                      <span className="settings-profile-state">{profile.id === settings?.activeModelProfileId ? '使用中' : profile.id === form.activeModelProfileId ? '待切换' : ''}</span>
+                    </button>)}
+                  </div>
+                  <div className="settings-profile-actions">
+                    <button type="button" disabled={form.modelProfiles.length >= 12} onClick={() => addProfile(selectedProfile)}><Copy size={13} />复制配置</button>
+                    <button type="button" className="danger" disabled={form.modelProfiles.length <= 1} onClick={removeSelectedProfile}><Trash2 size={13} />删除</button>
                   </div>
                 </section>
 
                 <section className="settings-section settings-connection-fields">
                   <label className="settings-field">
-                    <span>API Base URL</span>
-                    <input type="url" value={form.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder={form.provider === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'} />
-                    <small>留空时使用官方默认地址；代理地址请包含版本路径。</small>
+                    <span>配置名称</span>
+                    <input type="text" maxLength="60" value={selectedProfile.name} onChange={(event) => updateField('name', event.target.value)} placeholder="例如：OpenAI 主力、Claude 长文" />
                   </label>
 
+                  <div className="settings-field">
+                    <span>供应商</span>
+                    <div className="settings-vendor-picker">{MODEL_VENDOR_OPTIONS.map((option) => <button type="button" key={option.id} className={selectedProfile.vendor === option.id ? 'active' : ''} onClick={() => updateVendor(option.id)}><strong>{option.label}</strong><small>{option.description}</small></button>)}</div>
+                  </div>
+
+                  {selectedProfile.vendor === 'custom' && <div className="settings-provider-picker settings-protocol-picker">
+                    <button type="button" className={selectedProfile.provider === 'openai' ? 'active' : ''} onClick={() => updateField('provider', 'openai')}><Bot size={17} /><span><strong>OpenAI 兼容</strong><small>Chat Completions 接口</small></span><Check size={15} /></button>
+                    <button type="button" className={selectedProfile.provider === 'anthropic' ? 'active' : ''} onClick={() => updateField('provider', 'anthropic')}><Sparkles size={17} /><span><strong>Anthropic</strong><small>Messages 接口</small></span><Check size={15} /></button>
+                  </div>}
+
                   <label className="settings-field">
-                    <span>API Key</span>
-                    <input type="password" value={form.apiKey} onChange={(e) => updateField('apiKey', e.target.value)} placeholder={apiKeyPlaceholder} autoComplete="new-password" />
-                    <small>{settings?.apiKeyMask ? `当前为 ${settings.apiKeyMask}，留空保持不变。` : '保存后会加密存储，不会回传明文。'}</small>
+                    <span>API Base URL</span>
+                    <input type="url" value={selectedProfile.apiBaseUrl} onChange={(e) => updateField('apiBaseUrl', e.target.value)} placeholder={selectedProfile.provider === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'} />
+                    <small>{['openai', 'anthropic'].includes(selectedProfile.vendor) ? '留空时使用供应商官方地址；也可以改为代理地址。' : '该地址只属于当前连接，不会覆盖其他供应商。'}</small>
                   </label>
+
+                  <div className="settings-field">
+                    <span>API Key {selectedProfile.apiKeyMask && <button type="button" className="settings-clear-key" onClick={clearSelectedApiKey}>清除已保存密钥</button>}</span>
+                    <input type="password" value={selectedProfile.apiKey} onChange={(e) => { updateField('apiKey', e.target.value); updateField('clearApiKey', false) }} placeholder={apiKeyPlaceholder} autoComplete="new-password" />
+                    <small>{selectedProfile.apiKeyMask ? `当前为 ${selectedProfile.apiKeyMask}，留空保持不变。` : '保存后仅在服务端加密存储，不会向浏览器回传明文。'}</small>
+                  </div>
 
                   <div className="settings-model-row">
                     <label className="settings-field settings-model-field">
                       <span>模型</span>
-                      <input type="text" value={form.model} onChange={(e) => updateField('model', e.target.value)} placeholder={form.provider === 'anthropic' ? '输入 Claude 模型名' : '输入 OpenAI 兼容模型名'} list="model-list" />
+                      <input type="text" value={selectedProfile.model} onChange={(e) => updateField('model', e.target.value)} placeholder={selectedProfile.provider === 'anthropic' ? '输入 Claude 模型名' : '输入模型名'} list="model-list" />
                       <small>可手动填写，也可测试连接后从服务端列表选择。</small>
                     </label>
                     <button type="button" className={`settings-fetch-models ${connectionStatus === 'connected' ? 'success' : ''}`} disabled={fetchingModels} onClick={handleFetchModels}>
@@ -6384,96 +6540,91 @@ function SettingsModal({ onClose, onNotify }) {
                   <div className="settings-section-heading"><div><h3>推理与输出</h3><p>模型不支持某项参数时，服务端会自动忽略。</p></div></div>
                   <label className="settings-field">
                     <span>思考强度</span>
-                    <div className="settings-select-wrap"><BrainCircuit size={16} /><select value={form.reasoningEffort} onChange={(e) => updateField('reasoningEffort', e.target.value)}>
+                    <div className="settings-select-wrap"><BrainCircuit size={16} /><select value={selectedProfile.reasoningEffort} onChange={(e) => updateField('reasoningEffort', e.target.value)}>
                       {availableReasoningOptions.map((option) => <option key={option.value || 'auto'} value={option.value}>{option.label}{option.value === '' ? ' (Model default)' : ''}</option>)}
                     </select><ChevronDown size={14} /></div>
                     <small>{modelCapabilities?.reasoning === false ? '当前模型不支持可控思考。' : '仅显示当前模型支持的档位；强度越高通常耗时越长。'}</small>
                   </label>
 
-                  <div className="settings-thinking-budgets">
-                    <div className="settings-thinking-budgets-heading">
-                      <span>Thinking budgets</span>
-                      <small>TUI defaults · tokens</small>
-                    </div>
-                    <div className="settings-thinking-budget-grid">
-                      {THINKING_BUDGET_LEVELS.map((level) => <label className="settings-field" key={level}>
-                        <span>{level === 'xhigh' ? 'XHigh' : `${level[0].toUpperCase()}${level.slice(1)}`}</span>
-                        <input type="number" min="0" max="128000" step="1" value={form.thinkingBudgets[level]} onChange={(event) => updateThinkingBudget(level, Number(event.target.value))} />
-                      </label>)}
-                    </div>
-                    <small className="settings-thinking-budget-note">精确预算仅对 Anthropic、Gemini 等 token-budget 模型生效；DeepSeek / OpenAI 等 effort 模型由厂商按强度控制。</small>
-                  </div>
-
                   <label className="settings-field">
-                    <span>采样温度 <strong>{Number(form.temperature).toFixed(1)}</strong></span>
-                    <input type="range" min="0" max="2" step="0.1" value={form.temperature} onChange={(e) => updateField('temperature', Number(e.target.value))} className="settings-slider" />
+                    <span>采样温度 <strong>{Number(selectedProfile.temperature).toFixed(1)}</strong></span>
+                    <input type="range" min="0" max="2" step="0.1" value={selectedProfile.temperature} onChange={(e) => updateField('temperature', Number(e.target.value))} className="settings-slider" disabled={explicitReasoning} />
                     <div className="settings-range-labels"><span>稳定</span><span>灵活</span><span>发散</span></div>
-                    <small>推理模型启用思考强度时会自动忽略温度，避免 API 参数冲突。</small>
+                    <small>{explicitReasoning ? '已启用思考强度，当前模型会忽略温度参数。' : '数值越低越稳定；模型不支持时会自动忽略。'}</small>
                   </label>
                 </section>
 
-                <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>Token 预算</h3><p>与 TUI 一致，输出上限由模型目录决定。</p></div></div>
-                  <div className="settings-number-row">
-                    <label className="settings-field">
-                      <span>模型最大输出 Tokens</span>
-                      <input type="text" value={compactTokenCount(modelCapabilities?.maxTokens || 16384)} readOnly />
-                      <small>自动读取模型目录；思考预算只占其中一部分，不再用 Web 的旧 16K 默认值覆盖。</small>
-                    </label>
-                    <label className="settings-field">
-                      <span>上下文窗口 Tokens</span>
-                      <input type="number" min="100" max="1000000" step="1" value={form.contextWindow} onChange={(e) => updateField('contextWindow', Number(e.target.value))} />
-                      <small>可直接填写 100000 等整值。</small>
-                    </label>
+                <section className="settings-section settings-capability-section">
+                  <div className="settings-section-heading"><div><h3>模型能力</h3><p>这些值由模型目录识别，不需要手动设置。</p></div></div>
+                  <div className="settings-capability-strip">
+                    <span><small>上下文窗口</small><strong>{compactTokenCount(modelCapabilities?.contextWindow || effectiveContextWindow)}</strong></span>
+                    <span><small>最大输出</small><strong>{compactTokenCount(modelCapabilities?.maxTokens || 16384)}</strong></span>
+                    <span><small>可控思考</small><strong>{modelCapabilities?.reasoning === false ? '不支持' : modelCapabilities?.reasoning === true ? '支持' : '待识别'}</strong></span>
                   </div>
+                  <details className="settings-advanced">
+                    <summary>高级覆盖参数</summary>
+                    <div className="settings-advanced-body">
+                      <label className="settings-field">
+                        <span>上下文窗口覆盖</span>
+                        <input type="number" min="100" max="2000000" step="1" value={selectedProfile.contextWindow} placeholder={modelCapabilities?.contextWindow ? `自动 · ${modelCapabilities.contextWindow}` : '自动识别'} onChange={(e) => updateField('contextWindow', e.target.value === '' ? '' : Number(e.target.value))} />
+                        <small>通常留空即可；只有自定义服务的模型目录不准确时才需要覆盖。</small>
+                      </label>
+                      <div className="settings-thinking-budgets">
+                        <div className="settings-thinking-budgets-heading"><span>精确思考预算</span><small>Tokens</small></div>
+                        <div className="settings-thinking-budget-grid">
+                          {THINKING_BUDGET_LEVELS.map((level) => <label className="settings-field" key={level}>
+                            <span>{level === 'xhigh' ? 'XHigh' : `${level[0].toUpperCase()}${level.slice(1)}`}</span>
+                            <input type="number" min="0" max="128000" step="1" value={selectedProfile.thinkingBudgets[level]} onChange={(event) => updateThinkingBudget(level, Number(event.target.value))} />
+                          </label>)}
+                        </div>
+                        <small className="settings-thinking-budget-note">只对按 Token 控制思考预算的模型生效；普通用户无需修改。</small>
+                      </div>
+                    </div>
+                  </details>
                 </section>
               </> : <>
                 <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>Context compaction</h3><p>使用与 TUI 相同的触发顺序：固定 Tokens → 百分比 → Reserve。</p></div><strong className="settings-threshold-preview">{compactTokenCount(compactionThreshold)} threshold</strong></div>
+                  <div className="settings-section-heading"><div><h3>自动压缩上下文</h3><p>对话接近模型窗口上限时，把较早内容整理成摘要。</p></div><strong className="settings-threshold-preview">约 {compactTokenCount(compactionThreshold)} 触发</strong></div>
                   <div className="settings-provider-picker">
-                    <button type="button" className={form.compaction.enabled && form.compaction.strategy !== 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: true, strategy: 'context-full' } }))}><Archive size={17} /><span><strong>Auto-compact</strong><small>Context-full · 保持当前会话</small></span><Check size={15} /></button>
-                    <button type="button" className={!form.compaction.enabled || form.compaction.strategy === 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: false, strategy: 'off' } }))}><X size={17} /><span><strong>Off</strong><small>仅保留手动 /compact</small></span><Check size={15} /></button>
+                    <button type="button" className={form.compaction.enabled && form.compaction.strategy !== 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: true, strategy: 'context-full' } }))}><Archive size={17} /><span><strong>自动维护</strong><small>推荐，长对话不中断</small></span><Check size={15} /></button>
+                    <button type="button" className={!form.compaction.enabled || form.compaction.strategy === 'off' ? 'active' : ''} onClick={() => setForm((current) => ({ ...current, compaction: { ...current.compaction, enabled: false, strategy: 'off' } }))}><X size={17} /><span><strong>关闭</strong><small>需要手动执行 /compact</small></span><Check size={15} /></button>
                   </div>
-                  <small className="settings-context-note">Web 工作区采用 TUI 的 Context-full 滚动摘要。TUI 的 Snapcompact 位图归档依赖图像回读传输，当前 Web 模型通道不伪装支持；可用 <code>/compact soft</code> 手动压缩。</small>
+                  <small className="settings-context-note">压缩只整理较早的对话，最近内容会保留原文；作品正文和设定文件不会被删除。</small>
                 </section>
 
                 <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>触发阈值</h3><p>设为 -1 表示 Default；固定 token 值优先于百分比。</p></div></div>
-                  <div className="settings-number-row">
-                    <label className="settings-field">
-                      <span>Threshold Tokens</span>
-                      <input type="number" min="-1" max="1000000" step="1" value={form.compaction.thresholdTokens} onChange={(event) => updateCompaction('thresholdTokens', Number(event.target.value))} />
-                      <small>-1 时继续使用百分比或 Reserve 规则。</small>
-                    </label>
-                    <label className="settings-field">
-                      <span>Threshold Percent</span>
-                      <input type="number" min="-1" max="99" step="1" value={form.compaction.thresholdPercent} onChange={(event) => updateCompaction('thresholdPercent', Number(event.target.value))} />
-                      <small>-1 时使用 Context window − Reserve。</small>
-                    </label>
-                  </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-heading"><div><h3>保留预算</h3><p>压缩以完整会话轮次为边界，不会从一句话中间截断。</p></div></div>
-                  <div className="settings-number-row">
-                    <label className="settings-field">
-                      <span>Reserve Tokens</span>
-                      <input type="number" min="0" max="1000000" step="1" value={form.compaction.reserveTokens ?? ''} placeholder="Default · 16384" onChange={(event) => updateCompaction('reserveTokens', event.target.value === '' ? null : Number(event.target.value))} />
-                      <small>留空使用 TUI 默认值，并至少保留窗口的 15%。</small>
-                    </label>
-                    <label className="settings-field">
-                      <span>Keep Recent Tokens</span>
-                      <input type="number" min="1" max="1000000" step="1" value={form.compaction.keepRecentTokens} onChange={(event) => updateCompaction('keepRecentTokens', Number(event.target.value))} />
-                      <small>默认 20000；最近内容原样参与后续请求。</small>
-                    </label>
-                  </div>
+                  <details className="settings-advanced">
+                    <summary>高级阈值</summary>
+                    <div className="settings-advanced-body settings-number-row">
+                      <label className="settings-field">
+                        <span>固定触发 Tokens</span>
+                        <input type="number" min="-1" max="2000000" step="1" value={form.compaction.thresholdTokens} onChange={(event) => updateCompaction('thresholdTokens', Number(event.target.value))} />
+                        <small>-1 表示自动计算；固定值优先级最高。</small>
+                      </label>
+                      <label className="settings-field">
+                        <span>触发比例 %</span>
+                        <input type="number" min="-1" max="99" step="1" value={form.compaction.thresholdPercent} onChange={(event) => updateCompaction('thresholdPercent', Number(event.target.value))} />
+                        <small>-1 表示按窗口和预留空间自动计算。</small>
+                      </label>
+                      <label className="settings-field">
+                        <span>预留 Tokens</span>
+                        <input type="number" min="0" max="2000000" step="1" value={form.compaction.reserveTokens ?? ''} placeholder="自动 · 16384" onChange={(event) => updateCompaction('reserveTokens', event.target.value === '' ? null : Number(event.target.value))} />
+                        <small>为后续回答和工具结果预留的空间。</small>
+                      </label>
+                      <label className="settings-field">
+                        <span>保留最近 Tokens</span>
+                        <input type="number" min="1" max="2000000" step="1" value={form.compaction.keepRecentTokens} onChange={(event) => updateCompaction('keepRecentTokens', Number(event.target.value))} />
+                        <small>最近内容保持原文，不进入摘要。</small>
+                      </label>
+                    </div>
+                  </details>
                 </section>
               </>}
             </div>
           </div>
 
           <div className="settings-actions">
-            <div className="settings-save-note"><LockKeyhole size={14} /><span>更改会应用到所有 Story Skills</span></div>
+            <div className="settings-save-note"><LockKeyhole size={14} /><span>保存后切换到「{selectedProfile.name || '未命名连接'}」</span></div>
             <button type="button" className="secondary-button" onClick={onClose}>取消</button>
             <button type="submit" className="dark-button" disabled={saving}>
               {saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}

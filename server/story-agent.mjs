@@ -9,6 +9,7 @@ import {
 } from '../src/agent-runtime.ts'
 import { decryptSecret } from './auth.mjs'
 import { loadDb } from './store.mjs'
+import { activeModelSettings } from './model-settings.mjs'
 import { enrichStoryAgentPayload } from './writing-context.mjs'
 import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
 import { readStoryDocument, writeStoryDocument } from './story-document-store.mjs'
@@ -23,7 +24,7 @@ function isNetworkError(error) {
 
 export function storyAgentModelConfig(user) {
   if (!user?.settings) return sharedModelAccessAllowed ? null : { provider: 'openai', allow_server_fallback: false }
-  const settings = user.settings
+  const settings = activeModelSettings(user.settings)
   return {
     provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
     api_base_url: settings.apiBaseUrl || undefined,
@@ -38,12 +39,13 @@ export function storyAgentModelConfig(user) {
 }
 
 export function storyAgentModelCapabilities(settings = {}) {
+  const resolved = Array.isArray(settings?.modelProfiles) ? activeModelSettings(settings) : settings
   return resolveStoryAgentModelCapabilities({
-    provider: settings.provider === 'anthropic' ? 'anthropic' : 'openai',
-    api_base_url: settings.apiBaseUrl || undefined,
-    model: settings.model || undefined,
-    reasoning_effort: settings.reasoningEffort || undefined,
-    context_window: settings.contextWindow ?? undefined,
+    provider: resolved.provider === 'anthropic' ? 'anthropic' : 'openai',
+    api_base_url: resolved.apiBaseUrl || undefined,
+    model: resolved.model || undefined,
+    reasoning_effort: resolved.reasoningEffort || undefined,
+    context_window: resolved.contextWindow ?? undefined,
   })
 }
 

@@ -1,5 +1,6 @@
 import { threadCompactionPlan } from './agent-thread.mjs'
-import { invokeContextCompaction } from './story-agent.mjs'
+import { invokeContextCompaction, storyAgentModelCapabilities } from './story-agent.mjs'
+import { activeModelSettings } from './model-settings.mjs'
 import { loadDb, updateDb } from './store.mjs'
 
 const activeCompactions = new Set()
@@ -15,12 +16,14 @@ async function compactThread({ taskId = null, threadId = null, userId = null, fo
   const thread = snapshot.agentThreads.find((item) => item.id === resolvedThreadId && item.userId === resolvedUserId && item.status !== 'archived')
   const user = snapshot.users.find((item) => item.id === resolvedUserId)
   if (!thread || !user) return null
+  const modelSettings = activeModelSettings(user.settings)
+  const modelCapabilities = storyAgentModelCapabilities(modelSettings)
   if (activeCompactions.has(thread.id)) {
     if (force) throw Object.assign(new Error('这个会话正在压缩，请稍后再试'), { status: 409 })
     return null
   }
   const plan = threadCompactionPlan(thread, snapshot.writingTasks, {
-    contextWindow: user.settings?.contextWindow,
+    contextWindow: modelSettings.contextWindow ?? modelCapabilities.contextWindow,
     compaction: user.settings?.compaction,
     force,
   })

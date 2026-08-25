@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { encryptSecret } from './auth.mjs'
 import { classifyTaskError, storyAgentModelCapabilities, storyAgentModelConfig } from './story-agent.mjs'
 
 test('Story Agent uses TUI catalog output limits instead of the legacy Web override', () => {
@@ -21,6 +22,25 @@ test('Story Agent uses TUI catalog output limits instead of the legacy Web overr
     maxTokens: 16384,
   })
   expect(capabilities.maxTokens).toBe(128000)
+})
+
+test('Story Agent uses the active saved provider profile', () => {
+  const config = storyAgentModelConfig({
+    settings: {
+      activeModelProfileId: 'claude',
+      modelProfiles: [
+        { id: 'openai', provider: 'openai', apiKeyEnc: encryptSecret('openai-key'), model: 'gpt-test' },
+        { id: 'claude', provider: 'anthropic', apiKeyEnc: encryptSecret('claude-key'), model: 'claude-test', contextWindow: 180000 },
+      ],
+    },
+  })
+
+  expect(config).toEqual(expect.objectContaining({
+    provider: 'anthropic',
+    api_key: 'claude-key',
+    model: 'claude-test',
+    context_window: 180000,
+  }))
 })
 
 test('Story Agent distinguishes a model deadline from an explicit user cancellation', () => {

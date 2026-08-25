@@ -4570,6 +4570,191 @@ details[open] > summary .agent-trace-chevron {
   font-size: 10px;
 }
 
+.settings-add-profile {
+  min-height: 30px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: #3b6558;
+  background: #f2f8f5;
+  border: 1px solid #cfe0d9;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.settings-add-profile:hover {
+  background: #eaf5f0;
+}
+
+.settings-add-profile:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.settings-profile-list {
+  max-height: 146px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.settings-profile-card {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  color: #677077;
+  text-align: left;
+  background: #fafbfb;
+  border: 1px solid #e1e4e5;
+  border-radius: 9px;
+}
+
+.settings-profile-card:hover {
+  border-color: #cbd1d2;
+}
+
+.settings-profile-card.active {
+  color: #2f6554;
+  background: #f1f8f4;
+  border-color: #86ae9f;
+  box-shadow: 0 0 0 2px rgba(66, 127, 108, .07);
+}
+
+.settings-profile-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: #f0f2f2;
+  border-radius: 8px;
+}
+
+.settings-profile-card.active .settings-profile-icon {
+  background: #dfeee7;
+}
+
+.settings-profile-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-profile-copy strong,
+.settings-profile-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-profile-copy strong {
+  color: #363d42;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.settings-profile-copy small {
+  color: #969ca0;
+  font-size: 8px;
+}
+
+.settings-profile-state {
+  min-width: 32px;
+  color: #3b7965;
+  font-size: 8px;
+  font-weight: 650;
+  text-align: right;
+}
+
+.settings-profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 11px;
+  margin-top: 8px;
+}
+
+.settings-profile-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0;
+  color: #747b80;
+  background: transparent;
+  border: 0;
+  font-size: 8px;
+}
+
+.settings-profile-actions button:hover {
+  color: #343a3f;
+}
+
+.settings-profile-actions button.danger:hover {
+  color: #b94f4f;
+}
+
+.settings-profile-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .35;
+}
+
+.settings-vendor-picker {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.settings-vendor-picker button {
+  min-width: 0;
+  min-height: 45px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 8px;
+  color: #555d63;
+  text-align: left;
+  background: #fafafa;
+  border: 1px solid #e1e4e5;
+  border-radius: 8px;
+}
+
+.settings-vendor-picker button:hover {
+  border-color: #c4cbcd;
+}
+
+.settings-vendor-picker button.active {
+  color: #2d6654;
+  background: #f0f8f4;
+  border-color: #87af9f;
+}
+
+.settings-vendor-picker strong {
+  overflow: hidden;
+  width: 100%;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-vendor-picker small {
+  overflow: hidden;
+  width: 100%;
+  color: #989da1;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-provider-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4635,6 +4820,10 @@ details[open] > summary .agent-trace-chevron {
   gap: 15px;
 }
 
+.settings-protocol-picker {
+  margin-top: -2px;
+}
+
 .settings-field {
   gap: 7px;
 }
@@ -4649,6 +4838,21 @@ details[open] > summary .agent-trace-chevron {
   float: right;
   color: #2f5f52;
   font-size: 10px;
+}
+
+.settings-clear-key {
+  float: right;
+  padding: 0;
+  color: #9b6262;
+  background: transparent;
+  border: 0;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.settings-clear-key:hover {
+  color: #bd4f4f;
+  text-decoration: underline;
 }
 
 .settings-field input,
@@ -4674,6 +4878,11 @@ details[open] > summary .agent-trace-chevron {
 .settings-field select:focus {
   border-color: #789e92;
   box-shadow: 0 0 0 3px rgba(64, 119, 102, .09);
+}
+
+.settings-field input:disabled {
+  cursor: not-allowed;
+  opacity: .5;
 }
 
 .settings-field small {
@@ -4801,6 +5010,71 @@ details[open] > summary .agent-trace-chevron {
   font-size: 10px;
 }
 
+.settings-capability-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  background: #f7f8f8;
+  border: 1px solid #e3e6e7;
+  border-radius: 9px;
+}
+
+.settings-capability-strip > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+}
+
+.settings-capability-strip > span + span {
+  border-left: 1px solid #e3e6e7;
+}
+
+.settings-capability-strip small {
+  color: #969ca0;
+  font-size: 8px;
+}
+
+.settings-capability-strip strong {
+  overflow: hidden;
+  color: #3f484e;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-advanced {
+  margin-top: 12px;
+  background: #fbfbfb;
+  border: 1px solid #e7e9ea;
+  border-radius: 9px;
+}
+
+.settings-advanced summary {
+  padding: 11px 13px;
+  color: #697076;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 620;
+  list-style-position: inside;
+}
+
+.settings-advanced[open] summary {
+  border-bottom: 1px solid #e7e9ea;
+}
+
+.settings-advanced-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.settings-advanced-body.settings-number-row {
+  display: grid;
+}
+
 .settings-number-row {
   gap: 12px;
 }
@@ -4897,7 +5171,7 @@ details[open] > summary .agent-trace-chevron {
     min-height: auto;
     display: grid;
     flex: 0 0 auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     padding: 9px 12px;
     border-right: 0;
     border-bottom: 1px solid #e6e8e9;
@@ -4917,8 +5191,13 @@ details[open] > summary .agent-trace-chevron {
   }
 
   .settings-provider-picker,
+  .settings-profile-list,
   .settings-number-row {
     grid-template-columns: 1fr;
+  }
+
+  .settings-vendor-picker {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .settings-thinking-budget-grid {
@@ -7840,6 +8119,55 @@ html[data-theme='dark'] .material-picker-search {
 html[data-theme='dark'] .settings-thinking-budgets {
   background: var(--ide-paper);
   border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .settings-profile-card,
+html[data-theme='dark'] .settings-vendor-picker button,
+html[data-theme='dark'] .settings-capability-strip,
+html[data-theme='dark'] .settings-advanced {
+  color: var(--ide-text);
+  background: var(--ide-panel);
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .settings-profile-card:hover,
+html[data-theme='dark'] .settings-vendor-picker button:hover {
+  border-color: var(--ide-muted);
+}
+
+html[data-theme='dark'] .settings-profile-card.active,
+html[data-theme='dark'] .settings-vendor-picker button.active,
+html[data-theme='dark'] .settings-add-profile {
+  color: var(--night-green-text);
+  background: var(--night-green-bg);
+  border-color: var(--night-green-line);
+}
+
+html[data-theme='dark'] .settings-profile-icon {
+  background: var(--ide-active);
+}
+
+html[data-theme='dark'] .settings-profile-card.active .settings-profile-icon {
+  background: color-mix(in srgb, var(--ide-green) 18%, var(--ide-active));
+}
+
+html[data-theme='dark'] .settings-profile-copy strong,
+html[data-theme='dark'] .settings-capability-strip strong {
+  color: var(--ide-text);
+}
+
+html[data-theme='dark'] :is(.settings-profile-copy small, .settings-vendor-picker small, .settings-capability-strip small) {
+  color: var(--ide-muted);
+}
+
+html[data-theme='dark'] .settings-capability-strip > span + span,
+html[data-theme='dark'] .settings-advanced[open] summary {
+  border-color: var(--ide-line-strong);
+}
+
+html[data-theme='dark'] .settings-advanced summary,
+html[data-theme='dark'] .settings-profile-actions button {
+  color: var(--ide-muted);
 }
 
 html[data-theme='dark'] .settings-threshold-preview {
