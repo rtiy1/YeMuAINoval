@@ -9,6 +9,8 @@ import {
   applyAgentItemStreamEvent,
   buildAgentTurnView,
   compactAgentEvents,
+  describeAgentActivity,
+  formatAgentActivityClock,
   formatAgentDuration,
   isEditorAgentEdit,
   normalizeAgentChecks,
@@ -508,6 +510,44 @@ test('editor agent formats durations and aborts polling', async () => {
   const pending = waitForAgentPoll(10_000, controller.signal)
   controller.abort()
   await assert.rejects(pending, (error) => error?.name === 'AbortError')
+})
+
+test('editor agent describes live, slow, and reconnecting activity without exposing reasoning text', () => {
+  const now = new Date('2026-08-25T12:00:00.000Z').getTime()
+  assert.equal(formatAgentActivityClock(65_000), '01:05')
+  assert.equal(formatAgentActivityClock(3_665_000), '01:01:05')
+
+  const waiting = describeAgentActivity({
+    activityPhase: 'model_waiting',
+    statusMessage: '已提交给模型，等待首个响应',
+    streamState: 'live',
+    lastStreamAt: now - 5_000,
+    lastActivityAt: new Date(now - 50_000).toISOString(),
+  }, { elapsedMs: 65_000, now, reasoningEffort: 'high' })
+  assert.equal(waiting.label, '等待模型响应')
+  assert.match(waiting.detail, /连接正常/)
+  assert.match(waiting.hint, /较高思考强度/)
+  assert.equal(waiting.tone, 'slow')
+
+  const reasoning = describeAgentActivity({
+    activityPhase: 'model_waiting',
+    streamState: 'live',
+    lastStreamAt: now - 1_000,
+    lastActivityAt: new Date(now - 1_000).toISOString(),
+    items: [{ id: 'reasoning-live', type: 'reasoning', status: 'inProgress', summary: [{ type: 'summary_text', text: 'private' }] }],
+  }, { elapsedMs: 12_000, now })
+  assert.equal(reasoning.phase, 'reasoning')
+  assert.equal(reasoning.label, '模型正在处理')
+  assert.doesNotMatch(JSON.stringify(reasoning), /private/)
+
+  const checking = describeAgentActivity({
+    activityPhase: 'context',
+    streamState: 'live',
+    lastStreamAt: now - 30_000,
+  }, { elapsedMs: 35_000, now })
+  assert.equal(checking.streamState, 'checking')
+  assert.match(checking.detail, /核查任务/)
+  assert.equal(checking.tone, 'checking')
 })
 
 test('editor agent restores persisted thread turns', () => {

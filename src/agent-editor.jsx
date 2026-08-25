@@ -142,6 +142,7 @@ export function YemuAssistantTranscript({
   messages,
   assistantName,
   working = false,
+  activity = null,
   choiceDisabled = false,
   onChoose,
 }) {
@@ -213,16 +214,30 @@ export function YemuAssistantTranscript({
       }
     }
   }
+  if (working && activity) {
+    entries.push({
+      id: 'agent-live-activity',
+      type: 'custom_message',
+      customType: 'agent-live-activity',
+      content: '',
+      display: true,
+      timestamp: null,
+      details: activity,
+    })
+  }
   return <div className="yemu-collab-transcript">
     <YemuTranscript
       entries={entries}
       stream={stream}
       streamDone={!working}
       activeTools={activeTools}
-      working={working}
+      working={working && !activity}
       userLabel="你"
       agentLabel={assistantName || '夜雨'}
       renderCustomMessage={(entry) => {
+        if (entry.customType === 'agent-live-activity') {
+          return <AgentLiveActivity activity={entry.details} />
+        }
         if (entry.customType !== 'request-user-input') return null
         const details = entry.details && typeof entry.details === 'object' ? entry.details : {}
         const inputItem = details.item
@@ -239,6 +254,19 @@ export function YemuAssistantTranscript({
       }}
     />
   </div>
+}
+
+function AgentLiveActivity({ activity }) {
+  const value = activity && typeof activity === 'object' ? activity : {}
+  return <section className={`agent-live-activity ${value.tone || 'active'}`} role="status" aria-live="polite">
+    <span className="agent-live-pulse" aria-hidden="true"><i /><i /><i /></span>
+    <span className="agent-live-copy">
+      <strong title={value.label || 'Agent 正在处理'}>{value.label || 'Agent 正在处理'}</strong>
+      <small>{value.detail || '连接正常'}</small>
+      {value.hint && <em>{value.hint}</em>}
+    </span>
+    <time aria-hidden="true">{value.elapsedLabel || '00:00'}</time>
+  </section>
 }
 
 function ToolItem({ item }) {

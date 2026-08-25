@@ -10159,6 +10159,117 @@ html[data-theme='dark'] .danger-text-button:hover:not(:disabled) {
   max-width: 100%;
 }
 
+.chat-agent-shell .agent-live-activity {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  color: var(--ide-text);
+  background: color-mix(in srgb, var(--ide-green) 5%, var(--ide-paper));
+  border: 1px solid color-mix(in srgb, var(--ide-green) 26%, var(--ide-line));
+  border-radius: 7px;
+}
+
+.chat-agent-shell .agent-live-activity.slow {
+  background: color-mix(in srgb, var(--tui-warm) 6%, var(--ide-paper));
+  border-color: color-mix(in srgb, var(--tui-warm) 34%, var(--ide-line));
+}
+
+.chat-agent-shell .agent-live-activity.checking {
+  background: color-mix(in srgb, var(--ide-blue) 6%, var(--ide-paper));
+  border-color: color-mix(in srgb, var(--ide-blue) 32%, var(--ide-line));
+}
+
+.chat-agent-shell .agent-live-pulse {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--ide-green);
+}
+
+.chat-agent-shell .agent-live-activity.slow .agent-live-pulse {
+  color: var(--tui-warm);
+}
+
+.chat-agent-shell .agent-live-activity.checking .agent-live-pulse {
+  color: var(--ide-blue);
+}
+
+.chat-agent-shell .agent-live-pulse i {
+  width: 2px;
+  height: 7px;
+  display: block;
+  background: currentColor;
+  border-radius: 2px;
+  animation: agent-live-wave 1.1s ease-in-out infinite;
+}
+
+.chat-agent-shell .agent-live-pulse i:nth-child(2) {
+  animation-delay: 130ms;
+}
+
+.chat-agent-shell .agent-live-pulse i:nth-child(3) {
+  animation-delay: 260ms;
+}
+
+@keyframes agent-live-wave {
+  0%, 100% { height: 6px; opacity: .45; }
+  50% { height: 17px; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-agent-shell .agent-live-pulse i {
+    height: 11px;
+    opacity: .75;
+    animation: none;
+  }
+}
+
+.chat-agent-shell .agent-live-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-agent-shell .agent-live-copy strong {
+  overflow: hidden;
+  color: var(--ide-text);
+  font-family: var(--ide-font);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-agent-shell .agent-live-copy small,
+.chat-agent-shell .agent-live-copy em {
+  color: var(--ide-muted);
+  font-family: var(--ide-font);
+  font-size: 9.5px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.chat-agent-shell .agent-live-copy em {
+  margin-top: 2px;
+  color: var(--tui-warm);
+}
+
+.chat-agent-shell .agent-live-activity time {
+  align-self: start;
+  padding-top: 1px;
+  color: var(--ide-muted);
+  font-family: "DM Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-agent-shell .yemu-collab-transcript .tr-md {
   color: var(--ide-text);
   font-family: var(--ide-font);

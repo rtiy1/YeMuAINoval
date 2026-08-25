@@ -95,6 +95,7 @@ import {
   agentThreadMessages,
   applyAgentItemStreamEvent,
   buildAgentTurnView,
+  describeAgentActivity,
   isEditorAgentEdit,
   normalizeAgentChecks,
   normalizeAgentFindings,
@@ -2705,6 +2706,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const historyPendingRef = useRef(null)
   const textareaRef = useRef(null)
   const assistantAbortRef = useRef(null)
+  const assistantClockStartedAtRef = useRef(null)
   const assistantTaskIdRef = useRef(null)
   const assistantTurnIdRef = useRef(null)
   const assistantStreamRef = useRef(null)
@@ -2727,6 +2729,17 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     saving: '正在自动保存',
     error: '保存失败，点击重试',
   }[draftStatus] || '已自动保存'
+
+  useEffect(() => {
+    if (!assistantRunning) return undefined
+    const updateElapsed = () => {
+      const startedAt = assistantClockStartedAtRef.current
+      if (typeof startedAt === 'number') setAssistantElapsedMs(performance.now() - startedAt)
+    }
+    updateElapsed()
+    const timer = window.setInterval(updateElapsed, 1_000)
+    return () => window.clearInterval(timer)
+  }, [assistantRunning])
 
   useEffect(() => {
     let mounted = true
@@ -3014,10 +3027,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     )
     const running = [...restored].reverse().find((item) => item.role === 'agent' && ['queued', 'running'].includes(item.status))
     if (!running?.taskId) return
+    const startedAt = performance.now() - Math.max(0, Number(running.durationMs) || 0)
+    assistantClockStartedAtRef.current = startedAt
     setAssistantRunning(true)
     assistantTaskIdRef.current = running.taskId
     assistantTurnIdRef.current = running.turnId
-    const startedAt = performance.now() - Math.max(0, Number(running.durationMs) || 0)
     await monitorAssistantTurn(thread.id, running.turnId, running.taskId, running.id, controller, startedAt)
     if (assistantAbortRef.current === controller) {
       assistantTaskIdRef.current = null
@@ -3928,6 +3942,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const startedAt = performance.now()
     const requestId = run.id
     const controller = new AbortController()
+    assistantClockStartedAtRef.current = startedAt
     assistantAbortRef.current = controller
     assistantTaskIdRef.current = run.taskId || null
     assistantTurnIdRef.current = turnId
@@ -3952,10 +3967,15 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           }]
           : item.reasoningHistory || [],
         reasoningSummary: '',
+        statusMessage: '已确认补充信息，正在继续执行',
+        activityPhase: 'queued',
+        activityPhaseStartedAt: answeredAt,
+        lastActivityAt: answeredAt,
+        lastStreamAt: null,
+        streamState: 'connecting',
         durationMs: 0,
       }
       : item))
-    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
     try {
       const resumed = await api.answerAgentTurn(threadId, turnId, answers, { signal: controller.signal })
       const task = resumed.task
@@ -3966,7 +3986,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         setAssistantMessages((current) => current.map((item) => item.id === requestId ? { ...item, status: 'failed', text: error.message || 'Agent 回答提交失败。' } : item))
       }
     } finally {
-      window.clearInterval(timer)
       if (assistantAbortRef.current === controller) {
         assistantAbortRef.current = null
         assistantTaskIdRef.current = null
@@ -3992,6 +4011,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     const previousRun = { ...run }
     const startedAt = performance.now()
     const controller = new AbortController()
+    assistantClockStartedAtRef.current = startedAt
     assistantAbortRef.current = controller
     assistantTaskIdRef.current = run.taskId || null
     assistantTurnIdRef.current = turnId
@@ -4006,12 +4026,16 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       plan: [],
       progress: 0,
       statusMessage: '正在重新生成回复',
+      activityPhase: 'queued',
+      activityPhaseStartedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+      lastStreamAt: null,
+      streamState: 'connecting',
       reasoningSummary: '',
       reasoningHistory: [],
       inputHistory: [],
       durationMs: 0,
     } : item))
-    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
     try {
       const regenerated = await api.regenerateAgentTurn(threadId, turnId, { signal: controller.signal })
       const task = regenerated.task
@@ -4034,7 +4058,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         onNotify(error.message || '重新生成失败，原回复已保留')
       }
     } finally {
-      window.clearInterval(timer)
       if (assistantAbortRef.current === controller) {
         assistantAbortRef.current = null
         assistantTaskIdRef.current = null
@@ -4169,18 +4192,34 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       attachedFiles: attachedFiles.map(({ name, kind }) => ({ name, kind })),
     }
     const userMessage = { id: `${requestId}-user`, role: 'user', text: message }
-    const runMessage = { id: requestId, role: 'agent', status: 'running', text: '', source, mode: requestMode, editRequested, requestedSkill: effectiveSkill }
+    const submittedAt = new Date().toISOString()
+    const runMessage = {
+      id: requestId,
+      role: 'agent',
+      status: 'running',
+      text: '',
+      source,
+      mode: requestMode,
+      editRequested,
+      requestedSkill: effectiveSkill,
+      statusMessage: '正在提交任务',
+      activityPhase: 'queued',
+      activityPhaseStartedAt: submittedAt,
+      lastActivityAt: submittedAt,
+      lastStreamAt: null,
+      streamState: 'connecting',
+    }
     setAssistantMessages((current) => [...current.slice(-18), userMessage, runMessage])
     setAssistantInput('')
     setAssistantAttachments([])
     setAssistantSuggestion(null)
     setAssistantRunning(true)
     setAssistantElapsedMs(0)
+    assistantClockStartedAtRef.current = startedAt
     const controller = new AbortController()
     let createdTaskId = null
     let createdTurnId = null
     assistantAbortRef.current = controller
-    const timer = window.setInterval(() => setAssistantElapsedMs(performance.now() - startedAt), 100)
     try {
       const thread = assistantThread || (await api.createAgentThread(project.id, displayChapter.id)).thread
       if (controller.signal.aborted) return
@@ -4228,6 +4267,10 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         events: agentTurnEvents(turn),
         plan: turn.plan || [],
         progress: task.progress || 0,
+        statusMessage: task.statusMessage || item.statusMessage,
+        activityPhase: task.activityPhase || item.activityPhase,
+        activityPhaseStartedAt: task.activityPhaseStartedAt || item.activityPhaseStartedAt,
+        lastActivityAt: task.lastActivityAt || item.lastActivityAt,
       } : item))
       await monitorAssistantTurn(thread.id, turn.id, task.id, requestId, controller, startedAt)
     } catch (error) {
@@ -4242,7 +4285,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         } : item))
       }
     } finally {
-      window.clearInterval(timer)
       if (assistantAbortRef.current === controller) {
         assistantAbortRef.current = null
         if (assistantTaskIdRef.current && assistantTaskIdRef.current === createdTaskId) assistantTaskIdRef.current = null
@@ -4253,7 +4295,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }
   }
 
-  function applyStreamedTask(task, requestId, startedAt, turn = null) {
+  function applyStreamedTask(task, requestId, startedAt, turn = null, { streamState = 'live' } = {}) {
     const terminal = ['completed', 'failed', 'cancelled'].includes(task.status)
     const response = task.result
     const artifactApplication = task.artifactApplication || response?.result?.artifacts_applied
@@ -4280,6 +4322,11 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       plan: turn?.plan || item.plan || [],
       progress: task.progress || 0,
       statusMessage: task.statusMessage || '',
+      activityPhase: task.activityPhase || item.activityPhase || '',
+      activityPhaseStartedAt: task.activityPhaseStartedAt || item.activityPhaseStartedAt || null,
+      lastActivityAt: task.lastActivityAt || item.lastActivityAt || null,
+      lastStreamAt: Date.now(),
+      streamState: terminal ? 'idle' : streamState,
       reasoningSummary: terminal
         ? typeof task.reasoningSummary === 'string' ? task.reasoningSummary : item.reasoningSummary || ''
         : typeof task.reasoningSummary === 'string' && task.reasoningSummary.length >= String(item.reasoningSummary || '').length
@@ -4322,11 +4369,19 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
         else outputAccum += delta
       }
       if (!outputAccum && !reasoningAccum) return
+      const activityAt = Date.now()
       setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
         ...item,
         text: outputAccum ? `${item.text || ''}${outputAccum}` : item.text,
         reasoningSummary: reasoningAccum ? `${item.reasoningSummary || ''}${reasoningAccum}` : item.reasoningSummary,
-        statusMessage: outputAccum ? '正在生成回复' : item.statusMessage,
+        statusMessage: outputAccum ? '正在生成回复' : '模型正在处理',
+        activityPhase: outputAccum ? 'output' : 'reasoning',
+        activityPhaseStartedAt: item.activityPhase === (outputAccum ? 'output' : 'reasoning')
+          ? item.activityPhaseStartedAt
+          : new Date(activityAt).toISOString(),
+        lastActivityAt: new Date(activityAt).toISOString(),
+        lastStreamAt: activityAt,
+        streamState: 'live',
         items: itemUpdates.reduce((items, update) => applyAgentItemStreamEvent(items, update.type, {
           turnId,
           itemId: update.itemId,
@@ -4355,89 +4410,195 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       }
       scheduleDeltaFlush()
     }
-    try {
-      await api.streamAgentTurn(threadId, turnId, {
-        signal: controller.signal,
-        onEvent: (event, payload) => {
-          if (['item/started', 'item/completed'].includes(event) && payload?.turnId === turnId && payload.item) {
+    const turnFinished = (turn) => Boolean(turn?.task && (
+      ['completed', 'failed', 'cancelled'].includes(turn.task.status)
+      || turn.task.status === 'waiting_input'
+    ))
+    const updateStreamState = (streamState, updates = {}) => {
+      setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+        && (item.id === requestId || item.turnId === turnId) ? {
+          ...item,
+          streamState,
+          ...updates,
+        } : item))
+    }
+    const pollLatestTurn = async (streamState = 'polling') => {
+      latestTurn = (await api.getAgentTurn(threadId, turnId, { signal: controller.signal })).turn
+      if (latestTurn?.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn, { streamState })
+      return turnFinished(latestTurn)
+    }
+    let reconnectAttempt = 0
+    while (!controller.signal.aborted && !turnFinished(latestTurn)) {
+      const streamController = new AbortController()
+      const abortStream = () => streamController.abort()
+      controller.signal.addEventListener('abort', abortStream, { once: true })
+      let lastStreamFrameAt = Date.now()
+      let watchdogBusy = false
+      let reconnectRequested = false
+      let watchdogFinished = false
+      const watchdog = window.setInterval(() => {
+        if (watchdogBusy || streamController.signal.aborted || controller.signal.aborted
+          || Date.now() - lastStreamFrameAt < 25_000) return
+        watchdogBusy = true
+        updateStreamState('checking')
+        void pollLatestTurn('polling')
+          .then((finished) => {
+            watchdogFinished = finished
+            if (!finished) {
+              reconnectRequested = true
+              updateStreamState('reconnecting')
+            }
+            streamController.abort()
+          })
+          .catch(() => {
+            if (!controller.signal.aborted) updateStreamState('polling')
+          })
+          .finally(() => { watchdogBusy = false })
+      }, 5_000)
+      try {
+        await api.streamAgentTurn(threadId, turnId, {
+          signal: streamController.signal,
+          onEvent: (event, payload) => {
+            lastStreamFrameAt = Date.now()
+            reconnectAttempt = 0
+            if (event === 'turn/heartbeat' && payload?.turnId === turnId) {
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+                && (item.id === requestId || item.turnId === turnId) ? {
+                  ...item,
+                  statusMessage: payload.statusMessage || item.statusMessage,
+                  activityPhase: payload.activityPhase || item.activityPhase,
+                  lastStreamAt: Date.now(),
+                  streamState: 'live',
+                } : item))
+              return
+            }
+            if (event === 'turn/activity' && payload?.turnId === turnId && payload.phase) {
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+                && (item.id === requestId || item.turnId === turnId) ? {
+                  ...item,
+                  statusMessage: payload.message || item.statusMessage,
+                  activityPhase: payload.phase,
+                  activityPhaseStartedAt: payload.occurredAt || new Date().toISOString(),
+                  lastActivityAt: payload.occurredAt || new Date().toISOString(),
+                  lastStreamAt: Date.now(),
+                  streamState: 'live',
+                } : item))
+              return
+            }
+            if (['item/started', 'item/completed'].includes(event) && payload?.turnId === turnId && payload.item) {
+              flushPendingDeltas()
+              const activityAt = new Date().toISOString()
+              const itemPhase = payload.item.type === 'reasoning'
+                ? 'reasoning'
+                : ['agentMessage', 'plan'].includes(payload.item.type)
+                  ? 'output'
+                  : ['dynamicToolCall', 'collabAgentToolCall'].includes(payload.item.type)
+                    ? event === 'item/started' ? 'tool' : 'model_waiting'
+                    : null
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
+                ...item,
+                items: applyAgentItemStreamEvent(item.items, event, payload),
+                ...(itemPhase ? {
+                  activityPhase: itemPhase,
+                  activityPhaseStartedAt: activityAt,
+                  lastActivityAt: activityAt,
+                } : {}),
+                lastStreamAt: Date.now(),
+                streamState: 'live',
+              } : item))
+              return
+            }
+            if (['item/agentMessage/delta', 'item/plan/delta'].includes(event) && payload?.turnId === turnId && typeof payload.delta === 'string') {
+              queueDelta(event, payload.itemId, payload.delta)
+              return
+            }
+            if (event === 'item/reasoning/summaryTextDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
+              queueDelta(event, payload.itemId, payload.delta)
+              return
+            }
+            // Every non-delta event flushes pending deltas first to preserve order.
             flushPendingDeltas()
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
-              ...item,
-              items: applyAgentItemStreamEvent(item.items, event, payload),
-            } : item))
-            return
-          }
-          if (['item/agentMessage/delta', 'item/plan/delta'].includes(event) && payload?.turnId === turnId && typeof payload.delta === 'string') {
-            queueDelta(event, payload.itemId, payload.delta)
-            return
-          }
-          if (event === 'item/reasoning/summaryTextDelta' && payload?.turnId === turnId && typeof payload.delta === 'string') {
-            queueDelta(event, payload.itemId, payload.delta)
-            return
-          }
-          // Every non-delta event flushes pending deltas first to preserve order.
-          flushPendingDeltas()
-          if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
-              ...item,
-              plan: Array.isArray(payload.plan) ? payload.plan : item.plan || [],
-            } : item))
-            return
-          }
-          if (event === 'turn/steer/accepted' && payload?.turnId === turnId && payload?.input?.text) {
-            setAssistantMessages((current) => {
-              const existing = current.some((item) => item.id === payload.input.id
-                || (item.steer === true && item.turnId === turnId && item.text === payload.input.text))
-              if (existing) {
-                return current.map((item) => item.id === payload.input.id
-                  || (item.steer === true && item.turnId === turnId && item.text === payload.input.text)
-                  ? { ...item, steerStatus: payload.input.status }
-                  : item)
-              }
-              return [...current, {
-                id: payload.input.id,
-                role: 'user',
-                text: payload.input.text,
-                turnId,
-                steer: true,
-                steerStatus: payload.input.status,
-              }]
-            })
-            return
-          }
-          if (event === 'turn/steered' && payload?.turnId === turnId) {
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent'
-              && (item.id === requestId || item.turnId === turnId) ? {
+            if (event === 'turn/plan/updated' && payload?.turnId === turnId) {
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent' && (item.id === requestId || item.turnId === turnId) ? {
                 ...item,
-                status: 'running',
-                text: '',
-                response: null,
-                reasoningSummary: '',
-                statusMessage: '已应用追加指令，正在重新规划',
+                plan: Array.isArray(payload.plan) ? payload.plan : item.plan || [],
+                lastStreamAt: Date.now(),
+                streamState: 'live',
               } : item))
-            return
+              return
+            }
+            if (event === 'turn/steer/accepted' && payload?.turnId === turnId && payload?.input?.text) {
+              setAssistantMessages((current) => {
+                const existing = current.some((item) => item.id === payload.input.id
+                  || (item.steer === true && item.turnId === turnId && item.text === payload.input.text))
+                if (existing) {
+                  return current.map((item) => item.id === payload.input.id
+                    || (item.steer === true && item.turnId === turnId && item.text === payload.input.text)
+                    ? { ...item, steerStatus: payload.input.status }
+                    : item)
+                }
+                return [...current, {
+                  id: payload.input.id,
+                  role: 'user',
+                  text: payload.input.text,
+                  turnId,
+                  steer: true,
+                  steerStatus: payload.input.status,
+                }]
+              })
+              return
+            }
+            if (event === 'turn/steered' && payload?.turnId === turnId) {
+              const steeredAt = new Date().toISOString()
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+                && (item.id === requestId || item.turnId === turnId) ? {
+                  ...item,
+                  status: 'running',
+                  text: '',
+                  response: null,
+                  reasoningSummary: '',
+                  statusMessage: '已应用追加指令，正在重新规划',
+                  activityPhase: 'queued',
+                  activityPhaseStartedAt: steeredAt,
+                  lastActivityAt: steeredAt,
+                  lastStreamAt: Date.now(),
+                  streamState: 'live',
+                } : item))
+              return
+            }
+            if (!event.startsWith('turn/') || !payload?.turn) return
+            latestTurn = payload.turn
+            if (event === 'turn/started' && ['queued', 'running'].includes(latestTurn.task?.status)) {
+              setAssistantMessages((current) => current.map((item) => item.role === 'agent'
+                && (item.id === requestId || item.turnId === turnId) ? {
+                  ...item,
+                  text: '',
+                  reasoningSummary: '',
+                } : item))
+            }
+            if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)
+            if (turnFinished(latestTurn)) streamController.abort()
+          },
+        })
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        if (error?.name !== 'AbortError' && !turnFinished(latestTurn)) {
+          updateStreamState('checking')
+          try {
+            watchdogFinished = await pollLatestTurn('polling')
+          } catch {
+            updateStreamState('reconnecting')
           }
-          if (!event.startsWith('turn/') || !payload?.turn) return
-          latestTurn = payload.turn
-          if (event === 'turn/started' && ['queued', 'running'].includes(latestTurn.task?.status)) {
-            setAssistantMessages((current) => current.map((item) => item.role === 'agent'
-              && (item.id === requestId || item.turnId === turnId) ? {
-                ...item,
-                text: '',
-                reasoningSummary: '',
-              } : item))
-          }
-          if (latestTurn.task) applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)
-          if (latestTurn.task?.status === 'waiting_input') controller.abort()
-        },
-      })
-    } catch (error) {
-      if (controller.signal.aborted || error?.name === 'AbortError') throw error
-      while (!latestTurn || latestTurn.status === 'inProgress') {
-        await waitForAgentPoll(700, controller.signal)
-        latestTurn = (await api.getAgentTurn(threadId, turnId, { signal: controller.signal })).turn
-        if (latestTurn.task && applyStreamedTask(latestTurn.task, requestId, startedAt, latestTurn)) break
+        }
+      } finally {
+        window.clearInterval(watchdog)
+        controller.signal.removeEventListener('abort', abortStream)
+        flushPendingDeltas()
       }
+      if (watchdogFinished || turnFinished(latestTurn)) break
+      reconnectAttempt += 1
+      if (!reconnectRequested) updateStreamState('reconnecting')
+      await waitForAgentPoll(Math.min(5_000, 500 * (2 ** Math.min(reconnectAttempt, 4))), controller.signal)
     }
     return latestTurn
   }
@@ -4621,6 +4782,13 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     }, { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, estimated: false })
   const latestAgentRun = [...assistantMessages].reverse().find((message) => message.role === 'agent')
   const latestAgentRunId = latestAgentRun?.id || null
+  const assistantActivity = assistantRunning && latestAgentRun
+    ? describeAgentActivity(latestAgentRun, {
+      elapsedMs: assistantElapsedMs,
+      now: Date.now(),
+      reasoningEffort: agentReasoningEffort,
+    })
+    : null
   const latestUserMessage = [...assistantMessages].reverse().find((message) => message.role === 'user' && !message.steer)?.text?.trim() || '等待你的下一步指示'
   const assistantAwaitingInput = Boolean(latestAgentRun && agentRunEffectiveStatus(latestAgentRun) === 'needs_input')
   const goalStatusLabel = assistantRunning ? '执行中' : assistantAwaitingInput ? '等待选择' : '就绪'
@@ -4936,6 +5104,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                 messages={assistantMessages}
                 assistantName={ASSISTANT_NAME}
                 working={assistantRunning}
+                activity={assistantActivity}
                 choiceDisabled={assistantRunning || assistantLoading}
                 onChoose={(run, reply) => submitAssistantAnswer(run, reply)}
               />}

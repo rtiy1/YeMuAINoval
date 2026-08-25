@@ -33,6 +33,26 @@ test('task stream keeps segmented reasoning lifecycle events in order', () => {
   ])
 })
 
+test('task stream delivers high-level activity events without reasoning content', () => {
+  const received = []
+  const unsubscribe = subscribeTaskStream('task-activity', (event) => received.push(event))
+  publishTaskStreamEvent('task-activity', {
+    type: 'activity_event',
+    phase: 'model_waiting',
+    message: '已提交给模型，等待首个响应',
+  })
+  publishTaskStreamEvent('task-activity', {
+    type: 'activity_event',
+    phase: 'reasoning',
+    message: '模型正在处理',
+  })
+  unsubscribe()
+  assert.deepEqual(received.map(({ type, phase, message }) => ({ type, phase, message })), [
+    { type: 'activity_event', phase: 'model_waiting', message: '已提交给模型，等待首个响应' },
+    { type: 'activity_event', phase: 'reasoning', message: '模型正在处理' },
+  ])
+})
+
 test('task stream coalesces consecutive same-item deltas into a single frame', () => {
   const received = []
   const unsubscribe = subscribeTaskStream('task-coalesce', (event) => received.push(event))

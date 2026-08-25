@@ -110,7 +110,7 @@ function applySteersAtBoundary(task, turnId, { assistantText = '', timestamp = n
   task.subagents = []
   task.status = 'queued'
   task.progress = 0
-  task.statusMessage = '已应用追加指令，继续当前 Agent 轮次'
+  setTaskActivity(task, 'queued', '已应用追加指令，继续当前 Agent 轮次', timestamp)
   return true
 }
 
@@ -211,6 +211,13 @@ function finishRunningEvent(task, status = 'completed', updates = {}) {
   return event
 }
 
+function setTaskActivity(task, phase, statusMessage, timestamp = new Date().toISOString()) {
+  if (task.activityPhase !== phase) task.activityPhaseStartedAt = timestamp
+  task.activityPhase = phase
+  task.lastActivityAt = timestamp
+  if (statusMessage) task.statusMessage = statusMessage
+}
+
 const storyToolLabels = {
   read_story_skill: '读取 Story Skill',
   list_story_files: '查看作品文件',
@@ -269,6 +276,11 @@ async function recordStoryToolEvent(taskId, executionId, executionGeneration, ev
     }
     if (existing) Object.assign(existing, next)
     else task.events.push(next)
+    if (event.phase === 'start') {
+      setTaskActivity(task, 'tool', `正在${next.label}`, timestamp)
+    } else if (event.toolName !== 'request_user_input') {
+      setTaskActivity(task, 'model_waiting', event.isError ? '工具执行失败，等待模型处理' : '工具执行完成，等待模型继续处理', timestamp)
+    }
     if (inputQuestions) {
       task.pendingInputRequest = {
         requestId: event.toolCallId,
@@ -337,7 +349,7 @@ export async function executeWritingTask(taskId, {
       task.partialOutput = checkpointOutput
       task.reasoningStartedAt = new Date().toISOString()
       task.reasoningCompletedAt = null
-      task.statusMessage = '正在构建写作上下文'
+      setTaskActivity(task, 'context', '正在构建写作上下文')
       appendEvent(task, 'context', '读取作品、章节与连续性上下文', 'running')
       task.updatedAt = new Date().toISOString()
       return {
@@ -357,7 +369,7 @@ export async function executeWritingTask(taskId, {
       if (task && task.status === 'running' && executionMatches(task, executionId, prepared.executionGeneration)) {
         finishRunningEvent(task)
         task.progress = 35
-        task.statusMessage = '正在执行 AI Skill'
+        setTaskActivity(task, 'skill', '正在准备 AI Skill')
         appendEvent(task, 'skill', `执行 ${task.skill || 'story'} Skill`, 'running')
         task.updatedAt = new Date().toISOString()
       }
@@ -415,7 +427,7 @@ export async function executeWritingTask(taskId, {
           else task.events.push(segment)
         }
         task.progress = Math.max(45, Math.min(88, 45 + Math.floor(outputSnapshot.length / 120)))
-        task.statusMessage = '正在生成回复'
+        setTaskActivity(task, 'output', '正在生成回复')
         task.updatedAt = new Date().toISOString()
         touchAgentThread(db, task)
       }))
@@ -491,6 +503,7 @@ export async function executeWritingTask(taskId, {
       return segment
     }
     const flushOutputSegment = (delta, context = {}) => {
+      markLiveActivity('output', '正在生成回复')
       const segment = ensureOutputSegment(context.messageId)
       const previousLength = segment.meta.text.length
       segment.meta.text = `${segment.meta.text}${delta}`.slice(0, outputSegmentMaxChars)
@@ -514,6 +527,7 @@ export async function executeWritingTask(taskId, {
       scheduleCheckpoint()
     }
     const flushReasoningSummary = (delta, context = {}) => {
+      markLiveActivity('reasoning', '模型正在处理')
       const segment = ensureReasoningSegment(context.messageId)
       const previousLength = segment.meta.summary.length
       segment.meta.summary = `${segment.meta.summary}${delta}`.slice(0, reasoningSegmentMaxChars)
@@ -610,9 +624,12 @@ export async function executeWritingTask(taskId, {
               result: { usage: delegate.usage },
             }, delegate.completedAt || new Date().toISOString())
           }
-          task.statusMessage = task.subagents.some((item) => item.status === 'running')
-            ? '子代理正在并行审阅'
-            : '正在汇总子代理报告'
+          const delegatesRunning = task.subagents.some((item) => item.status === 'running')
+          setTaskActivity(
+            task,
+            'collaboration',
+            delegatesRunning ? '子代理正在并行审阅' : '正在汇总子代理报告',
+          )
           task.updatedAt = new Date().toISOString()
           touchAgentThread(db, task)
         })
@@ -629,14 +646,56 @@ export async function executeWritingTask(taskId, {
         ...(reports.length ? { _agent_reports: reports } : {}),
       },
     }
+    const modelWaitingAt = new Date().toISOString()
+    await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId)
+      if (!task || task.status !== 'running' || task.cancelRequested
+        || !executionMatches(task, executionId, prepared.executionGeneration)) return
+      setTaskActivity(task, 'model_waiting', '已提交给模型，等待首个响应', modelWaitingAt)
+      task.updatedAt = modelWaitingAt
+      touchAgentThread(db, task)
+    })
+    publishTaskStreamEvent(taskId, {
+      type: 'activity_event',
+      phase: 'model_waiting',
+      message: '已提交给模型，等待首个响应',
+      occurredAt: modelWaitingAt,
+      interactionAttempt: prepared.interactionAttempt,
+      executionGeneration: prepared.executionGeneration,
+    })
+    let liveActivityPhase = 'model_waiting'
+    const markLiveActivity = (phase, message) => {
+      if (liveActivityPhase === phase) return
+      liveActivityPhase = phase
+      const occurredAt = new Date().toISOString()
+      publishTaskStreamEvent(taskId, {
+        type: 'activity_event',
+        phase,
+        message,
+        occurredAt,
+        interactionAttempt: prepared.interactionAttempt,
+        executionGeneration: prepared.executionGeneration,
+      })
+      void updateDb((db) => {
+        const task = db.writingTasks.find((item) => item.id === taskId)
+        if (!task || task.status !== 'running' || task.cancelRequested
+          || !executionMatches(task, executionId, prepared.executionGeneration)) return
+        setTaskActivity(task, phase, message, occurredAt)
+        task.updatedAt = occurredAt
+        touchAgentThread(db, task)
+      }).catch(() => undefined)
+    }
     const modelCallStartedAt = Date.now()
     const result = await invokeStoryAgent(prepared.user, executionInput, signal, flushOutputSegment, flushReasoningSummary, async (event) => {
       if (event?.phase === 'start') {
+        liveActivityPhase = 'tool'
         for (const segment of reasoningSegments.values()) {
           if (segment.status === 'running') {
             await completeReasoningSegment({ messageId: segment.meta.messageId, stopReason: 'toolUse' })
           }
         }
+      } else if (event?.phase === 'end') {
+        liveActivityPhase = 'model_waiting'
       }
       await recordStoryToolEvent(
         taskId,
@@ -646,6 +705,23 @@ export async function executeWritingTask(taskId, {
       )
     }, completeAssistantMessageSegments)
     await flushCheckpoint()
+    const finalizingAt = new Date().toISOString()
+    await updateDb((db) => {
+      const task = db.writingTasks.find((item) => item.id === taskId)
+      if (!task || task.status !== 'running' || task.cancelRequested
+        || !executionMatches(task, executionId, prepared.executionGeneration)) return
+      setTaskActivity(task, 'finalizing', '正在整理生成结果', finalizingAt)
+      task.updatedAt = finalizingAt
+      touchAgentThread(db, task)
+    })
+    publishTaskStreamEvent(taskId, {
+      type: 'activity_event',
+      phase: 'finalizing',
+      message: '正在整理生成结果',
+      occurredAt: finalizingAt,
+      interactionAttempt: prepared.interactionAttempt,
+      executionGeneration: prepared.executionGeneration,
+    })
     if (process.env.YEMU_STREAM_TELEMETRY === '1') {
       const elapsedMs = Date.now() - modelCallStartedAt
       console.log('[ai-task-delta]', JSON.stringify({
@@ -739,7 +815,12 @@ export async function executeWritingTask(taskId, {
       })
       task.status = result.status === 'needs_input' ? 'waiting_input' : 'completed'
       task.progress = 100
-      task.statusMessage = result.status === 'needs_input' ? '等待用户回答' : 'AI Skill 执行完成'
+      setTaskActivity(
+        task,
+        result.status === 'needs_input' ? 'waiting_input' : 'completed',
+        result.status === 'needs_input' ? '等待用户回答' : 'AI Skill 执行完成',
+        timestamp,
+      )
       task.partialOutput = partialOutput || task.partialOutput || ''
       task.reasoningCompletedAt = timestamp
       task.inputRequestStartedAt = result.status === 'needs_input' ? timestamp : null
@@ -799,7 +880,7 @@ export async function executeWritingTask(taskId, {
         appendEvent(task, 'lifecycle', 'worker 中断，等待恢复执行', 'queued')
         task.status = 'queued'
         task.progress = 0
-        task.statusMessage = 'worker 停机，任务等待重新认领'
+        setTaskActivity(task, 'queued', 'worker 停机，任务等待重新认领')
         task.error = null
         task.errorCode = null
         task.retryable = true
@@ -820,7 +901,7 @@ export async function executeWritingTask(taskId, {
       finishRunningEvent(task, eventStatus)
       appendEvent(task, 'lifecycle', classified.message, eventStatus, { errorCode: classified.errorCode })
       task.status = classified.errorCode === 'cancelled' ? 'cancelled' : 'failed'
-      task.statusMessage = classified.message
+      setTaskActivity(task, task.status, classified.message)
       task.error = classified.errorCode === 'cancelled' ? null : classified.message
       task.errorCode = classified.errorCode
       task.retryable = classified.retryable

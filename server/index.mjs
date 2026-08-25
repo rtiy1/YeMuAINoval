@@ -1268,6 +1268,7 @@ function createWritingTask({ userId, input, requestKey, parentTaskId = null, att
     id, userId, projectId, chapterId: chapterId == null ? null : String(chapterId),
     skill: input.skill, message: input.message, input, requestKey, parentTaskId, attempt, threadId,
     status: 'queued', progress: 0, statusMessage: attempt > 1 ? `重试任务已排队（第 ${attempt} 次）` : '任务已排队',
+    activityPhase: 'queued', activityPhaseStartedAt: timestamp, lastActivityAt: timestamp,
     result: null, partialOutput: '', interactionAttempt: 1,
     executionGeneration: 1, activeExecutionId: null,
     steerRevision: 0, appliedSteerRevision: 0, steerRequested: false, steeringHistory: [],
@@ -1316,6 +1317,9 @@ function writingTaskPublic(task) {
     id: task.id, userId: task.userId, projectId: task.projectId || null, chapterId: task.chapterId || null,
     skill: task.skill || null, message: task.message, status: publicStatus, progress: task.progress || 0,
     statusMessage: recovered ? '等待用户回答' : task.statusMessage || '', result: publicResult || null,
+    activityPhase: task.activityPhase || (publicStatus === 'queued' ? 'queued' : publicStatus === 'running' ? 'model_waiting' : publicStatus),
+    activityPhaseStartedAt: task.activityPhaseStartedAt || task.updatedAt || task.createdAt || null,
+    lastActivityAt: task.lastActivityAt || task.updatedAt || task.createdAt || null,
     partialOutput: recovered ? '' : task.partialOutput || '',
     reasoningSummary: task.reasoningSummary || recovered?.reasoning || '',
     reasoningHistory: taskReasoningHistory(task), interactionAttempt: Math.max(1, Number(task.interactionAttempt) || 1),
@@ -1424,6 +1428,9 @@ async function dispatchWritingTask(task) {
         current.error = 'AI 任务队列暂不可用'
         current.errorCode = 'service_unavailable'
         current.statusMessage = '任务入队失败，可稍后重试'
+        current.activityPhase = 'failed'
+        current.activityPhaseStartedAt = new Date().toISOString()
+        current.lastActivityAt = current.activityPhaseStartedAt
         current.retryable = true
         current.events ||= []
         current.events.push(createTaskEvent(current.id, current.events.length + 1, 'lifecycle', current.statusMessage, 'failed', { errorCode: current.errorCode }))
@@ -1525,6 +1532,9 @@ async function regenerateAgentTurn(user, threadId, turnId) {
     })
     created.turnId = turn.id
     created.statusMessage = `正在重新生成（第 ${attempt} 次）`
+    created.activityPhase = 'queued'
+    created.activityPhaseStartedAt = created.updatedAt
+    created.lastActivityAt = created.updatedAt
     created.events[0] = createTaskEvent(created.id, 1, 'lifecycle', created.statusMessage)
     turn.taskId = created.id
     turn.regenerationCount = Math.max(0, Number(turn.regenerationCount) || 0) + 1
@@ -1546,6 +1556,7 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
     if (recovered) {
       task.status = 'waiting_input'
       task.statusMessage = '等待用户回答'
+      task.activityPhase = 'waiting_input'
       task.result = recoveredChoiceResult(task, recovered)
       task.partialOutput = ''
       task.reasoningSummary = task.reasoningSummary || recovered.reasoning
@@ -1635,6 +1646,9 @@ async function resumeAgentTurnWithInput(user, threadId, turnId, answers) {
     task.status = 'queued'
     task.progress = 0
     task.statusMessage = '已确认补充信息，继续执行 Agent'
+    task.activityPhase = 'queued'
+    task.activityPhaseStartedAt = timestamp
+    task.lastActivityAt = timestamp
     task.events ||= []
     task.events.push(createTaskEvent(task.id, task.events.length + 1, 'input', '已确认补充信息', 'completed', {
       requestId: inputRequest?.requestId || null,
@@ -1758,6 +1772,9 @@ async function interruptWritingTask(userId, taskId) {
     current.errorCode = 'cancelled'
     current.retryable = true
     const timestamp = new Date().toISOString()
+    current.activityPhase = 'cancelled'
+    current.activityPhaseStartedAt = timestamp
+    current.lastActivityAt = timestamp
     current.events ||= []
     for (const event of current.events) {
       if (event.status === 'running') {
@@ -2482,6 +2499,17 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
     const interactionAttempt = Math.max(1, Number(event?.interactionAttempt) || 1)
     const executionGeneration = Math.max(1, Number(event?.executionGeneration) || 1)
     if (interactionAttempt !== lastInteractionAttempt || executionGeneration !== lastExecutionGeneration) return false
+    if (event.type === 'activity_event' && event.phase) {
+      res.write(`event: turn/activity\ndata: ${JSON.stringify({
+        threadId: initialThread.id,
+        turnId: initialTurn.id,
+        taskId: initialTask.id,
+        phase: event.phase,
+        message: event.message || '',
+        occurredAt: event.occurredAt || new Date().toISOString(),
+      })}\n\n`)
+      return true
+    }
     if (event.type === 'tool_event' && event.toolCallId && event.toolName) {
       if (event.toolName === 'request_user_input') {
         const questions = Array.isArray(event.arguments?.questions)
@@ -2896,8 +2924,17 @@ app.get('/api/ai/threads/:threadId/turns/:turnId/stream', async (req, res) => {
         res.write(`event: turn/completed\ndata: ${JSON.stringify({ threadId: thread.id, turn: publicTurn })}\n\n`)
         break
       }
-      if (Date.now() - lastHeartbeat >= 15_000) {
-        res.write(': keep-alive\n\n')
+      if (Date.now() - lastHeartbeat >= 10_000) {
+        res.write(`event: turn/heartbeat\ndata: ${JSON.stringify({
+          threadId: thread.id,
+          turnId: turn.id,
+          taskId: task.id,
+          taskStatus: task.status,
+          activityPhase: task.activityPhase || null,
+          statusMessage: task.statusMessage || '',
+          taskUpdatedAt: task.updatedAt || null,
+          serverTime: new Date().toISOString(),
+        })}\n\n`)
         lastHeartbeat = Date.now()
       }
       if (!(await streamDelay(req, 500))) break
@@ -3921,12 +3958,18 @@ const recoverableTasks = await updateDb((db) => {
       // lease will recover them if that worker actually disappeared.
       if (task.status === 'running') continue
       task.statusMessage = '任务等待 worker 执行'
+      task.activityPhase = 'queued'
+      task.activityPhaseStartedAt = timestamp
+      task.lastActivityAt = timestamp
     } else {
       if (task.status === 'running') task.resumeFromCheckpoint = true
       task.status = 'queued'
       task.progress = 0
       task.activeExecutionId = null
       task.statusMessage = '服务重启后正在从上次进度继续'
+      task.activityPhase = 'queued'
+      task.activityPhaseStartedAt = timestamp
+      task.lastActivityAt = timestamp
     }
     task.updatedAt = timestamp
     recoverable.push({ id: task.id, userId: task.userId })

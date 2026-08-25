@@ -5,6 +5,108 @@ export function formatAgentDuration(milliseconds) {
   return `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`
 }
 
+export function formatAgentActivityClock(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const pair = (value) => String(value).padStart(2, '0')
+  return hours > 0 ? `${pair(hours)}:${pair(minutes)}:${pair(seconds)}` : `${pair(minutes)}:${pair(seconds)}`
+}
+
+function agentTimestamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const timestamp = new Date(value || 0).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function runningActivityItem(run, types) {
+  return [...(Array.isArray(run?.items) ? run.items : [])]
+    .reverse()
+    .find((item) => types.includes(item?.type) && ['running', 'inProgress'].includes(item?.status)) || null
+}
+
+function inferredActivityPhase(run) {
+  if (runningActivityItem(run, ['dynamicToolCall', 'collabAgentToolCall'])) return 'tool'
+  if (runningActivityItem(run, ['agentMessage', 'plan'])) return 'output'
+  if (runningActivityItem(run, ['reasoning'])) return 'reasoning'
+  if (run?.activityPhase) return run.activityPhase
+  const message = String(run?.statusMessage || '')
+  if (/排队|等待 worker/i.test(message)) return 'queued'
+  if (/上下文|读取作品/.test(message)) return 'context'
+  if (/子代理|并行审阅|汇总/.test(message)) return 'collaboration'
+  if (/生成回复/.test(message) || run?.text) return 'output'
+  if (/整理|收尾|可审阅结果/.test(message)) return 'finalizing'
+  if (/Skill/.test(message)) return 'skill'
+  return 'model_waiting'
+}
+
+export function describeAgentActivity(run, {
+  elapsedMs = 0,
+  now = Date.now(),
+  reasoningEffort = '',
+} = {}) {
+  const phase = inferredActivityPhase(run)
+  const activeTool = runningActivityItem(run, ['dynamicToolCall', 'collabAgentToolCall'])
+  const phaseLabels = {
+    queued: '任务排队中',
+    context: '正在整理写作上下文',
+    skill: '正在准备 Agent 能力',
+    collaboration: '协作代理正在审阅',
+    model_waiting: '等待模型响应',
+    reasoning: '模型正在处理',
+    tool: '正在调用工具',
+    output: '正在生成回复',
+    finalizing: '正在整理生成结果',
+  }
+  let label = phaseLabels[phase] || String(run?.statusMessage || '').trim() || 'Agent 正在处理'
+  if (activeTool?.summary) {
+    const summary = String(activeTool.summary).trim()
+    label = /^正在/.test(summary) ? summary : `正在${summary}`
+  } else if (phase !== 'model_waiting' && run?.statusMessage && !['reasoning', 'output'].includes(phase)) {
+    label = String(run.statusMessage).trim()
+  }
+
+  const lastStreamAt = agentTimestamp(run?.lastStreamAt)
+  const streamSilentMs = lastStreamAt ? Math.max(0, now - lastStreamAt) : 0
+  const staleStream = lastStreamAt > 0 && streamSilentMs >= 25_000
+  const streamState = staleStream && ['connecting', 'live'].includes(run?.streamState || 'connecting')
+    ? 'checking'
+    : run?.streamState || 'connecting'
+  const lastActivityAt = agentTimestamp(run?.lastActivityAt)
+  const recentlyActive = lastActivityAt > 0 && now - lastActivityAt < 12_000
+  let detail = '正在建立实时任务连接'
+  if (streamState === 'checking') {
+    detail = '实时事件暂时安静，正在向服务端核查任务'
+  } else if (streamState === 'reconnecting') {
+    detail = '任务仍在服务端运行，正在恢复实时连接'
+  } else if (streamState === 'polling') {
+    detail = '实时连接不稳定，已切换为服务端状态核查'
+  } else if (streamState === 'live' && phase === 'model_waiting' && elapsedMs >= 20_000) {
+    detail = '连接正常 · 该模型可能不会流式返回处理过程'
+  } else if (streamState === 'live') {
+    detail = recentlyActive ? '连接正常 · 刚刚收到任务活动' : '连接正常 · 模型仍在服务端处理'
+  }
+
+  const highReasoning = ['high', 'xhigh', 'max'].includes(String(reasoningEffort || '').toLowerCase())
+  const longRunning = elapsedMs >= 60_000 && ['model_waiting', 'reasoning'].includes(phase)
+  const hint = longRunning
+    ? highReasoning
+      ? '当前使用较高思考强度；可以停止本轮，调低强度后重试'
+      : '本轮响应时间较长；任务仍可随时停止或追加指令'
+    : ''
+
+  return {
+    phase,
+    label,
+    detail,
+    hint,
+    elapsedLabel: formatAgentActivityClock(elapsedMs),
+    tone: ['checking', 'reconnecting', 'polling'].includes(streamState) ? 'checking' : longRunning ? 'slow' : 'active',
+    streamState,
+  }
+}
+
 export function agentEventDuration(event) {
   const startedAt = new Date(event?.startedAt || 0).getTime()
   const completedAt = new Date(event?.completedAt || 0).getTime()
@@ -829,6 +931,11 @@ export function agentThreadMessages(thread) {
       items: turn.items || [],
       events: agentTurnEvents(turn),
       progress: task.progress || 0,
+      statusMessage: task.statusMessage || '',
+      activityPhase: task.activityPhase || '',
+      activityPhaseStartedAt: task.activityPhaseStartedAt || null,
+      lastActivityAt: task.lastActivityAt || task.updatedAt || null,
+      streamState: ['queued', 'running'].includes(task.status) ? 'connecting' : 'idle',
       reasoningSummary: task.reasoningSummary || '',
       reasoningHistory: Array.isArray(task.reasoningHistory) ? task.reasoningHistory : [],
       inputHistory: Array.isArray(task.inputHistory) ? task.inputHistory : [],
