@@ -62,3 +62,33 @@ describe('editor assistant styles', () => {
     expect(mobileCollab).toContain('padding: 0')
   })
 })
+
+describe('editor outline styles', () => {
+  test('removes obsolete outline popup styles', () => {
+    expect(styles).not.toMatch(/\.outline-(?:link|modal|list|num|title|state|words)\b/)
+  })
+
+  test('preserves the real outline tab and shared dark modal styles', () => {
+    expect(ruleBody('.rail-outline-list, .rail-entity-list')).toContain('display: flex')
+    const sharedModal = ruleBody("html[data-theme='dark'] :is(.history-item, .smart-outline-item, .import-preview > span)")
+    expect(sharedModal).toContain('color: var(--ide-text)')
+    expect(sharedModal).toContain('border-color: var(--ide-line)')
+    expect(ruleBody("html[data-theme='dark'] .history-item-version {")).toContain('color: var(--night-warm-text)')
+  })
+})
+
+describe('settings preference styles', () => {
+  test('keeps settings content scrollable with theme-aware choices', () => {
+    expect(ruleBody('.settings-content {')).toContain('min-height: 0')
+    expect(ruleBody('.settings-pane {')).toContain('overflow-y: auto')
+    expect(ruleBody('.settings-choice-grid {')).toContain('repeat(3, minmax(0, 1fr))')
+    expect(ruleBody('.settings-choice-grid button {')).toContain('background: var(--ide-paper)')
+  })
+
+  test('fits the two settings categories and editor options on mobile', () => {
+    const mobile = styles.indexOf('@media (max-width: 760px)', styles.indexOf('.settings-model-tabs {'))
+    expect(mobile).toBeGreaterThanOrEqual(0)
+    expect(ruleBody('.settings-nav {', mobile)).toContain('repeat(2, minmax(0, 1fr))')
+    expect(ruleBody('.settings-editor-options {', mobile)).toContain('grid-template-columns: 1fr')
+  })
+})

@@ -60,3 +60,91 @@ export async function saveTextDocument({ fileName, content }) {
   browserDownload({ fileName: normalizedName, content, mimeType: 'text/plain;charset=utf-8' })
   return { saved: true, path: null }
 }
+
+export const EDITOR_PREFERENCES_KEY = 'yemu:editor-preferences'
+export const EDITOR_FONT_SIZES = Object.freeze([
+  { value: 15, label: '小' },
+  { value: 16, label: '标准' },
+  { value: 18, label: '大' },
+])
+export const EDITOR_LINE_HEIGHTS = Object.freeze([
+  { value: 1.8, label: '紧凑' },
+  { value: 2.05, label: '舒适' },
+  { value: 2.35, label: '宽松' },
+])
+export const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
+  theme: 'system',
+  fontSize: 16,
+  lineHeight: 2.05,
+  panelWidths: Object.freeze({ chapter: 300, assistant: 420 }),
+})
+
+function preferenceObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function preferenceWidth(value, minimum, maximum, fallback) {
+  return Number.isFinite(value) && value > 0 ? Math.min(maximum, Math.max(minimum, Math.round(value))) : fallback
+}
+
+export function normalizeEditorPreferences(value = {}) {
+  const source = preferenceObject(value)
+  const widths = preferenceObject(source.panelWidths)
+  return {
+    theme: ['system', 'light', 'dark'].includes(source.theme) ? source.theme : 'system',
+    fontSize: EDITOR_FONT_SIZES.some((option) => option.value === source.fontSize) ? source.fontSize : 16,
+    lineHeight: EDITOR_LINE_HEIGHTS.some((option) => option.value === source.lineHeight) ? source.lineHeight : 2.05,
+    panelWidths: {
+      chapter: preferenceWidth(widths.chapter, 220, 420, 300),
+      assistant: preferenceWidth(widths.assistant, 320, 520, 420),
+    },
+  }
+}
+
+export function mergeEditorPreferences(current, patch) {
+  const base = normalizeEditorPreferences(current)
+  const update = preferenceObject(patch)
+  return normalizeEditorPreferences({
+    ...base,
+    ...update,
+    panelWidths: { ...base.panelWidths, ...preferenceObject(update.panelWidths) },
+  })
+}
+
+function parsePreferenceObject(value) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function readEditorPreferences(storage) {
+  try {
+    const target = storage ?? globalThis.localStorage
+    const saved = parsePreferenceObject(target?.getItem(EDITOR_PREFERENCES_KEY))
+    if (saved) return normalizeEditorPreferences(saved)
+    return normalizeEditorPreferences({
+      theme: target?.getItem('story-studio-theme'),
+      panelWidths: parsePreferenceObject(target?.getItem('yemu:editor-panel-widths')),
+    })
+  } catch {
+    return normalizeEditorPreferences()
+  }
+}
+
+export function writeEditorPreferences(preferences, storage) {
+  try {
+    const target = storage ?? globalThis.localStorage
+    if (!target) return false
+    target.setItem(EDITOR_PREFERENCES_KEY, JSON.stringify(normalizeEditorPreferences(preferences)))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function resolveEditorTheme(mode, systemDark = false) {
+  return mode === 'light' || mode === 'dark' ? mode : systemDark ? 'dark' : 'light'
+}

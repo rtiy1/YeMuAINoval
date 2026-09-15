@@ -118,8 +118,15 @@ import {
   relationshipKind,
 } from './relationship-graph.mjs'
 import {
+  DEFAULT_EDITOR_PREFERENCES,
+  EDITOR_FONT_SIZES,
+  EDITOR_LINE_HEIGHTS,
+  mergeEditorPreferences,
+  readEditorPreferences,
+  resolveEditorTheme,
   saveTextDocument,
   sendAgentNotification,
+  writeEditorPreferences,
 } from './platform.mjs'
 
 const ASSISTANT_NAME = '夜雨'
@@ -134,7 +141,6 @@ function artifactRailTab(application) {
   if (application?.worldbuilding > 0 || /设定|世界|词条|追踪/.test(categories)) return '设定'
   return '文件'
 }
-const THEME_KEY = 'story-studio-theme'
 const SOURCE_REPOSITORY_URL = import.meta.env.VITE_SOURCE_REPOSITORY_URL || 'https://github.com/rtiy1/YeMuAINoval'
 const callableSkill = (skill) => skill?.status === 'ready' || skill?.status === 'needs_model'
 
@@ -435,15 +441,10 @@ function App() {
       return false
     }
   })
-  const [theme, setTheme] = useState(() => {
-    try {
-      const savedTheme = window.localStorage.getItem(THEME_KEY)
-      if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme
-      return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-    } catch {
-      return 'light'
-    }
-  })
+  const [editorPreferences, setEditorPreferences] = useState(() => readEditorPreferences())
+  const [preferencesSaved, setPreferencesSaved] = useState(true)
+  const [systemDark, setSystemDark] = useState(() => globalThis.matchMedia?.('(prefers-color-scheme: dark)')?.matches ?? false)
+  const theme = resolveEditorTheme(editorPreferences.theme, systemDark)
   const [toast, setToast] = useState('')
   const [skillCatalog, setSkillCatalog] = useState([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -460,7 +461,7 @@ function App() {
   const [editorApplyRequest, setEditorApplyRequest] = useState(null)
   const [lastAiRestore, setLastAiRestore] = useState(null)
   const [deslopLoading, setDeslopLoading] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsCategory, setSettingsCategory] = useState(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [editProjectTarget, setEditProjectTarget] = useState(null)
   const [draft, setDraft] = useState('')
@@ -478,12 +479,25 @@ function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
-    try {
-      window.localStorage.setItem(THEME_KEY, theme)
-    } catch {
-      // The selected theme still applies for this session when storage is unavailable.
-    }
   }, [theme])
+
+  useEffect(() => {
+    // The selected theme still applies for this session when storage is unavailable.
+    setPreferencesSaved(writeEditorPreferences(editorPreferences))
+  }, [editorPreferences])
+
+  useEffect(() => {
+    const media = globalThis.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!media) return
+    const update = (event) => setSystemDark(event.matches)
+    setSystemDark(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+
+  function updateEditorPreferences(update) {
+    setEditorPreferences((current) => mergeEditorPreferences(current, typeof update === 'function' ? update(current) : update))
+  }
 
   function toggleTheme(event) {
     const nextTheme = theme === 'dark' ? 'light' : 'dark'
@@ -491,7 +505,7 @@ function App() {
     const applyTheme = () => {
       root.dataset.theme = nextTheme
       root.style.colorScheme = nextTheme
-      setTheme(nextTheme)
+      updateEditorPreferences({ theme: nextTheme })
     }
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     if (reduceMotion || typeof document.startViewTransition !== 'function') {
@@ -1433,7 +1447,7 @@ function App() {
             <span className="theme-toggle-icon" aria-hidden="true"><Moon className="theme-moon" size={17} strokeWidth={1.8} /><Sun className="theme-sun" size={17} strokeWidth={1.8} /></span>
             <span>{theme === 'dark' ? '日间模式' : '夜间模式'}</span>
           </button>
-          <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsOpen(true)}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
+          <button className="nav-item" aria-label="设置" title={sidebarCollapsed ? '设置' : undefined} onClick={() => setSettingsCategory('appearance')}><Settings2 size={17} strokeWidth={1.8} /><span>设置</span></button>
           <button className="nav-item" aria-label="退出登录" title={sidebarCollapsed ? '退出登录' : undefined} onClick={logout}><LogOut size={17} strokeWidth={1.8} /><span>退出登录</span></button>
           <div className="profile-chip" ref={profileMenuRef}>
             <div className="avatar">{user.name.slice(0, 1)}</div>
@@ -1442,7 +1456,7 @@ function App() {
             {profileMenuOpen && <div className="profile-menu" role="menu">
               <div className="profile-menu-heading"><div className="avatar small">{user.name.slice(0, 1)}</div><span><strong>{user.name}</strong><small>{user.email}</small></span></div>
               <button type="button" role="menuitem" onClick={() => { setProfileMenuOpen(false); selectSection('profile') }}><UserRound size={14} /><span>个人中心</span></button>
-              <button type="button" role="menuitem" onClick={() => { setProfileMenuOpen(false); setSettingsOpen(true) }}><Settings2 size={14} /><span>设置</span></button>
+              <button type="button" role="menuitem" onClick={() => { setProfileMenuOpen(false); setSettingsCategory('appearance') }}><Settings2 size={14} /><span>设置</span></button>
               <span className="profile-menu-divider" />
               <button type="button" role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); logout() }}><LogOut size={14} /><span>退出登录</span></button>
             </div>}
@@ -1463,14 +1477,14 @@ function App() {
         </header>}
 
         <div className="content-wrap">
-          {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} onDeleteIdea={deleteIdea} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onArtifactsApplied={refreshGeneratedArtifacts} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsOpen(true)} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
+          {activeSection === 'editor' && currentProject && <Editor project={currentProject} projects={projects} skills={skillCatalog} chapters={chapters} activeChapter={activeChapter} ideas={ideas} onDeleteIdea={deleteIdea} foreshadows={foreshadows} storyMemories={storyMemories.filter((memory) => memory.projectId === currentProject.id)} onUpdateStoryMemory={updateStoryMemory} onDeleteStoryMemory={deleteStoryMemory} onConfirmStoryMemories={confirmStoryMemories} onCreateForeshadow={createForeshadow} onUpdateForeshadow={updateForeshadow} onDeleteForeshadow={deleteForeshadow} draft={draft} onDraftChange={updateDraft} draftStatus={draftStatus} draftLoading={draftLoading} wordCount={wordCount} historySnapshots={historySnapshots} historyLoading={historyLoading} onCreateHistory={createHistorySnapshot} lastAiRestore={lastAiRestore} onAiApplied={(snapshot) => setLastAiRestore(snapshot)} onAiRestored={() => setLastAiRestore(null)} onArtifactsApplied={refreshGeneratedArtifacts} onNotify={notify} onSave={saveDraft} onReview={reviewChapter} reviewLoading={reviewLoading} reviewPlatform={reviewPlatform} onPlatformChange={setReviewPlatform} onDeslop={deslopChapter} deslopLoading={deslopLoading} onNewChapter={createChapter} onSplitChapter={splitChapter} onSelectChapter={selectChapter} onRenameChapter={renameChapter} onUpdateChapterState={updateChapterState} onDeleteChapter={deleteChapter} onOpenProject={openProject} onOpenSkill={openSkillRunner} onOpenSettings={() => setSettingsCategory('model')} preferences={editorPreferences} onPreferencesChange={updateEditorPreferences} applyRequest={editorApplyRequest} onApplyRequestHandled={() => setEditorApplyRequest(null)} />}
           {activeSection === 'editor' && !currentProject && <div className="page inner-page workspace-empty"><div className="empty-state"><div className="empty-state-icon"><BookOpen size={28} /></div><h2>还没有作品</h2><p>新建或导入作品后，工作台会直接显示正文和助手。</p><div className="empty-state-actions"><button className="primary-button" onClick={() => setShowNew(true)}><BookPlus size={17} />新建作品</button><button className="secondary-button" onClick={() => setImportProjectOpen(true)}><Download size={16} />导入文稿</button></div></div></div>}
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'relations' && <RelationshipGraphPage projects={projects} onNotify={notify} onCreateProject={() => setShowNew(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
           {activeSection === 'skill-market' && <SkillMarket user={user} onNotify={notify} onSkillsChanged={refreshSkills} />}
           {activeSection === 'stats' && <WritingStats stats={dashboard} projects={projects} />}
-          {activeSection === 'profile' && <ProfileCenter user={user} stats={dashboard} projects={projects} onNavigate={selectSection} onOpenSettings={() => setSettingsOpen(true)} onOpenProject={openProject} />}
+          {activeSection === 'profile' && <ProfileCenter user={user} stats={dashboard} projects={projects} onNavigate={selectSection} onOpenSettings={() => setSettingsCategory('model')} onOpenProject={openProject} />}
         </div>
       </main>
 
@@ -1485,7 +1499,7 @@ function App() {
       {reviewOpen && reviewReport && <ReviewReport report={reviewReport} onClose={() => setReviewOpen(false)} />}
       {runnerOpen && runnerSkill && <SkillRunnerModal skill={runnerSkill} skills={skillCatalog} loading={runnerLoading} result={runnerResult} onClose={() => setRunnerOpen(false)} onRun={runSkill} draft={draft} initialMessage={runnerCommand} context={runnerContext} canApplyToDraft={activeSection === 'editor' && Boolean(currentProject?.id && activeChapterId != null)} onApplyOutput={applySkillOutput} smartCreateMode={runnerContext?.purpose === 'smart-create'} onUseSmartResult={(result) => { const proposal = parseSmartProposal(result); if (!proposal) { setToast('AI 结果缺少书名、题材、主线或章节大纲，请重新生成'); return } setSmartProposal(proposal); setRunnerOpen(false) }} />}
       {smartProposal && <SmartCreateModal proposal={smartProposal} loading={smartCreateLoading} onClose={() => !smartCreateLoading && setSmartProposal(null)} onCreate={createSmartProject} />}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} onNotify={notify} />}
+      {settingsCategory && <SettingsModal initialCategory={settingsCategory} preferences={editorPreferences} preferencesSaved={preferencesSaved} onPreferencesChange={updateEditorPreferences} onClose={() => setSettingsCategory(null)} onNotify={notify} />}
       {searchOpen && <SearchModal projects={projects} chapters={chapters} ideas={ideas} onClose={() => setSearchOpen(false)} onOpenProject={openProject} onSelectChapter={selectChapter} onNavigate={selectSection} />}
       {editProjectTarget && <EditProjectModal project={editProjectTarget} onClose={() => setEditProjectTarget(null)} onSave={(updates) => { editProject(editProjectTarget, updates); setEditProjectTarget(null) }} />}
       {toast && <div className={`toast ${toastKind(toast)}`} role="status" aria-live="polite">{toastKind(toast) === 'loading' ? <LoaderCircle size={16} className="spin" /> : toastKind(toast) === 'error' ? <Info size={16} /> : <Check size={16} />}{toast}</div>}
@@ -2620,12 +2634,11 @@ function RelationshipGraphPage({ projects, onNotify, onCreateProject }) {
     </>}
   </div>
 }
-function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, onDeleteIdea, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, applyRequest, onApplyRequestHandled }) {
+function Editor({ project, projects = [], skills = [], chapters, activeChapter, ideas, onDeleteIdea, foreshadows = [], storyMemories = [], onUpdateStoryMemory, onDeleteStoryMemory, onConfirmStoryMemories, onCreateForeshadow, onUpdateForeshadow, onDeleteForeshadow, draft, onDraftChange, draftStatus, draftLoading, wordCount, historySnapshots = [], historyLoading = false, onCreateHistory, lastAiRestore = null, onAiApplied, onAiRestored, onArtifactsApplied, onNotify, onSave, onReview, reviewLoading, reviewPlatform, onPlatformChange, onDeslop, deslopLoading, onNewChapter, onSplitChapter, onSelectChapter, onRenameChapter, onUpdateChapterState, onDeleteChapter, onOpenProject, onOpenSkill, onOpenSettings, preferences, onPreferencesChange, applyRequest, onApplyRequestHandled }) {
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [outlineOpen, setOutlineOpen] = useState(false)
   const [ideaPickerOpen, setIdeaPickerOpen] = useState(false)
   const [materialViewing, setMaterialViewing] = useState(null)
   const [fileDeleteTarget, setFileDeleteTarget] = useState(null)
@@ -2661,18 +2674,12 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [assistantHistory, setAssistantHistory] = useState([])
   const [assistantHistoryLoading, setAssistantHistoryLoading] = useState(false)
   const [assistantContextStatus, setAssistantContextStatus] = useState(null)
-  const [workspaceWidths, setWorkspaceWidths] = useState(() => {
-    if (typeof window === 'undefined') return { chapter: 300, assistant: 420 }
-    try {
-      const saved = JSON.parse(window.localStorage.getItem('yemu:editor-panel-widths') || '{}')
-      return {
-        chapter: Math.min(420, Math.max(220, Number(saved.chapter) || 300)),
-        assistant: Math.min(520, Math.max(320, Number(saved.assistant) || 420)),
-      }
-    } catch {
-      return { chapter: 300, assistant: 420 }
-    }
-  })
+  const workspaceWidths = preferences.panelWidths
+  const editorFontSize = preferences.fontSize
+  const editorLineHeight = preferences.lineHeight
+  function setWorkspaceWidths(update) {
+    onPreferencesChange((current) => ({ panelWidths: update(current.panelWidths) }))
+  }
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantRunning, setAssistantRunning] = useState(false)
   const [assistantElapsedMs, setAssistantElapsedMs] = useState(0)
@@ -2682,8 +2689,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [assistantAttachmentLoading, setAssistantAttachmentLoading] = useState(false)
   const [openChapterIds, setOpenChapterIds] = useState([])
   const [styleMenuOpen, setStyleMenuOpen] = useState(false)
-  const [editorFontSize, setEditorFontSize] = useState(16)
-  const [editorLineHeight, setEditorLineHeight] = useState(2.05)
   const [editorBold, setEditorBold] = useState(false)
   const [editorItalic, setEditorItalic] = useState(false)
   const [speaking, setSpeaking] = useState(false)
@@ -2999,10 +3004,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     assistantTaskIdRef.current = null
     assistantTurnIdRef.current = null
   }, [displayChapter.id])
-
-  useEffect(() => {
-    window.localStorage.setItem('yemu:editor-panel-widths', JSON.stringify(workspaceWidths))
-  }, [workspaceWidths])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -4958,7 +4959,7 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
               { label: '伏笔', icon: Pin },
             ].map(({ label, icon: Icon }) => <button key={label} role="tab" aria-selected={railTab === label} className={railTab === label ? 'active' : ''} onClick={() => setRailTab(label)}><Icon size={13} /><span>{label}</span></button>)}
           </div>
-          <div className="rail-header"><strong>{railTitle}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className="icon-button small" aria-label="打开章节大纲" title="打开章节大纲" onClick={() => setOutlineOpen(true)}><BookOpen size={15} /></button><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : railTab === '记忆' ? extractMemories() : setIdeaPickerOpen(true)}>{railTab === '记忆' && memoryLoading ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}</button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
+          <div className="rail-header"><strong>{railTitle}</strong><div className="rail-header-actions">{railTab === '目录' && <><button className={`icon-button small ${unfinishedOnly ? 'active' : ''}`} aria-label="只看未完成章节" title={unfinishedOnly ? '显示全部章节' : '只看未完成章节'} onClick={() => setUnfinishedOnly((value) => !value)}><CheckSquare2 size={15} /></button><button className="icon-button small" aria-label="切换章节排序" title={chapterOrder === 'asc' ? '当前正序，点击倒序' : '当前倒序，点击正序'} onClick={() => setChapterOrder((order) => order === 'asc' ? 'desc' : 'asc')}><ArrowUpDown size={15} /></button></>}<button className="icon-button small" aria-label={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} title={railTab === '目录' ? '新建章节' : railTab === '伏笔' ? '新增伏笔' : railTab === '记忆' ? '整理本章记忆' : '新增资料'} onClick={() => railTab === '目录' ? onNewChapter() : railTab === '伏笔' ? openForeshadowEditor() : railTab === '记忆' ? extractMemories() : setIdeaPickerOpen(true)}>{railTab === '记忆' && memoryLoading ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}</button><button type="button" className="icon-button small mobile-rail-close" aria-label="关闭章节目录" onClick={() => setMobileRailOpen(false)}><X size={16} /></button></div></div>
           {railTab === '目录' && <div className="chapter-list">
             {visibleChapters.map((chapter) => {
               const current = String(chapter.id) === String(displayChapter.id)
@@ -4979,7 +4980,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           {railTab === '文件' && <div className="rail-file-list">{storyFileIdeas.length ? storyFileIdeas.map((idea) => <div className="rail-file-item" key={idea.id}><button type="button" className="rail-file-open" onClick={() => setMaterialViewing(idea)}><FileText size={14} /><span><strong>{idea.title}</strong><small>{storyFilePath(idea)}</small></span><ChevronRight size={12} /></button><button type="button" className="rail-file-delete" aria-label={`删除文件 ${idea.title}`} title="删除文件" onClick={() => setFileDeleteTarget(idea)}><Trash2 size={13} /></button></div>) : <div className="rail-empty-block"><FolderOpen size={22} /><p>还没有作品文件</p><small>让 Agent 创建设定、大纲或资料文件后会显示在这里。</small></div>}</div>}
           {railTab === '记忆' && <div className="rail-memory-list">{storyMemories.filter((item) => item.status !== 'archived').length ? storyMemories.filter((item) => item.status !== 'archived').map((memory) => <button key={memory.id} className="rail-memory-item" onClick={() => setMemoryEditing(memory)}><span className={`memory-type-dot ${memory.type}`} /><span><strong>{memory.title}</strong><small>{memory.characterName ? `${memory.characterName} · ` : ''}{memory.content.slice(0, 46)}</small></span><em>{memory.importance || 3}</em></button>) : <div className="rail-empty-block"><BrainCircuit size={22} /><p>还没有确认的作品记忆</p><button onClick={() => void extractMemories()} disabled={memoryLoading}>{memoryLoading ? '整理中…' : '整理本章记忆'}</button></div>}</div>}
           {railTab === '伏笔' && <div className="rail-foreshadow-list">{projectForeshadows.length ? projectForeshadows.map((item) => <button key={item.id} className="rail-foreshadow-item" onClick={() => openForeshadowEditor(item)}><span className={`foreshadow-status-dot ${item.status}`} /><span className="rail-foreshadow-copy"><strong>{item.title}</strong><small>{item.category || '未分类'} · {item.status === 'resolved' ? '已回收' : item.status === 'planted' ? '已埋入' : item.status === 'abandoned' ? '已放弃' : '计划中'}</small></span><span className="foreshadow-importance" title={`重要性 ${item.importance || 3}`}>{item.importance || 3}</span></button>) : <div className="rail-empty-block"><Pin size={22} /><p>还没有登记伏笔</p><button onClick={() => openForeshadowEditor()}>新增第一个伏笔</button></div>}</div>}
-          {railTab === '目录' && <button className="outline-link" onClick={() => setOutlineOpen(true)}><List size={15} />打开完整大纲</button>}
         </aside>
 
         <div className="workspace-resizer chapter-resizer" role="separator" tabIndex={0} aria-label="调整章节栏宽度" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="420" aria-valuenow={workspaceWidths.chapter} onKeyDown={(event) => nudgeWorkspace('chapter', event)} onPointerDown={(event) => startWorkspaceResize('chapter', event)} onPointerMove={resizeWorkspace} onPointerUp={stopWorkspaceResize} onPointerCancel={stopWorkspaceResize} />
@@ -4999,9 +4999,9 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
                   <div className="editor-style-menu-heading"><strong>正文样式</strong><button type="button" aria-label="关闭正文样式" onClick={() => setStyleMenuOpen(false)}><X size={13} /></button></div>
                   <p className="editor-style-note">仅调整编辑区显示，不写入正文。</p>
                   <span>字号</span>
-                  <div className="editor-style-options">{[{ value: 15, label: '小' }, { value: 16, label: '标准' }, { value: 18, label: '大' }].map((option) => <button type="button" key={option.value} className={editorFontSize === option.value ? 'active' : ''} onClick={() => { setEditorFontSize(option.value); onNotify(`正文字号已切换为${option.label}`) }}>{option.label}</button>)}</div>
+                  <div className="editor-style-options">{EDITOR_FONT_SIZES.map((option) => <button type="button" key={option.value} className={editorFontSize === option.value ? 'active' : ''} onClick={() => { onPreferencesChange({ fontSize: option.value }); onNotify(`正文字号已切换为${option.label}`) }}>{option.label}</button>)}</div>
                   <span>行距</span>
-                  <div className="editor-style-options">{[{ value: 1.8, label: '紧凑' }, { value: 2.05, label: '舒适' }, { value: 2.35, label: '宽松' }].map((option) => <button type="button" key={option.value} className={editorLineHeight === option.value ? 'active' : ''} onClick={() => { setEditorLineHeight(option.value); onNotify(`正文行距已切换为${option.label}`) }}>{option.label}</button>)}</div>
+                  <div className="editor-style-options">{EDITOR_LINE_HEIGHTS.map((option) => <button type="button" key={option.value} className={editorLineHeight === option.value ? 'active' : ''} onClick={() => { onPreferencesChange({ lineHeight: option.value }); onNotify(`正文行距已切换为${option.label}`) }}>{option.label}</button>)}</div>
                   {/\*\*[^*\n]+\*\*|_[^_\n]+_/.test(draft) && <button type="button" className="editor-clean-markers" onClick={cleanInlineMarkdownMarkers}><Wand2 size={13} />清理正文中的 ** / _ 标记</button>}
                 </div>}
               </div>
@@ -5233,7 +5233,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     {renameTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setRenameTarget(null)}><div className="modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">章节操作</span><h2>重命名章节</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setRenameTarget(null)}><X size={18} /></button></div><form onSubmit={confirmRename}><label>章节标题<input autoFocus value={renameValue} onChange={(event) => setRenameValue(event.target.value)} maxLength={100} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setRenameTarget(null)}>取消</button><button type="submit" className="dark-button">保存</button></div></form></div></div>}
     {deleteTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDeleteTarget(null)}><div className="modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">删除章节</span><h2>确认删除</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setDeleteTarget(null)}><X size={18} /></button></div><p className="confirm-text">确定删除《{deleteTarget.title}》吗？此操作不可撤销。</p><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>取消</button><button type="button" className="dark-button danger-button" onClick={confirmDelete}>删除</button></div></div></div>}
     {fileDeleteTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !fileDeleteLoading && setFileDeleteTarget(null)}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-story-file-title"><div className="modal-heading"><div><span className="section-overline">删除作品文件</span><h2 id="delete-story-file-title">确认删除</h2></div><button className="icon-button" aria-label="关闭" disabled={fileDeleteLoading} onClick={() => setFileDeleteTarget(null)}><X size={18} /></button></div><p className="confirm-text">即将删除《{fileDeleteTarget.title}》（{storyFilePath(fileDeleteTarget)}）。删除后它会同时从 PostgreSQL 和 Agent 工作区中移除，此操作不可恢复。</p><div className="modal-actions"><button type="button" className="secondary-button" disabled={fileDeleteLoading} onClick={() => setFileDeleteTarget(null)}>取消</button><button type="button" className="dark-button danger-button" disabled={fileDeleteLoading} onClick={confirmFileDelete}>{fileDeleteLoading ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}{fileDeleteLoading ? '删除中' : '永久删除'}</button></div></div></div>}
-    {outlineOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOutlineOpen(false)}><div className="modal outline-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">{project?.title}</span><h2>章节大纲</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setOutlineOpen(false)}><X size={18} /></button></div>{chapters.length ? <ol className="outline-list">{chapters.map((chapter) => <li key={chapter.id}><span className="outline-num">{String(chapter.id).padStart(2, '0')}</span><button className="outline-title" onClick={() => { onSelectChapter?.(chapter); setOutlineOpen(false) }}>{chapter.title}</button><span className={`outline-state ${chapter.state === 'done' ? 'done' : ''}`}>{chapter.state === 'done' ? '已完成' : '草稿'}</span><span className="outline-words">{chapter.words} 字</span></li>)}</ol> : <div className="empty-state small"><p>还没有章节，先新建第一章吧。</p></div>}</div></div>}
     {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setHistoryOpen(false)}><div className="modal history-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">编辑器</span><h2>历史记录</h2></div><button className="icon-button" aria-label="关闭历史记录" onClick={() => setHistoryOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">选择一个快照恢复到正文，当前内容会保留在重做栈中。</p><div className="history-list">{historyLoading ? <div className="history-empty"><LoaderCircle size={22} className="spin" /><p>正在读取历史快照</p></div> : historyRef.current.past.length ? historyRef.current.past.slice().reverse().map((snapshot, index) => { const version = historyRef.current.past.length - index; const preview = snapshot.replace(/\s+/g, ' ').trim(); return <button type="button" className="history-item" key={`${version}-${index}`} onClick={() => restoreHistory(snapshot)}><span className="history-item-version">版本 {version}</span><span className="history-item-copy"><strong>{formatNumber(snapshot.replace(/\s/g, '').length)} 字</strong><small>{preview || '（空正文）'}</small></span><ChevronRight size={16} /></button> }) : <div className="history-empty"><History size={22} /><p>还没有可恢复的编辑快照</p><small>继续输入一会儿，历史记录会自动生成。</small></div>}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setHistoryOpen(false)}>关闭</button></div></div></div>}
     {frequencyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setFrequencyOpen(false)}><div className="modal frequency-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">正文分析</span><h2>高频词</h2></div><button className="icon-button" aria-label="关闭高频词" onClick={() => setFrequencyOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">统计当前章节中重复出现的词语，点击词语可回到正文定位第一次出现的位置。</p><div className="frequency-cloud">{frequentWords.map(([word, count]) => <button type="button" className="frequency-chip" key={word} onClick={() => locateFrequentWord(word)}><strong>{word}</strong><small>{count} 次</small></button>)}</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setFrequencyOpen(false)}>关闭</button></div></div></div>}
     {splitOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !splitLoading && setSplitOpen(false)}><div className="modal split-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="section-overline">本地章节操作</span><h2>按光标拆章</h2></div><button className="icon-button" aria-label="关闭拆分章节" disabled={splitLoading} onClick={() => setSplitOpen(false)}><X size={18} /></button></div><p className="modal-subtitle">以当前光标位置为分界，在本地拆分正文并保存为新章节；此操作不调用 AI。</p><form onSubmit={confirmSplit}><label>新章节标题<input autoFocus value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} maxLength={100} placeholder="例如：潮声之后" /></label><div className="split-preview"><div><span>当前章节保留</span><strong>{formatNumber(splitBefore.length)} 字</strong><p>{splitBefore.slice(-90) || '拆分位置之前暂无正文'}</p></div><ChevronRight size={17} /><div><span>新章节内容</span><strong>{formatNumber(splitAfter.length)} 字</strong><p>{splitAfter.slice(0, 90) || '拆分位置之后暂无正文'}</p></div></div><div className="modal-actions"><button type="button" className="secondary-button" disabled={splitLoading} onClick={() => setSplitOpen(false)}>取消</button><button type="submit" className="dark-button" disabled={splitLoading || !splitTitle.trim()}>{splitLoading ? <LoaderCircle size={16} className="spin" /> : <Split size={16} />}{splitLoading ? '拆分中' : '确认拆分'}</button></div></form></div></div>}
@@ -6226,7 +6225,45 @@ function settingsFormValue(settings = {}) {
   }
 }
 
-function SettingsModal({ onClose, onNotify }) {
+function AppearanceSettings({ preferences, preferencesSaved, onPreferencesChange }) {
+  const themes = [
+    { value: 'system', label: '跟随系统', icon: Settings2 },
+    { value: 'light', label: '浅色', icon: Sun },
+    { value: 'dark', label: '深色', icon: Moon },
+  ]
+  const defaultWidths = DEFAULT_EDITOR_PREFERENCES.panelWidths
+  const widthsAreDefault = preferences.panelWidths.chapter === defaultWidths.chapter && preferences.panelWidths.assistant === defaultWidths.assistant
+
+  return <div className="settings-pane settings-appearance-pane">
+    <p className={`settings-preference-status ${preferencesSaved ? '' : 'is-warning'}`} role="status">
+      {preferencesSaved ? '修改立即生效，自动保存在当前浏览器，不随账号跨设备同步。' : '修改已生效，但浏览器无法保存偏好；刷新后可能恢复之前的设置。'}
+    </p>
+    <section className="settings-section">
+      <div className="settings-section-heading"><div><h3>主题模式</h3><p>跟随系统会自动响应设备的深浅色变化。</p></div></div>
+      <div className="settings-choice-grid" role="group" aria-label="主题模式">
+        {themes.map(({ value, label, icon: Icon }) => <button type="button" key={value} className={preferences.theme === value ? 'active' : ''} aria-pressed={preferences.theme === value} onClick={() => onPreferencesChange({ theme: value })}><Icon size={17} /><strong>{label}</strong></button>)}
+      </div>
+    </section>
+    <section className="settings-section">
+      <div className="settings-section-heading"><div><h3>正文显示</h3><p>与编辑器工具栏同步，只改变显示，不修改正文内容。</p></div></div>
+      <div className="settings-editor-options">
+        <div className="settings-field"><span>正文字号</span><div className="settings-choice-grid" role="group" aria-label="正文字号">
+          {EDITOR_FONT_SIZES.map((option) => <button type="button" key={option.value} className={preferences.fontSize === option.value ? 'active' : ''} aria-pressed={preferences.fontSize === option.value} onClick={() => onPreferencesChange({ fontSize: option.value })}><strong>{option.label}</strong><small>{option.value} px</small></button>)}
+        </div></div>
+        <div className="settings-field"><span>正文行距</span><div className="settings-choice-grid" role="group" aria-label="正文行距">
+          {EDITOR_LINE_HEIGHTS.map((option) => <button type="button" key={option.value} className={preferences.lineHeight === option.value ? 'active' : ''} aria-pressed={preferences.lineHeight === option.value} onClick={() => onPreferencesChange({ lineHeight: option.value })}><strong>{option.label}</strong><small>{option.value} 倍</small></button>)}
+        </div></div>
+      </div>
+      <div className="settings-writing-preview" aria-label="正文样式预览"><small>正文预览</small><p style={{ fontSize: `${preferences.fontSize}px`, lineHeight: preferences.lineHeight }}>夜色落在窗边，故事从这一行开始。<br />让舒适的字号与行距，陪你写完下一章。</p></div>
+    </section>
+    <section className="settings-section">
+      <div className="settings-section-heading"><div><h3>面板宽度</h3><p>恢复章节栏和 AI 助手栏宽度，不改变正文或其他设置。</p></div></div>
+      <div className="settings-layout-summary"><span>章节栏 {preferences.panelWidths.chapter} px · AI 助手栏 {preferences.panelWidths.assistant} px</span><button type="button" className="secondary-button" disabled={widthsAreDefault} onClick={() => onPreferencesChange({ panelWidths: defaultWidths })}>恢复默认栏宽</button></div>
+    </section>
+  </div>
+}
+
+function SettingsModal({ initialCategory = 'appearance', preferences, preferencesSaved, onPreferencesChange, onClose, onNotify }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -6235,11 +6272,16 @@ function SettingsModal({ onClose, onNotify }) {
   const [modelCapabilitiesById, setModelCapabilitiesById] = useState({})
   const [fetchingModels, setFetchingModels] = useState(false)
   const [activePane, setActivePane] = useState('connection')
+  const [activeCategory, setActiveCategory] = useState(initialCategory)
   const [connectionStatus, setConnectionStatus] = useState('idle')
+  const [loadError, setLoadError] = useState('')
+  const [loadVersion, setLoadVersion] = useState(0)
   const [form, setForm] = useState(() => settingsFormValue())
 
   useEffect(() => {
     let mounted = true
+    setLoading(true)
+    setLoadError('')
     api.getSettings()
       .then((response) => {
         if (!mounted) return
@@ -6248,15 +6290,16 @@ function SettingsModal({ onClose, onNotify }) {
         setModelCapabilities(s.modelCapabilities || null)
         setForm(settingsFormValue(s))
       })
-      .catch(() => { if (mounted) onNotify('读取设置失败') })
+      .catch((error) => { if (mounted) setLoadError(error.message || '读取模型设置失败') })
       .finally(() => { if (mounted) setLoading(false) })
     return () => { mounted = false }
-  }, [])
+  }, [loadVersion])
 
   const selectedProfile = form.modelProfiles.find((profile) => profile.id === form.activeModelProfileId) || form.modelProfiles[0]
 
   async function handleSave(event) {
     event.preventDefault()
+    if (loading || loadError || !settings) return
     setSaving(true)
     try {
       const response = await api.updateSettings({
@@ -6455,29 +6498,38 @@ function SettingsModal({ onClose, onNotify }) {
         <div className="settings-title-group">
           <div className="settings-title-icon"><Settings2 size={18} /></div>
           <div>
-            <h2 id="settings-title">模型与连接</h2>
-            <p className="settings-subtitle">保存多套供应商连接，并随时切换当前模型。</p>
+            <h2 id="settings-title">设置</h2>
+            <p className="settings-subtitle">调整写作外观，管理模型连接与生成参数。</p>
           </div>
         </div>
         <button className="icon-button" aria-label="关闭" title="关闭" onClick={onClose}><X size={19} /></button>
       </header>
 
-      {loading ? (
-        <div className="settings-loading"><LoaderCircle size={20} className="spin" /><span>正在读取设置</span></div>
-      ) : (
-        <form className="settings-form" onSubmit={handleSave}>
-          <div className="settings-layout">
-            <nav className="settings-nav" aria-label="设置分类">
-              <button type="button" className={activePane === 'connection' ? 'active' : ''} onClick={() => setActivePane('connection')}><Globe size={16} /><span><strong>供应商与连接</strong><small>保存、切换和测试</small></span></button>
-              <button type="button" className={activePane === 'generation' ? 'active' : ''} onClick={() => setActivePane('generation')}><BrainCircuit size={16} /><span><strong>生成参数</strong><small>当前连接的模型参数</small></span></button>
-              <button type="button" className={activePane === 'context' ? 'active' : ''} onClick={() => setActivePane('context')}><Archive size={16} /><span><strong>上下文维护</strong><small>自动压缩与保留</small></span></button>
-              <div className={`settings-connection-state ${connectionStatus}`}>
-                <span />
-                <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
-              </div>
-            </nav>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分类">
+          <button type="button" className={activeCategory === 'appearance' ? 'active' : ''} aria-pressed={activeCategory === 'appearance'} onClick={() => setActiveCategory('appearance')}><Type size={16} /><span><strong>外观与编辑器</strong><small>主题、正文与面板</small></span></button>
+          <button type="button" className={activeCategory === 'model' ? 'active' : ''} aria-pressed={activeCategory === 'model'} onClick={() => setActiveCategory('model')}><Bot size={16} /><span><strong>AI 模型</strong><small>连接、生成与上下文</small></span></button>
+          {activeCategory === 'model' && !loading && !loadError && <div className={`settings-connection-state ${connectionStatus}`}>
+            <span />
+            <div><strong>{connectionCopy}</strong><small>API Key 仅加密保存在服务端</small></div>
+          </div>}
+        </nav>
 
-            <div className="settings-pane">
+        <div className="settings-content">
+          {activeCategory === 'appearance' ? (
+            <AppearanceSettings preferences={preferences} preferencesSaved={preferencesSaved} onPreferencesChange={onPreferencesChange} />
+          ) : (
+            <>
+              <div className="settings-model-tabs" role="group" aria-label="模型设置分类">
+                {[{ id: 'connection', label: '供应商与连接' }, { id: 'generation', label: '生成参数' }, { id: 'context', label: '上下文维护' }].map((pane) => <button type="button" key={pane.id} className={activePane === pane.id ? 'active' : ''} aria-pressed={activePane === pane.id} onClick={() => setActivePane(pane.id)}>{pane.label}</button>)}
+              </div>
+              {loading ? (
+                <div className="settings-loading"><LoaderCircle size={20} className="spin" /><span>正在读取设置</span></div>
+              ) : loadError ? (
+                <div className="settings-load-error" role="alert"><Info size={22} /><p>{loadError}</p><button type="button" className="secondary-button" onClick={() => setLoadVersion((current) => current + 1)}>重新读取</button></div>
+              ) : (
+                <form id="model-settings-form" className="settings-form" onSubmit={handleSave}>
+                  <div className="settings-pane">
               {activePane === 'connection' ? <>
                 <section className="settings-section">
                   <div className="settings-section-heading"><div><h3>已保存连接</h3><p>选中的连接会在保存后成为所有 Story Skills 的当前连接。</p></div><button type="button" className="settings-add-profile" disabled={form.modelProfiles.length >= 12} onClick={() => addProfile()}><Plus size={14} />新增</button></div>
@@ -6620,19 +6672,28 @@ function SettingsModal({ onClose, onNotify }) {
                   </details>
                 </section>
               </>}
-            </div>
-          </div>
+                  </div>
+                </form>
+              )}
+            </>
+          )}
+        </div>
+      </div>
 
-          <div className="settings-actions">
-            <div className="settings-save-note"><LockKeyhole size={14} /><span>保存后切换到「{selectedProfile.name || '未命名连接'}」</span></div>
+      <div className="settings-actions">
+        {activeCategory === 'appearance' ? (
+          <><div className="settings-save-note"><Check size={14} /><span>外观偏好即时生效 · 仅当前浏览器</span></div><button type="button" className="dark-button" onClick={onClose}>完成</button></>
+        ) : (
+          <>
+            <div className="settings-save-note"><LockKeyhole size={14} /><span>{settings ? `保存后切换到「${selectedProfile.name || '未命名连接'}」` : '模型配置读取成功后才可保存'}</span></div>
             <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-            <button type="submit" className="dark-button" disabled={saving}>
+            <button type="submit" form="model-settings-form" className="dark-button" disabled={saving || loading || Boolean(loadError) || !settings}>
               {saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}
               <span>{saving ? '保存中' : '保存并应用'}</span>
             </button>
-          </div>
-        </form>
-      )}
+          </>
+        )}
+      </div>
     </div>
   </div>
 }
