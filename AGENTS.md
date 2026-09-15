@@ -12,7 +12,7 @@
 - Use Bun 1.3.14 or newer for JavaScript and TypeScript tasks.
 - Keep the default root commands focused on the YeMu product.
 - Do not reintroduce the removed Python AI gateway or its legacy Docker stack. Docker deployment must run the current Bun server and embedded runtime directly.
-- Do not expose unrestricted filesystem or shell tools through the story-agent boundary.
+- Do not expose unrestricted filesystem or shell tools through the story-agent boundary. Exception: when `AUTH_MODE=local` (desktop/local launcher only), `run_local_shell` is enabled with a per-project workspace; the web service must never enable it (the flag is server-controlled via `tool_policy.localShell`).
 - Keep model credentials server-side and preserve the existing shared-key opt-in.
 - Use static imports. Avoid `any`, dynamic imports, and inferred `ReturnType` aliases.
 - Preserve third-party license and copyright notices in `LICENSE` and `NOTICE.md`.

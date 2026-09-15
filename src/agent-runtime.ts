@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentPromptOptions } from "@yemu/agent-core/agent";
@@ -18,6 +19,7 @@ import listStoryFilesDescription from "./prompts/tool-list-story-files.md" with 
 import readStoryFileDescription from "./prompts/tool-read-story-file.md" with { type: "text" };
 import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with { type: "text" };
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
+import runLocalShellDescription from "./prompts/tool-run-local-shell.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
 import webFetchDescription from "./prompts/tool-web-fetch.md" with { type: "text" };
 import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
@@ -167,6 +169,12 @@ const editStoryFileSchema = z.object({
 	replace_all: z.boolean().optional(),
 });
 
+const runLocalShellSchema = z.object({
+	command: z.string().min(1).max(8_000),
+	timeout_ms: z.number().int().min(1_000).max(600_000).optional(),
+	cwd: z.string().max(500).optional(),
+});
+
 type AgentMode = "story" | "delegate" | "compact";
 
 export interface YemuModelConfig {
@@ -270,6 +278,7 @@ export interface StoryAgentCallbacks {
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
+	localShellWorkspace?: string;
 	signal?: AbortSignal;
 }
 
@@ -330,6 +339,8 @@ interface ToolState {
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
 	canFetchWeb: boolean;
 	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
+	canRunLocalShell: boolean;
+	localShellWorkspace?: string;
 }
 
 const questionTopicPatterns: Array<[string, RegExp]> = [
@@ -851,6 +862,101 @@ async function resolveSkillFile(
 	return { skillName, filePath: realRequested };
 }
 
+const LOCAL_SHELL_DEFAULT_TIMEOUT_MS = 120_000;
+const LOCAL_SHELL_MAX_OUTPUT_CHARS = 60_000;
+const LOCAL_SHELL_BLOCKED_PATTERNS: RegExp[] = [
+	/:\(\)\s*\{[^}]*\|\s*:[^}]*&[^}]*\}/, // fork bomb
+	/\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?[a-zA-Z]*\s+(--no-preserve-root\s+)?(\/\s*|\*?\s*$|~|\$HOME|\/\*)/,
+	/\bmkfs(?:\.[a-z0-9]+)?\b/i,
+	/\bdd\b[^;|&]*\bof=\/dev\/(sd|nvme|hd|vd|mapper)/i,
+	/\b(shutdown|poweroff|reboot|halt)\b/i,
+	/\b(format|diskpart)\b/i,
+];
+
+let cachedLocalShell: { file: string; args: string[] } | undefined;
+
+function localShellInvocation(command: string): { file: string; args: string[] } {
+	if (!cachedLocalShell) {
+		if (process.platform === "win32") {
+			for (const candidate of ["bash.exe", "bash", "C:\\Program Files\\Git\\bin\\bash.exe"]) {
+				const probe = spawnSync(candidate, ["-lc", "true"], { stdio: "ignore", windowsHide: true });
+				if (!probe.error) {
+					cachedLocalShell = { file: candidate, args: ["-lc"] };
+					break;
+				}
+			}
+			cachedLocalShell ??= { file: process.env.COMSPEC || "cmd.exe", args: ["/d", "/s", "/c"] };
+		} else {
+			cachedLocalShell = { file: process.env.SHELL || "sh", args: ["-c"] };
+		}
+	}
+	return { file: cachedLocalShell.file, args: [...cachedLocalShell.args, command] };
+}
+
+interface LocalShellResult {
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+	durationMs: number;
+	timedOut: boolean;
+}
+
+function capShellOutput(text: string): string {
+	return text.length > LOCAL_SHELL_MAX_OUTPUT_CHARS
+		? `…（输出过长，仅保留尾部 ${LOCAL_SHELL_MAX_OUTPUT_CHARS} 字符）\n${text.slice(-LOCAL_SHELL_MAX_OUTPUT_CHARS)}`
+		: text;
+}
+
+function executeLocalShellCommand(
+	command: string,
+	cwd: string,
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+): Promise<LocalShellResult> {
+	return new Promise((resolve, reject) => {
+		const invocation = localShellInvocation(command);
+		const child = spawn(invocation.file, invocation.args, {
+			cwd,
+			env: { ...process.env, STORY_WORKSPACE: cwd, STORY_SKILLS_DIR: skillsRoot },
+			windowsHide: true,
+		});
+		const startedAt = Date.now();
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			if (!settled) {
+				timedOut = true;
+				child.kill("SIGKILL");
+			}
+		}, timeoutMs);
+		const finish = (exitCode: number | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			resolve({ exitCode, stdout, stderr, durationMs: Date.now() - startedAt, timedOut });
+		};
+		const onAbort = () => child.kill("SIGKILL");
+		child.stdout?.on("data", (chunk) => {
+			if (stdout.length < LOCAL_SHELL_MAX_OUTPUT_CHARS * 2) stdout += chunk.toString();
+		});
+		child.stderr?.on("data", (chunk) => {
+			if (stderr.length < LOCAL_SHELL_MAX_OUTPUT_CHARS * 2) stderr += chunk.toString();
+		});
+		child.on("error", (error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			reject(error);
+		});
+		child.on("close", (code) => finish(code));
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[] {
 	const readTool: AgentTool<typeof readStorySkillSchema, { path: string }> = {
 		name: "read_story_skill",
@@ -1057,12 +1163,48 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
+	const localShellTool: AgentTool<typeof runLocalShellSchema, { exitCode: number | null; durationMs: number }> = {
+		name: "run_local_shell",
+		label: "运行本地命令",
+		description: runLocalShellDescription.trim(),
+		parameters: runLocalShellSchema,
+		loadMode: "essential",
+		approval: "exec",
+		async execute(_toolCallId, params, signal) {
+			if (!state.canRunLocalShell || !state.localShellWorkspace) {
+				throw new Error("当前环境未开放本地命令执行");
+			}
+			const command = params.command.trim();
+			const blocked = LOCAL_SHELL_BLOCKED_PATTERNS.find((pattern) => pattern.test(command));
+			if (blocked) throw new Error("该命令存在不可逆风险，已拒绝执行；请改用更具体、影响范围更小的命令");
+			const workspace = state.localShellWorkspace;
+			const cwd = params.cwd ? path.resolve(workspace, params.cwd) : workspace;
+			await fs.mkdir(workspace, { recursive: true });
+			const stat = await fs.stat(cwd).catch(() => null);
+			if (!stat?.isDirectory()) throw new Error(`工作目录不存在：${cwd}`);
+			const timeoutMs = params.timeout_ms ?? LOCAL_SHELL_DEFAULT_TIMEOUT_MS;
+			const result = await executeLocalShellCommand(command, cwd, timeoutMs, signal);
+			const sections = [
+				`exit_code: ${result.timedOut ? "timeout" : result.exitCode ?? "unknown"}`,
+				`duration_ms: ${result.durationMs}`,
+			];
+			if (result.stdout.trim()) sections.push(`stdout:\n${capShellOutput(result.stdout.trim())}`);
+			if (result.stderr.trim()) sections.push(`stderr:\n${capShellOutput(result.stderr.trim())}`);
+			return {
+				content: [{ type: "text", text: sections.join("\n") }],
+				details: { exitCode: result.exitCode, durationMs: result.durationMs },
+				isError: result.timedOut || (result.exitCode ?? 0) !== 0,
+			};
+		},
+	};
+
 	return [
 		readTool,
 		...(state.canFetchWeb ? [fetchTool] : []),
 		listFilesTool,
 		readFileTool,
 		...(state.canMutateStoryFiles ? [writeFileTool, editFileTool] : []),
+		...(state.canRunLocalShell ? [localShellTool] : []),
 		inputTool,
 		submitTool,
 	];
@@ -1318,6 +1460,12 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
 					"allow"),
 		fetchWeb: request.callbacks?.fetchWeb,
+		canRunLocalShell:
+			request.mode === "story" &&
+			String((request.payload.tool_policy as Record<string, unknown> | undefined)?.localShell ?? "deny") ===
+				"allow" &&
+			Boolean(request.callbacks?.localShellWorkspace),
+		localShellWorkspace: request.callbacks?.localShellWorkspace,
 	};
 	const requiredStoryFiles = toolState.canMutateStoryFiles
 		? storyFileMutationRequirement(request.message, request.payload)

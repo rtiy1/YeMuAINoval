@@ -73,8 +73,29 @@ test('agent payload enforces a bounded permission policy', () => {
   assert.equal(payload.tool_policy.externalSearch, 'allow')
   assert.equal(payload.tool_policy.mutateStoryData, 'propose')
   assert.equal(payload.tool_policy.deleteStoryData, 'deny')
+  assert.equal(payload.tool_policy.localShell, process.env.AUTH_MODE === 'local' ? 'allow' : 'deny')
   assert.match(payload.attached_files[0].content, /灯塔每晚闪三次/)
   assert.equal(payload.writing_context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
+})
+
+test('local shell capability is server-controlled and denied outside local mode', () => {
+  const original = process.env.AUTH_MODE
+  try {
+    process.env.AUTH_MODE = 'local'
+    const localPayload = enrichStoryAgentPayload(db, 'user-1', {
+      project_id: project.id, tool_policy: { localShell: 'deny' },
+    }, 'test')
+    assert.equal(localPayload.tool_policy.localShell, 'allow')
+
+    process.env.AUTH_MODE = 'web'
+    const webPayload = enrichStoryAgentPayload(db, 'user-1', {
+      project_id: project.id, tool_policy: { localShell: 'allow' },
+    }, 'test')
+    assert.equal(webPayload.tool_policy.localShell, 'deny')
+  } finally {
+    if (original === undefined) delete process.env.AUTH_MODE
+    else process.env.AUTH_MODE = original
+  }
 })
 
 test('agent file reads are scoped to the current user and project', () => {

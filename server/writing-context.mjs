@@ -344,6 +344,7 @@ export function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
     externalSearch: requestedPolicy.externalSearch === 'allow' ? 'allow' : 'deny',
     mutateStoryData: requestedPolicy.mutateStoryData === 'allow' ? 'allow' : 'propose',
     deleteStoryData: 'deny',
+    localShell: process.env.AUTH_MODE === 'local' ? 'allow' : 'deny',
   }
   return { ...payload, attached_files: attachedFiles, writing_context: writingContext, tool_policy: toolPolicy }
 }
