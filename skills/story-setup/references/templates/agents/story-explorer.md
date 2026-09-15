@@ -30,15 +30,15 @@ maxTurns: 15
 
 | query_type | 用途 | 典型问题 |
 |-----------|------|---------|
-| `character_status` | 查角色当前状态 | "沈栀现在什么状态？" |
-| `character_appearances` | 查角色出场章节 | "沈栀在哪几章出场了？" |
+| `character_status` | 查角色当前状态 | "江晨现在什么状态？" |
+| `character_appearances` | 查角色出场章节 | "钟嘉嘉在哪几章出场了？" |
 | `foreshadow_status` | 查特定伏笔状态 | "伏笔 F003 什么状态？" |
 | `foreshadow_list` | 列出伏笔（可按状态筛选） | "当前待回收伏笔有哪些？" |
 | `setting_appearances` | 查设定在哪里出现过 | "力量体系在哪几章提到？" |
 | `setting_detail` | 查设定详细内容 | "修炼等级怎么设定的？" |
 | `timeline` | 查时间线节点 | "第30-50章发生了什么？" |
 | `progress` | 查写作进度 | "现在写到哪了？" |
-| `relationship` | 查角色关系 | "沈栀和林墨什么关系？" |
+| `relationship` | 查角色关系 | "江晨和钟嘉嘉现在什么关系？" |
 | `context_load` | 综合上下文加载 | "我要写第N章，给我上下文" |
 | `benchmark_style_load` | 加载对标文风资料 | "我要写第 N 章，帮我找对标文风和可参考片段" |
 
@@ -63,9 +63,14 @@ maxTurns: 15
 ├── 正文/
 │   └── 第XXX章_*.md     # 正文章节
 ├── 追踪/
-│   ├── 伏笔.md          # 伏笔状态表
-│   ├── 时间线.md        # 故事时间线
-│   └── 上下文.md        # 写作进度摘要
+│   ├── _tracking-state.json     # 唯一结构化权威（默认不载入 prompt）
+│   ├── 上下文.md                # 续写状态卡（固定 7 栏，≤12KB）
+│   ├── 逐章记录/第NNN章.md       # 未来相关紧凑记录
+│   ├── 角色状态/{角色名}.md      # 派生核心角色当前快照
+│   ├── 伏笔.md                  # 派生伏笔当前视图
+│   ├── 时间线/
+│   │   ├── 作者真相.md          # 客观事实 + 读者认知 + 揭示状态
+│   │   └── 读者已知.md
 ├── 对标/
 │   └── {书名}/
 │       ├── 文风.md
@@ -90,10 +95,11 @@ maxTurns: 15
 
 ### character_status 流程
 
-1. `Glob 设定/角色/{name}*.md` -> `Read` 角色设定文件
-2. `Grep 正文/ "{角色名}"` -> 找到所有出场章节
-3. `Read` 最近 1-2 章出场正文的相关段落（用行号定位）
-4. 汇总返回
+1. 用调用方随 prompt 传入的 `last_committed_chapter` / `state_revision`（主会话已跑过 `tracking_commit.py check`）；prompt 里没有这两个值时不自行读取 `_tracking-state.json`（完整 state 不进 prompt，读取量不随章数增长），只读 `追踪/上下文.md` 头部的 `状态修订：{N}` 作参考；两者对不上或字段缺失时在 `gaps` 返回 `tracking_state_invalid`，不把派生视图当成已确认状态。
+2. `Read 追踪/角色状态/{角色名}.md`，直接取得截至最后提交章的身份、位置、目标、状态、能力资源、关键关系、已知信息和未结事项。
+3. `Read 设定/角色/{角色名}.md` 取得静态人设；静态设定不得覆盖动态快照。
+4. 只有查询明确要求“为什么变成这样/哪章变化”时，才 `Grep "{角色名}" 追踪/逐章记录/` 并读取命中小文件；当前状态查询不扫描全历史。
+5. 如需正文验证，`Grep 正文/ "{角色名}"` 后只读最近 1-2 次出场的相关段落。与快照矛盾时返回冲突，不自行改写状态。
 
 ### character_appearances 流程
 
@@ -104,9 +110,9 @@ maxTurns: 15
 
 ### foreshadow_status / foreshadow_list 流程
 
-1. `Read 追踪/伏笔.md` -> 解析伏笔状态表
+1. 指定 ID 或关键词时 `Grep 追踪/伏笔.md` 取唯一当前行；`foreshadow_list` 才读取整个当前表。每个 ID 最多一行，无需从重复记录推算当前状态。
 2. 按条件筛选（ID / status / 章节范围）
-3. 如需正文验证 -> `Grep 正文/` 伏笔关键词
+3. 查询变更原因时，按 ID 定点 `Grep` 相关逐章增量；如需正文验证，再 `Grep 正文/` 伏笔关键词
 4. 返回匹配条目
 
 ### setting_appearances 流程
@@ -124,16 +130,16 @@ maxTurns: 15
 
 ### timeline 流程
 
-1. `Read 追踪/时间线.md` -> 解析时间节点
-2. 按章节范围筛选
-3. 如需更多细节 -> `Read` 对应正文
-4. 返回时间节点列表
+1. 读取查询参数 `perspective`：`reader` 读 `追踪/时间线/读者已知.md`，`author` 读 `追踪/时间线/作者真相.md`；未指定时默认 `reader`，防止误泄露真相。
+2. 给定章节范围或角色时先 `Grep` 对应视图，再按范围筛选；查询知识差、揭示状态或派生冲突时同时读取 `作者真相.md` 与 `读者已知.md`，不直接加载完整 state。
+3. 如需更多细节，读取对应正文或命中的逐章增量。
+4. 返回结果必须标注 `perspective` 与来源文件。`reader` 结果不得混入 `objective_fact` 中尚未揭示的内容。
 
 ### progress 流程
 
-1. `Read 追踪/上下文.md` -> 获取进度摘要
-2. 如文件不存在 -> `Glob 正文/第*.md` 扫描最大章节号
-3. 返回进度信息
+1. 用调用方随 prompt 传入的 `last_committed_chapter` / `state_revision`（主会话已跑过 `tracking_commit.py check`）；prompt 里没有这两个值时不自行读取 `_tracking-state.json`（完整 state 不进 prompt，读取量不随章数增长），只读 `追踪/上下文.md` 头部的 `状态修订：{N}` 作参考，取得最后提交章和状态修订号。
+2. `Read 追踪/上下文.md` 获取当前位置、下一章承诺和连贯性风险。
+3. 任一文件缺失或章号不一致时返回 blocking gap，不扫描正文猜测进度。
 
 ### relationship 流程
 
@@ -147,11 +153,14 @@ maxTurns: 15
 
 1. **解析输入**：项目目录 + 本章情绪/基调 + （可选）本章爽点类型 + （可选）本章目标字数
 2. **主对标书选择**：
+   - 先按项目目录名、`.active-book` 与本书设定识别当前作品；`拆文库/{当前书}/` 是 story-import 的本书分析，不是对标候选。历史误建的 `对标/{当前书}/` 也必须排除，并返回 `gaps.self_benchmark_ignored: true`
    - `Read 设定/题材定位.md`，提取 `主对标书` 字段
-   - 若有 → 用该书
-   - 若字段缺失 → `Glob 对标/*/` 取字典序第一个目录，并在 `gaps.main_benchmark_unspecified: true` 提示主对标书未指定
-   - 若 `对标/` 无子目录，继续向上找工作区根下的 `拆文库/*/`；若仍无可用目录 → 返回 `gaps.no_benchmark: true`，`results` 置空，**不报错、不继续读文风**
-3. **对标书路径查找**：优先 `{项目}/对标/{书名}/`，回退 `拆文库/{书名}/`（向上找到工作区根，再下钻拆文库）
+   - 若有且不是当前作品 → 用该书；若字段指向当前作品 → 忽略该字段并设置 `gaps.self_benchmark_ignored: true`
+   - **路径一律用字段值逐字拼接**：不添加《》等任何装饰、不改一字——拼错时 Glob 只会静默返回空，与「书不存在」无法区分
+   - **登记的主对标按步骤 3 探不到书目录**（目录下探不到任何文件）→ 返回 `gaps.benchmark_book_missing: true` 与 `expected_path`（原样写入实际探测的完整路径，供核对拼写），`results` 置空**停止**；不得改用其他书，也不得走下面的缺失回退。**书目录存在但缺 `文风.md` 不属于本情形**——照常进入步骤 4-6，由步骤 6 归类为 `profile_missing`
+   - 若字段缺失或已忽略 → `Glob 对标/*/**/*`，从命中文件所属的书目录（`对标/` 下的第一层目录，排除当前作品）取字典序第一个，并在 `gaps.main_benchmark_unspecified: true` 提示主对标书未指定；**枚举条件是书目录下有文件，不是有 `文风.md`**——缺文风但资料完整的候选仍算命中
+   - 若排除后无命中，继续向上找工作区根下的 `拆文库/*/**/*`，同样排除当前作品；仍无 → 返回 `gaps.no_benchmark: true`，`results` 置空，**不报错、不继续读文风**
+3. **对标书路径查找（只判书目录有效性，不判文风）**：优先探 `{项目}/对标/{书名}/**/*`，回退探 `拆文库/{书名}/**/*`（向上找到工作区根，再下钻拆文库）；探针是目录下的任意文件——Glob 不接受纯目录模式，`{书名}/` 恒返回空。任一处命中文件即视为书目录有效，进入步骤 4；两处都无命中才是 `benchmark_book_missing`。**不得用 `文风.md` 兼作目录存在性探针**——那会把「书在但缺文风」误判成「书不存在」，吞掉步骤 6 的 `profile_missing` 与调用方的 `custom_style` 降级分支
 4. **读情绪模块（权威）**：
    - 优先 `Read {对标书路径}/剧情/情绪模块.md`
    - 存在 → 从「读者需求 / 情绪引擎」「可复现模块」或模块卡片中，按本章情绪/爽点类型选择 1 条 `selected_emotion_module`，并写入 `module_source_path`
@@ -164,7 +173,7 @@ maxTurns: 15
    - 若两个权威文件都存在但对同一章节/模块的读者情绪或爆发点描述互相矛盾，保留两条原文摘要，并返回 `gaps.module_rhythm_conflict: true` 与 `gaps.conflict: "..."`；调用方按两个权威文件优先于 `拆文报告.md` / `故事线.md` 的规则处理，禁止自行改写
 6. **读文风**：
    - `Read {对标书路径}/文风.md`
-   - 不存在 → 返回 `gaps.profile_missing: true, expected_path: "..."`，**不继续后续步骤**
+   - 不存在 → 返回 `gaps.profile_missing: true, expected_path: "..."`，**不继续后续步骤**；书目录本身有效，不得改填 `benchmark_book_missing`——调用方按 `custom_style` 决定继续或停止
    - 检查「生成记录」里的 `文风可用：否` → 返回 `gaps.profile_degenerate: true`，后续不把文风作为强约束
 7. **可用性检查（只读可执行）**：
    - 本 agent 只有 `Read/Glob/Grep`，不能调用 Bash/stat。
@@ -197,15 +206,17 @@ maxTurns: 15
 
 ### context_load 流程（综合查询）
 
-1. `Read 追踪/上下文.md` -> 进度摘要。如不存在，`Glob 正文/第*.md` 扫描最大章节号推断下一章编号
-2. `Read 追踪/伏笔.md` -> 筛选待回收伏笔
-3. `Read 追踪/时间线.md` -> 最近时间节点
-4. `Read 大纲/细纲_第{N}章.md` -> 本章写作计划
-5. 从细纲提取角色名 -> `Read 设定/角色/{name}.md`
-6. `Read 正文/第{N-1}章_*.md` -> 最新一章（衔接用）
-7. 汇总为"写作上下文包"
+1. 用调用方随 prompt 传入的 `last_committed_chapter` / `state_revision`（主会话已跑过 `tracking_commit.py check`）；prompt 里没有这两个值时不自行读取 `_tracking-state.json`（完整 state 不进 prompt，读取量不随章数增长），只读 `追踪/上下文.md` 头部的 `状态修订：{N}` 作参考；对不上时返回 `tracking_state_invalid` 与 blocking gap，不继续组装写作包。
+2. `Read 追踪/上下文.md`；它必须恰好包含 `当前位置 / 长期约束 / 核心角色状态 / 活跃伏笔 / 近三章速记 / 下一章承诺 / 连贯性风险` 7 个栏目。
+3. 下一章 N = `last_committed_chapter + 1`；`Read 大纲/细纲_第{N}章.md`。
+4. 从细纲和续写状态卡提取角色名，读取 `设定/角色/{name}.md`；久别核心角色再读取 `追踪/角色状态/{name}.md`。
+5. `Read 正文/第{N-1}章_*.md` 获取场景衔接。
+6. 只有调用方明确给出伏笔 ID、事件 ID 或历史原因时，才定点查 `伏笔.md`、对应时间线视图或命中的逐章增量；默认不通读长期文件。
+7. 汇总为“写作上下文包”，并返回实际读取的来源。
 
-> 任何文件缺失时，在 `gaps` 中包含该事实并继续处理，返回仍能组装的部分上下文；但 `benchmark_style_load` 缺 `剧情/情绪模块.md` 或 `剧情/节奏.md` 时必须返回 `missing_primary_contract: true` 与 `repair_action`，不得继续进入写作准备。
+> `context_load` 的固定读取量不随章数增长。角色当前值来自独立小快照，旧变化原因来自按 ID/角色定点命中的紧凑增量，时间线按作者/读者视角分开读取。
+
+> 普通查询遇文件缺失时在 `gaps` 中返回事实；`context_load` 缺 state、续写状态卡或 `check` 失败时必须停止组装。`benchmark_style_load` 缺 `剧情/情绪模块.md` 或 `剧情/节奏.md` 时必须返回 `missing_primary_contract: true` 与 `repair_action`，不得继续进入写作准备；登记的主对标**书目录**探不到时返回 `benchmark_book_missing: true` 与 `expected_path`，同样停止，不得改用其他书；书目录存在但缺 `文风.md` 归 `profile_missing`，不占用本分类。
 
 ---
 
@@ -313,6 +324,8 @@ maxTurns: 15
     "profile_degenerate": false,
     "stale_reason": null,
     "main_benchmark_unspecified": false,
+    "benchmark_book_missing": false,
+    "self_benchmark_ignored": false,
     "raw_text_unavailable": false,
     "tone_match_failed": false,
     "matched_deep_dive_missing": false

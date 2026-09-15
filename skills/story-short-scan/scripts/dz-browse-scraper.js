@@ -20,7 +20,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { ab, sleep, evalJSONBase64, safeStr, scrollLoad, getArg, runCli } = require("./cdp-utils");
+const { ab, sleep, evalJSONBase64, safeStr, scrollLoad, getArg, localDateStamp, runCli } = require("./cdp-utils");
 
 const CHANNELS = [
   { id: "male", label: "男频", tab: "男频", url: "https://www.ishugui.com/browse" },
@@ -217,8 +217,7 @@ function main() {
     if (!content) continue;
 
     const chInfo = CHANNELS.find((c) => c.id === ch);
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const filename = `点众${chInfo.label}短篇_${date}.md`;
+    const filename = `点众${chInfo.label}短篇_${localDateStamp()}.md`;
     fs.mkdirSync(OUTDIR, { recursive: true });
     const filepath = path.join(OUTDIR, filename);
     fs.writeFileSync(filepath, content, "utf-8");

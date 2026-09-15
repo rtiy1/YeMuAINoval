@@ -6,7 +6,7 @@ description: 多对标跨书召回
 # 跨书召回
 
 ## 触发
-项目根 `拆文库/` 或项目 `对标/` ≥2 本启用。主对标书取 `设定/题材定位.md`「主对标书」字段（在「对标登记」或导入生成的「对标书清单」段内，字段名一致），缺失则用字典序第一本（对 `对标/` 目录取字典序；无 `对标/` 则对 `拆文库/`）并在 `gaps.main_benchmark_unspecified: true` / 导入报告中提示用户补。
+先按当前项目目录名、`.active-book` 与本书设定识别当前作品，排除同名或来源指向当前正文的 `拆文库/{当前书}/` 与历史误建的 `对标/{当前书}/`；它们是本书导入分析，不是跨书样本。排除后，项目根 `拆文库/` 或项目 `对标/` ≥2 本才启用。主对标书取 `设定/题材定位.md`「主对标书」字段，缺失则从排除后的候选中取字典序第一本（优先 `对标/`，否则 `拆文库/`），并在 `gaps.main_benchmark_unspecified: true` 中提示用户补。
 
 > **数量规则**：主对标书最多 1 本，用于文风和最终正文输入；副对标 / 参考对标**不限制登记数量**。执行时按题材相关性、引用强度和阶段预算逐本召回；超过预算时裁剪条目，不删除书目。
 
@@ -54,9 +54,9 @@ description: 多对标跨书召回
 
 | 拆文字段 | 含义 | 写作参考 |
 |---------|------|---------|
-| `beats` | 结构段（开端/发展/高潮/结局） | 当前 skill 的题材结构文件；短篇优先 genre-styles 题材包 / `genre-writing-formulas.md` |
-| `hooks` | 钩子数 | `hooks-chapter.md` / `hooks-suspense.md`；短篇开头密度补 short-craft |
-| `setup_clues` | 反转铺垫线索 | `reversal-toolkit.md` |
-| `character_archetypes` | 反差人物 | 当前 skill 的人物/题材风格文件；短篇优先 genre-styles 题材包 / genre-writing-techniques |
-| `reusable_structures` | 可复用手法 | `genre-writing-formulas.md`；短篇可补 short-craft |
-| `reversal_type` | 反转类型（7 枚举） | `reversal-toolkit.md` 对应骨架 |
+| `beats` | 结构段（开端/发展/高潮/结局） | `outline-methods.md` + 当前 `genre-prose-cards/` 题材卡 |
+| `hooks` | 钩子数 | `long-chapter-hooks.md` / `long-suspense.md` |
+| `setup_clues` | 反转铺垫线索 | `long-reversal.md` |
+| `character_archetypes` | 反差人物 | `character-basics.md` / `character-design-methods.md` + 当前题材卡 |
+| `reusable_structures` | 可复用手法 | `outline-methods.md` / `plot-core-methods.md`，按结构功能选择 |
+| `reversal_type` | 反转类型（7 枚举） | `long-reversal.md` 对应骨架 |

@@ -32,12 +32,26 @@ const ADJACENT_MIN_LEN = 8;
 const PLACEHOLDER_PATTERNS = [
   // 「作为AI」需在自指位置（其后是断句/我/无法… 或句末），避免误报「人工智能时代的产物」这类
   // 复合名词；并对对话行豁免（系统流/AI 伴侣题材里 AI 角色台词「作为AI，我会保护你」是合法对话）。
-  { re: /作为(一个)?(AI|人工智能|大?语言模型|智能助手|聊天助手)(?=[，,。、；;：:！!？?\s）)」』"】]|我|无法|不能|没法|$)/, label: '元信息泄漏（AI 自指）', hard: false },
+  // 型号后缀（AI语言模型/AI助手/人工智能语言模型/AI模型/AI大模型）必须可选吃掉：否则前视断言紧跟
+  // 在「AI」后面看到的是「语」/「助」/「模」，最典型的退化开场整类漏检（与写后网 story_hook_core.js
+  // SOFT_PATTERNS / story_codex_hook.py _NET_SOFT_PATTERNS 同语义）。
+  { re: /作为(一个)?(AI|人工智能|大?语言模型|智能助手|聊天助手)(?:语言模型|大?模型|助手|机器人)?(?=[，,。、；;：:！!？?\s）)」』"】]|我|无法|不能|没法|$)/, label: '元信息泄漏（AI 自指）', hard: false },
   { re: /�/, label: '乱码（替换字符 �）', hard: true },
   { re: /^(Sure|Certainly|Here'?s|As an AI|I (?:cannot|can't|am unable|apologize))/, label: '元信息泄漏（英文 AI 腔）', hard: true },
   { re: /[（(](此处|以下|这里|下文|后续)?\s*(省略|略)(去|过)?[^）)]{0,10}[）)]/, label: '占位符（括号省略）', hard: true },
   { re: /(未完待续|TODO|占位符|placeholder)/, label: '占位符', hard: true },
   { re: /我(无法|不能)(继续(写|创作|生成|下去)|生成(内容|文本|正文)?|创作|续写|完成(这个|本)?(章|篇|创作|请求))/, label: '元信息泄漏（生成拒绝语）', hard: false },
+];
+
+const QUOTED_SPAN_PATTERNS = [
+  /「[^」]*」/g,
+  /『[^』]*』/g,
+  /【[^】]*】/g,
+  /“[^”]*”/g,
+  // 单引号须成对；词内撇号（don't、O’Connor）不作为开闭引号。
+  /(?<![A-Za-z0-9_])‘(?:[^’]|(?<=[A-Za-z0-9_])’(?=[A-Za-z0-9_]))*(?!(?<=[A-Za-z0-9_])’[A-Za-z0-9_])’/g,
+  /"[^"]*"/g,
+  /(?<![A-Za-z0-9_])'(?:[^']|(?<=[A-Za-z0-9_])'(?=[A-Za-z0-9_]))*(?!(?<=[A-Za-z0-9_])'[A-Za-z0-9_])'/g,
 ];
 
 // 工程词泄漏（正文元信息扫描的确定性版）：弱模型把写作工程词漏进正文，破坏代入感
@@ -147,21 +161,23 @@ function isContent(trimmed) {
   return trimmed && !trimmed.startsWith('#') && !/^-{3,}$/.test(trimmed);
 }
 
-function isDialogueLike(trimmed) {
-  return /[“”"'‘’「」『』【】]/.test(trimmed);
+// 等长遮住成对引号内的内容以保留列号；未闭合引号不豁免。
+function maskQuotedSpans(text) {
+  let masked = text;
+  for (const pattern of QUOTED_SPAN_PATTERNS) {
+    masked = masked.replace(pattern, (match) => ' '.repeat(match.length));
+  }
+  return masked;
 }
 
 // 去掉成对引号内的片段（台词/系统词/引用物件），只留引号外叙述。复读判定用：重复台词是体裁
 // 手法（豁免），但「叙述 + 引号内物件/短台词」混合行里引号外叙述的复读仍是退化，不能整行豁免。
 function stripQuoted(text) {
-  return text
-    .replace(/「[^」]*」/g, '')
-    .replace(/『[^』]*』/g, '')
-    .replace(/【[^】]*】/g, '')
-    .replace(/“[^”]*”/g, '')
-    .replace(/‘[^’]*’/g, '')
-    .replace(/"[^"]*"/g, '')
-    .replace(/'[^']*'/g, '');
+  let stripped = text;
+  for (const pattern of QUOTED_SPAN_PATTERNS) {
+    stripped = stripped.replace(pattern, '');
+  }
+  return stripped;
 }
 
 function visibleLength(text) {
@@ -250,18 +266,19 @@ function findPlaceholders(content) {
   const findings = [];
   for (const { trimmed, lineNo } of content) {
     if (!isContent(trimmed)) continue;
-    const dialogue = isDialogueLike(trimmed);
+    const outsideQuotes = maskQuotedSpans(trimmed);
     for (const { re, label, hard } of PLACEHOLDER_PATTERNS) {
-      if (!hard && dialogue) continue; // soft 拒绝语在对话行里可能是正常台词，豁免
-      const m = re.exec(trimmed);
+      // hard 信号仍扫描整行；soft 自指/拒绝语只扫描成对引号外，且遮罩等长以保留列号。
+      const m = re.exec(hard ? trimmed : outsideQuotes);
       if (m) {
+        const index = m.index || 0;
         findings.push({
           line: lineNo,
-          column: (m.index || 0) + 1,
+          column: index + 1,
           type: 'placeholder-leak',
           severity: 'blocking',
           message: `${label}：正文混入元信息/拒绝语/占位符，重写本段干净落地。`,
-          excerpt: compact(trimmed.slice(Math.max(0, (m.index || 0) - 4), (m.index || 0) + 20)),
+          excerpt: compact(trimmed.slice(Math.max(0, index - 4), index + 20)),
         });
         break; // one finding per line is enough
       }
@@ -280,17 +297,22 @@ function findMetaLeak(content) {
       // 标题行（第N章 章名，无 ## 前缀时也算）属「标题行以外的正文」之外，排除
       if (/^第[一二三四五六七八九十百千万两0-9]+章/.test(trimmed)) continue;
     }
-    const dialogue = isDialogueLike(trimmed);
-    let m = META_TIER1_RE.exec(trimmed);
+    const outsideQuotes = maskQuotedSpans(trimmed);
+    let m = META_TIER1_RE.exec(outsideQuotes);
+    let quotedTier1 = false;
+    if (!m) {
+      m = META_TIER1_RE.exec(trimmed);
+      quotedTier1 = Boolean(m);
+    }
     if (m) {
       // tier1 纯工程词正文里几乎永不合法→blocking；但写手/编剧题材里角色在故事内真讨论创作，
-      // 台词（对话行）里可能合法，降级为 advisory（仍报告，交人/LLM 判，不强制回炉）。
+      // 且命中实际位于成对引号内时可能合法，降级为 advisory。同一行别处出现引号不影响判定。
       findings.push({
         line: lineNo,
         column: m.index + 1,
         type: 'meta-leak',
-        severity: dialogue ? 'advisory' : 'blocking',
-        message: `工程词泄漏：「${m[0]}」是写作流水线术语，正文里不该出现；改成角色/场景内表达。${dialogue ? '例外：角色为作者/编剧、在故事内真实讨论创作时，台词里可能合法。' : ''}`,
+        severity: quotedTier1 ? 'advisory' : 'blocking',
+        message: `工程词泄漏：「${m[0]}」是写作流水线术语，正文里不该出现；改成角色/场景内表达。${quotedTier1 ? '例外：角色为作者/编剧、在故事内真实讨论创作时，台词里可能合法。' : ''}`,
         excerpt: compact(trimmed.slice(Math.max(0, m.index - 6), m.index + 18)),
       });
       continue; // tier1 命中即可，不再叠 tier2

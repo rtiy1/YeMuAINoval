@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { loadStyleWhitelist, styleSpans } = require('./style-whitelist.js');
 const path = require('path');
 
 const USAGE = `Usage: node normalize-punctuation.js [--check] [--quote-mode keep|ascii|yan] <file...>
@@ -9,6 +10,7 @@ const USAGE = `Usage: node normalize-punctuation.js [--check] [--quote-mode keep
 Normalize正文 punctuation deterministically:
   - replace ellipses, em dashes, and double hyphens with Chinese punctuation
   - remove markdown divider lines (---) from正文
+  - preserve pause punctuation covered by book-local .deslop-whitelist literals
   - keep quote style by default; convert quotes only when explicitly requested
 `;
 
@@ -61,7 +63,10 @@ for (const file of options.files) {
     continue;
   }
 
-  const result = normalizeDocument(input, options.quoteMode);
+  let whitelist;
+  try { whitelist = loadStyleWhitelist(fullPath); }
+  catch (error) { die(`${file}: unable to read .deslop-whitelist (${error.message})`); }
+  const result = normalizeDocument(input, options.quoteMode, whitelist);
   totalFindings += result.findings.length;
 
   if (options.check) {
@@ -94,31 +99,48 @@ function die(message) {
   process.exit(2);
 }
 
-function normalizeDocument(input, quoteMode) {
-  const newline = input.includes('\r\n') ? '\r\n' : '\n';
-  const trailingNewline = input.endsWith('\n');
-  const lines = input.split(/\r?\n/);
-  if (trailingNewline) lines.pop();
+function normalizeDocument(input, quoteMode, whitelist) {
+  const { lines, endings } = splitLinesKeepingEndings(input);
 
   const findings = [];
   const outputLines = [];
   let fence = null;
   let inFrontMatter = hasYamlFrontMatter(lines);
   let quoteOpen = false;
+  let commentOpen = false;
+  let commentStart = null;
+  const commentCloseAhead = new Array(lines.length + 1).fill(false);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    commentCloseAhead[index] = lines[index].includes('-->') || commentCloseAhead[index + 1];
+  }
 
   for (let index = 0; index < lines.length; index += 1) {
     const lineNo = index + 1;
+    const ending = endings[index];
     let line = lines[index];
     const trimmed = line.trim();
 
+    // 未闭合的 `<!--` 不能把余下整篇伪装成注释。确认 EOF 前已无 `-->` 时，
+    // 在起始位置具名报错，并从当前行恢复正文扫描；起始符所在行仍原样保护。
+    if (commentOpen && !commentCloseAhead[index]) {
+      findings.push({
+        line: commentStart?.line || lineNo,
+        column: commentStart?.column || 1,
+        type: 'html-comment-unclosed',
+        message: 'HTML 注释未闭合；后续内容仍按正文检查。',
+      });
+      commentOpen = false;
+      commentStart = null;
+    }
+
     if (inFrontMatter) {
-      outputLines.push(line);
+      outputLines.push(line + ending);
       if (index > 0 && trimmed === '---') inFrontMatter = false;
       continue;
     }
 
     if (fence) {
-      outputLines.push(line);
+      outputLines.push(line + ending);
       if (isClosingFence(line, fence)) fence = null;
       continue;
     }
@@ -126,11 +148,12 @@ function normalizeDocument(input, quoteMode) {
     const openingFence = parseOpeningFence(line);
     if (openingFence) {
       fence = openingFence;
-      outputLines.push(line);
+      outputLines.push(line + ending);
       continue;
     }
 
-    if (trimmed === '---') {
+    // 跨行 HTML 注释里的 `---` 是注释内容，不是正文分隔线。
+    if (trimmed === '---' && !commentOpen) {
       findings.push({
         line: lineNo,
         column: line.indexOf('-') + 1,
@@ -140,22 +163,62 @@ function normalizeDocument(input, quoteMode) {
       continue;
     }
 
-    const punctuationResult = normalizePausePunctuation(line, lineNo);
+    const commentOpenBefore = commentOpen;
+    const punctuationResult = normalizePausePunctuation(line, lineNo, commentOpen, whitelist);
     findings.push(...punctuationResult.findings);
     line = punctuationResult.line;
+    commentOpen = punctuationResult.commentOpen;
+    if (!commentOpenBefore && commentOpen) {
+      commentStart = { line: lineNo, column: Math.max(1, line.lastIndexOf('<!--') + 1) };
+    } else if (!commentOpen) {
+      commentStart = null;
+    }
 
     const quoteResult = normalizeQuotes(line, quoteMode, quoteOpen, lineNo);
     findings.push(...quoteResult.findings);
     line = quoteResult.line;
     quoteOpen = quoteResult.quoteOpen;
 
-    outputLines.push(line);
+    outputLines.push(line + ending);
+  }
+
+  if (commentOpen) {
+    findings.push({
+      line: commentStart?.line || lines.length,
+      column: commentStart?.column || 1,
+      type: 'html-comment-unclosed',
+      message: 'HTML 注释未闭合；后续内容仍按正文检查。',
+    });
   }
 
   return {
-    output: outputLines.join(newline) + (trailingNewline ? newline : ''),
+    output: outputLines.join(''),
     findings,
   };
+}
+
+// 逐行记住原始行尾。整篇按「文件里出现过 \r\n」统一行尾会让一个孤立 CRLF 把全文
+// 行尾都翻成 CRLF——那是一次没人要求的全文件 diff，而 --check 对行尾一个 finding
+// 都不报，只改标点的这一步不该动它。
+function splitLinesKeepingEndings(input) {
+  const lines = [];
+  const endings = [];
+  let cursor = 0;
+
+  while (cursor < input.length) {
+    const newlineIndex = input.indexOf('\n', cursor);
+    if (newlineIndex === -1) {
+      lines.push(input.slice(cursor));
+      endings.push('');
+      break;
+    }
+    const crlf = newlineIndex > cursor && input[newlineIndex - 1] === '\r';
+    lines.push(input.slice(cursor, crlf ? newlineIndex - 1 : newlineIndex));
+    endings.push(crlf ? '\r\n' : '\n');
+    cursor = newlineIndex + 1;
+  }
+
+  return { lines, endings };
 }
 
 function parseOpeningFence(line) {
@@ -175,7 +238,28 @@ function isClosingFence(line, fence) {
   return Boolean(match && match[1].length >= fence.minimumLength);
 }
 
-function normalizePausePunctuation(line, lineNo) {
+// 删空停顿符会把两侧的半角点/连字符粘成新的 `...`/`--`（`他.……..说` → `他...说`），
+// 一遍归一化留不干净，再跑一遍还会改已定稿的正文；所以反复归一化到不动点。
+// 每遍至少把一个 `…/./—/-` 换成非停顿字符，字符数严格递减，必然收敛。
+// findings 只留第一遍：同一处不重复计数，column 也仍然是原行的偏移。
+function normalizePausePunctuation(line, lineNo, commentOpen, whitelist) {
+  let current = line;
+  let findings = null;
+  let commentOpenAfter = commentOpen;
+
+  for (;;) {
+    const comments = htmlCommentSpans(current, commentOpen);
+    commentOpenAfter = comments.open;
+    const pass = normalizePausePunctuationPass(current, lineNo, comments.spans.concat(styleSpans(current, whitelist)));
+    if (findings === null) findings = pass.findings;
+    if (pass.line === current) break;
+    current = pass.line;
+  }
+
+  return { line: current, findings, commentOpen: commentOpenAfter };
+}
+
+function normalizePausePunctuationPass(line, lineNo, commentSpans) {
   const findings = [];
   const original = line;
   const pattern = /…+|\.{3,}|——|—|--+/g;
@@ -184,8 +268,11 @@ function normalizePausePunctuation(line, lineNo) {
   let match;
 
   while ((match = pattern.exec(original)) !== null) {
-    output += original.slice(lastIndex, match.index);
     const token = match[0];
+    // HTML 注释是正文里的元信息（如 `<!-- 去味:跳过 -->` 豁免标记）：`<!--`/`-->` 里的
+    // `--` 不是停顿标点，改掉它注释就散了，标记会变成读者看得见的正文。
+    if (insideSpans(match.index, match.index + token.length, commentSpans)) continue;
+    output += original.slice(lastIndex, match.index);
     const replacement = choosePauseReplacement(original, match.index, token.length);
     output += replacement;
     findings.push({
@@ -199,6 +286,38 @@ function normalizePausePunctuation(line, lineNo) {
 
   output += original.slice(lastIndex);
   return { line: output, findings };
+}
+
+// 行内 HTML 注释区间（含 `<!--`、`-->` 本身）；注释可跨行，未闭合时把状态交给下一行。
+function htmlCommentSpans(line, openBefore) {
+  const spans = [];
+  let open = openBefore;
+  let cursor = 0;
+
+  while (cursor < line.length) {
+    if (open) {
+      const close = line.indexOf('-->', cursor);
+      if (close === -1) {
+        spans.push([cursor, line.length]);
+        return { spans, open: true };
+      }
+      spans.push([cursor, close + 3]);
+      cursor = close + 3;
+      open = false;
+      continue;
+    }
+
+    const start = line.indexOf('<!--', cursor);
+    if (start === -1) break;
+    cursor = start;
+    open = true;
+  }
+
+  return { spans, open };
+}
+
+function insideSpans(start, end, spans) {
+  return spans.some(([spanStart, spanEnd]) => start < spanEnd && end > spanStart);
 }
 
 function hasYamlFrontMatter(lines) {

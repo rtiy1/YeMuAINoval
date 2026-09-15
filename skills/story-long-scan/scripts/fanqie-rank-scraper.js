@@ -20,7 +20,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { ab, sleep, evalJSONBase64, scrollLoad, getArg, runCli } = require("./cdp-utils");
+const { ab, sleep, evalJSONBase64, scrollLoad, getArg, localDateStamp, runCli } = require("./cdp-utils");
 
 // 一次详情请求的并发批大小。番茄详情页用同步 XHR 拉取，批太大会撞上
 // cdp-utils 里 ab() 的 20s 超时；超时会显式失败，这里分批是为了避免整个题材被中断。
@@ -386,6 +386,12 @@ function scrapeChannel(ch, type) {
 }
 
 function main() {
+  if (!["0", "1", "all"].includes(CHANNEL)) {
+    throw new Error(`未知 --channel: ${CHANNEL}`);
+  }
+  if (!["1", "2", "all"].includes(TYPE)) {
+    throw new Error(`未知 --type: ${TYPE}`);
+  }
   const channels = CHANNEL === "all" ? ["1", "0"] : [CHANNEL];
   const types = TYPE === "all" ? ["2", "1"] : [TYPE];
   let written = 0;
@@ -396,8 +402,7 @@ function main() {
         const content = scrapeChannel(ch, ty);
         if (!content) continue;
 
-        const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-        const filename = `番茄${channelLabel(ch)}${typeLabel(ty)}_全题材_${date}.md`;
+        const filename = `番茄${channelLabel(ch)}${typeLabel(ty)}_全题材_${localDateStamp()}.md`;
         fs.mkdirSync(OUTDIR, { recursive: true });
         const filepath = path.join(OUTDIR, filename);
         fs.writeFileSync(filepath, content, "utf-8");

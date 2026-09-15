@@ -17,7 +17,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { ab, sleep, evalJSONBase64, scrollLoad, getArg, runCli } = require("./cdp-utils");
+const { ab, sleep, evalJSONBase64, scrollLoad, getArg, localDateStamp, runCli } = require("./cdp-utils");
 
 const RANK_URL = "https://www.ciweimao.com/rank-index";
 
@@ -222,8 +222,7 @@ function main() {
         }
       }
 
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      const filename = `刺猬猫${rt.label}_${date}.md`;
+      const filename = `刺猬猫${rt.label}_${localDateStamp()}.md`;
       fs.mkdirSync(OUTDIR, { recursive: true });
       const filepath = path.join(OUTDIR, filename);
       fs.writeFileSync(filepath, lines.join("\n"), "utf-8");
