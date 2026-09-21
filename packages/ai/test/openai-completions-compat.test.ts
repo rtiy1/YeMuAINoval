@@ -2599,3 +2599,165 @@ describe("grammar tool-schema normalization (issue #5914)", () => {
 		expect(properties?.outputSchema).toBe(true);
 	});
 });
+
+describe("google proto-Schema tool normalization (OpenAI-compat)", () => {
+	// A tool shaped like the story-agent surface: closed objects
+	// (`additionalProperties: false`), a `z.record` map (`propertyNames` +
+	// schema-valued `additionalProperties`), an open `z.unknown()` field
+	// (bare `true`), bounds, a `z.union` anyOf, and an enum default — all
+	// constructs Google's proto `Schema` translation rejects.
+	const googleProbeTools: Tool[] = [
+		{
+			name: "submit_story_result",
+			description: "submit",
+			parameters: {
+				type: "object",
+				properties: {
+					status: { type: "string", enum: ["completed", "failed"], default: "completed" },
+					requirements: {
+						type: "object",
+						propertyNames: { type: "string" },
+						additionalProperties: true,
+					},
+					candidates: { type: "array", items: true, maxItems: 100 },
+					content: {
+						anyOf: [
+							{ type: "string", minLength: 1 },
+							{ type: "array", items: {} },
+						],
+					},
+				},
+				required: ["status"],
+				additionalProperties: false,
+			},
+		},
+	];
+
+	function toolParameters(payload: unknown, toolName: string): Record<string, unknown> {
+		const tools = toObject(payload)?.tools;
+		if (!Array.isArray(tools)) throw new Error("payload tools missing");
+		for (const entry of tools) {
+			const fn = getNestedObject(entry, "function");
+			if (fn?.name === toolName) {
+				const params = toObject(fn.parameters);
+				if (!params) throw new Error(`tool ${toolName} has no parameters`);
+				return params;
+			}
+		}
+		throw new Error(`tool ${toolName} not in payload`);
+	}
+
+	function probeProperty(payload: unknown, toolName: string, prop: string): Record<string, unknown> {
+		const properties = toObject(toolParameters(payload, toolName).properties);
+		const node = toObject(properties?.[prop]);
+		if (!node) throw new Error(`property ${prop} missing on ${toolName}`);
+		return node;
+	}
+
+	function googleOpenAIHostModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "openai-compatible",
+			baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+			id: "gemini-3-pro",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	function vertexOpenAIHostModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "openai-compatible",
+			baseUrl: "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/l/endpoints/openapi",
+			id: "gemini-3-pro",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	function geminiRelayModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "openai-compatible",
+			baseUrl: "https://relay.example.com/v1",
+			id: "gemini-3-pro",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	function gemmaLocalModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434/v1",
+			id: "gemma-3-27b-it",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	it("auto-detects the google flavor on Google OpenAI-compat hosts", () => {
+		expect(googleOpenAIHostModel().compat.toolSchemaFlavor).toBe("google");
+		expect(vertexOpenAIHostModel().compat.toolSchemaFlavor).toBe("google");
+	});
+
+	it("auto-detects the google flavor for gemini-family ids through relays", () => {
+		expect(geminiRelayModel().compat.toolSchemaFlavor).toBe("google");
+	});
+
+	it("keeps the grammar flavor for local gemma models (not gemini)", () => {
+		expect(gemmaLocalModel().compat.toolSchemaFlavor).toBe("grammar");
+	});
+
+	it("disables strict mode on Google-bound targets", () => {
+		expect(googleOpenAIHostModel().compat.supportsStrictMode).toBe(false);
+		expect(geminiRelayModel().compat.supportsStrictMode).toBe(false);
+	});
+
+	it("rewrites tool schemas to the proto-Schema subset on the wire", async () => {
+		const model = geminiRelayModel();
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: googleProbeTools });
+		const params = toolParameters(payload, "submit_story_result");
+
+		// Every object-level `additionalProperties` (incl. the closed-object
+		// `false`) is stripped — the proto Schema has no such field.
+		expect(JSON.stringify(params)).not.toContain("additionalProperties");
+		expect(JSON.stringify(params)).not.toContain("propertyNames");
+
+		// The open `z.unknown()` map values / array items become `{}` —
+		// never a bare boolean subschema the proto parser cannot read.
+		expect(JSON.stringify(params)).not.toContain(":true");
+		const requirements = probeProperty(payload, "submit_story_result", "requirements");
+		expect(requirements).toEqual({ type: "object", properties: {} });
+		const candidates = probeProperty(payload, "submit_story_result", "candidates");
+		expect(candidates.items).toEqual({});
+
+		// Bounds are demoted into the sibling description; the enum/default
+		// pair and the mixed-type union survive as proto-legal fields.
+		expect(candidates.maxItems).toBeUndefined();
+		expect(candidates.description).toContain("maxItems");
+		const status = probeProperty(payload, "submit_story_result", "status");
+		expect(status.enum).toEqual(["completed", "failed"]);
+		expect(status.default).toBe("completed");
+		const content = probeProperty(payload, "submit_story_result", "content");
+		expect(Array.isArray(content.anyOf)).toBe(true);
+	});
+
+	it("never sends a strict flag on Google-bound tools", async () => {
+		const model = geminiRelayModel();
+		const strictTool: Tool = {
+			name: "strict_tool",
+			description: "s",
+			strict: true,
+			parameters: {
+				type: "object",
+				properties: { a: { type: "string" } },
+				required: ["a"],
+				additionalProperties: false,
+			},
+		};
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: [strictTool] });
+		const tools = toObject(payload)?.tools;
+		if (!Array.isArray(tools) || tools.length === 0) throw new Error("payload tools missing");
+		const fn = getNestedObject(tools[0], "function");
+		expect(fn?.strict).toBeUndefined();
+	});
+});

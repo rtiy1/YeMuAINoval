@@ -334,13 +334,24 @@ export interface OpenAICompat {
 	 * grammar converter reads them as closed/open-object semantics, and
 	 * `additionalProperties: false` pins the strict object shape.
 	 *
+	 * `"google"` triggers Google proto-`Schema` normalization — the
+	 * OpenAPI-3.0 subset behind the legacy `parameters` field that Google's
+	 * OpenAI-compatible endpoints (`/v1beta/openai`, Vertex
+	 * `endpoints/openapi`) translate `tools[].function.parameters` into.
+	 * Strips `additionalProperties`, `propertyNames`, `not`/`if`/`then`/`else`,
+	 * string/numeric bounds, coerces bare boolean subschemas, folds
+	 * `oneOf`→`anyOf`, and intersects `allOf` — Google 400s with
+	 * `Unknown name "…" at 'request.tools[0].function.parameters'` otherwise.
+	 *
 	 * Default: auto-detected — `"moonshot-mfjs"` on Moonshot native hosts
 	 * (api.moonshot.ai / api.kimi.com) and Kimi-family model ids on any host,
 	 * since proxies (OpenRouter, custom gateways) forward schemas to Moonshot
-	 * verbatim; `"grammar"` on local OpenAI-compatible backends. Set `"none"`
+	 * verbatim; `"google"` on Google's OpenAI-compatible hosts and
+	 * Gemini-family model ids on any host for the same proxy-verbatim
+	 * contract; `"grammar"` on local OpenAI-compatible backends. Set `"none"`
 	 * to opt a host out.
 	 */
-	toolSchemaFlavor?: "moonshot-mfjs" | "grammar" | "none";
+	toolSchemaFlavor?: "moonshot-mfjs" | "grammar" | "google" | "none";
 	/**
 	 * Stream-watchdog first-event timeout in ms.
 	 * Set to `0` to allow unbounded prompt processing. Default: auto-detected

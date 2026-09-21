@@ -39,6 +39,7 @@ import {
 	adaptSchemaForStrict,
 	findStrictToolSchemaViolation,
 	NO_STRICT,
+	normalizeSchemaForGoogleParameters,
 	normalizeSchemaForMoonshot,
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
@@ -1359,7 +1360,9 @@ export function convertTools(
 		const responseParameters =
 			model.compat.toolSchemaFlavor === "moonshot-mfjs"
 				? (normalizeSchemaForMoonshot(sanitized) as Record<string, unknown>)
-				: sanitized;
+				: model.compat.toolSchemaFlavor === "google"
+					? (normalizeSchemaForGoogleParameters(sanitized) as Record<string, unknown>)
+					: sanitized;
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
 		// Quarantine a tool whose emitted schema carries a provider-rejecting
 		// enum/const-vs-type contradiction: dropping just that tool keeps the rest

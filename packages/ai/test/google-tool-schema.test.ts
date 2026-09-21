@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { buildModel } from "@yemu/model-catalog/build";
 import { convertTools } from "@yemu/model-runtime/providers/google-shared";
 import type { Model, TJsonSchema, Tool } from "@yemu/model-runtime/types";
-import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@yemu/model-runtime/utils/schema";
+import {
+	normalizeSchemaForCCA,
+	normalizeSchemaForGoogle,
+	normalizeSchemaForGoogleParameters,
+} from "@yemu/model-runtime/utils/schema";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
 	return buildModel({
@@ -833,5 +837,112 @@ describe("normalizeSchemaForGoogle parity with python-genai process_schema", () 
 				anyOf: [{ type: "string", title: "Name" }, { type: "null" }],
 			}),
 		).toEqual({ type: "string", title: "Name", nullable: true });
+	});
+});
+
+describe("Google proto-Schema (OpenAI-compat parameters) normalization", () => {
+	// Google's OpenAI-compatible frontends translate `tools[].function.parameters`
+	// into the proto `Schema` — a narrower OpenAPI-3.0 subset than the free-form
+	// `parametersJsonSchema` field the native path targets.
+
+	it("intersects object-typed allOf branches into the parent node", () => {
+		const schema = {
+			type: "object",
+			properties: { a: { type: "string" } },
+			allOf: [
+				{ type: "object", properties: { b: { type: "number" } }, required: ["b"] },
+				{ type: "object", properties: { c: { type: "boolean" } } },
+			],
+			required: ["a"],
+			additionalProperties: false,
+		} as unknown;
+		expect(normalizeSchemaForGoogleParameters(schema)).toEqual({
+			type: "object",
+			properties: {
+				a: { type: "string" },
+				b: { type: "number" },
+				c: { type: "boolean" },
+			},
+			required: ["a", "b"],
+			propertyOrdering: ["a", "b", "c"],
+		});
+	});
+
+	it("degrades conflicting allOf property schemas to anyOf instead of dropping them", () => {
+		const schema = {
+			type: "object",
+			properties: { x: { type: "string" } },
+			allOf: [{ type: "object", properties: { x: { type: "number" } } }],
+		} as unknown;
+		const result = normalizeSchemaForGoogleParameters(schema) as Record<string, unknown>;
+		expect(result.allOf).toBeUndefined();
+		const properties = result.properties as Record<string, unknown>;
+		expect(Array.isArray((properties.x as Record<string, unknown>).anyOf)).toBe(true);
+	});
+
+	it("folds oneOf into anyOf and strips not/if/then/else", () => {
+		const schema = {
+			oneOf: [{ type: "string" }, { type: "number" }],
+			not: { type: "boolean" },
+			if: { type: "string" },
+			// biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword under test
+			then: { minLength: 1 },
+			else: { maxLength: 5 },
+		} as unknown;
+		const result = normalizeSchemaForGoogleParameters(schema) as Record<string, unknown>;
+		expect(result.anyOf).toEqual([{ type: "string" }, { type: "number" }]);
+		expect(result.oneOf).toBeUndefined();
+		expect(result.not).toBeUndefined();
+		expect(result.if).toBeUndefined();
+		expect(result.then).toBeUndefined();
+		expect(result.else).toBeUndefined();
+	});
+
+	it("coerces bare boolean subschemas permissively", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				open: true,
+				closed: false,
+				list: { type: "array", items: false },
+			},
+		} as unknown;
+		const result = normalizeSchemaForGoogleParameters(schema) as Record<string, unknown>;
+		const properties = result.properties as Record<string, unknown>;
+		expect(properties.open).toEqual({});
+		expect(properties.closed).toEqual({});
+		expect((properties.list as Record<string, unknown>).items).toEqual({});
+	});
+
+	it("collapses type arrays to nullable and drops non-string enums", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				value: { type: ["string", "null"] },
+				mixed: { enum: ["a", 1, null] },
+			},
+		} as unknown;
+		const result = normalizeSchemaForGoogleParameters(schema) as Record<string, unknown>;
+		const properties = result.properties as Record<string, unknown>;
+		expect(properties.value).toEqual({ type: "string", nullable: true });
+		// A mixed-type enum cannot survive as a proto enum; the schema keeps no
+		// type rather than inventing one.
+		expect((properties.mixed as Record<string, unknown>).enum).toBeUndefined();
+	});
+
+	it("preserves property keys literally named allOf or not", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				allOf: { type: "string" },
+				not: { type: "number" },
+			},
+		} as unknown;
+		const result = normalizeSchemaForGoogleParameters(schema) as Record<string, unknown>;
+		const properties = result.properties as Record<string, unknown>;
+		expect(properties.allOf).toEqual({ type: "string" });
+		expect(properties.not).toEqual({ type: "number" });
+		expect(result.allOf).toBeUndefined();
+		expect(result.not).toBeUndefined();
 	});
 });

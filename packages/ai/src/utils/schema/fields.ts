@@ -43,6 +43,43 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 };
 
 /**
+ * Additional keywords absent from Google's proto `Schema` — the OpenAPI-3.0
+ * subset behind the legacy `parameters` field, which is also what Google's
+ * OpenAI-compatible frontends (`/v1beta/openai`, Vertex `endpoints/openapi`)
+ * translate `tools[].function.parameters` into.
+ *
+ * Joined with UNSUPPORTED_SCHEMA_FIELDS only on the `parameters` dialect;
+ * `parametersJsonSchema` (free-form JSON Schema) tolerates these.
+ *
+ * `allOf`/`oneOf` are intentionally absent: `oneOf` is folded into `anyOf`
+ * (the proto has `any_of` but no `one_of`) and `allOf` is intersected into
+ * the parent node by a dedicated merge pass — neither needs stripping.
+ * Proto-accepted keys (`title`, `default`, `example`, `enum`, `nullable`,
+ * `anyOf`, `propertyOrdering`, `items`, `minProperties`/`maxProperties`)
+ * are likewise kept.
+ */
+export const GOOGLE_PARAMETERS_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
+	not: true,
+	if: true,
+	// biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword
+	then: true,
+	else: true,
+	contains: true,
+	additionalItems: true,
+	uniqueItems: true,
+	readOnly: true,
+	writeOnly: true,
+	deprecated: true,
+	$comment: true,
+	discriminator: true,
+	xml: true,
+	externalDocs: true,
+	contentEncoding: true,
+	contentMediaType: true,
+	contentSchema: true,
+};
+
+/**
  * Human-meaningful validation/decorative keywords that can be preserved in a
  * sibling description when a provider-specific normalizer strips them from the
  * wire schema.

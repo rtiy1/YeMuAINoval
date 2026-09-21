@@ -16,6 +16,7 @@ import {
 	CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS,
 	CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS,
 	COMBINATOR_KEYS,
+	GOOGLE_PARAMETERS_UNSUPPORTED_SCHEMA_FIELDS,
 	LIFTABLE_TO_DESCRIPTION_FIELDS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
 	UNSUPPORTED_SCHEMA_FIELDS,
@@ -196,6 +197,12 @@ const CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA = {
 
 function isGoogleUnsupportedSchemaField(key: string): boolean {
 	return Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key);
+}
+
+function isGoogleParametersUnsupportedSchemaField(key: string): boolean {
+	return (
+		Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key) || Object.hasOwn(GOOGLE_PARAMETERS_UNSUPPORTED_SCHEMA_FIELDS, key)
+	);
 }
 
 function isMcpUnsupportedSchemaField(key: string): boolean {
@@ -1116,6 +1123,138 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 		stringEnumsOnly: true,
 		foldOneOfIntoAnyOf: false,
 	});
+}
+
+/**
+ * Intersect one `allOf` variant into `node`. `properties` maps are merged
+ * key-wise (conflicts widen to a union via mergePropertySchemas — proto
+ * `any_of` can express that), `required` lists are unioned (allOf semantics:
+ * a key required by ANY variant is required overall), and remaining keys are
+ * adopted only when absent or equal. Returns `undefined` on a constraint
+ * conflict that cannot be merged faithfully.
+ */
+function mergeAllOfVariantInto(node: JsonObject, variant: JsonObject): JsonObject | undefined {
+	for (const key in variant) {
+		if (!Object.hasOwn(variant, key)) continue;
+		const entry = variant[key];
+		if (key === "properties" && isJsonObject(entry)) {
+			const merged: JsonObject = {};
+			if (isJsonObject(node.properties)) {
+				for (const name in node.properties) {
+					if (Object.hasOwn(node.properties, name)) merged[name] = node.properties[name];
+				}
+			}
+			for (const name in entry) {
+				if (!Object.hasOwn(entry, name)) continue;
+				merged[name] = Object.hasOwn(merged, name) ? mergePropertySchemas(merged[name], entry[name]) : entry[name];
+			}
+			node.properties = merged;
+			continue;
+		}
+		if (key === "required" && Array.isArray(entry)) {
+			const merged: unknown[] = Array.isArray(node.required) ? [...(node.required as unknown[])] : [];
+			for (const item of entry) {
+				if (!merged.some(existing => areJsonValuesEqual(existing, item))) merged.push(item);
+			}
+			node.required = merged;
+			continue;
+		}
+		if (node[key] === undefined) {
+			node[key] = entry;
+			continue;
+		}
+		if (!areJsonValuesEqual(node[key], entry)) return undefined;
+	}
+	return node;
+}
+
+/**
+ * Recursive `allOf` cleanup for the Google `parameters` (proto Schema)
+ * dialect: variants are intersected into the parent node, and an `allOf`
+ * that cannot be merged (non-object variants, conflicting constraints) is
+ * dropped rather than letting the request 400 on a keyword the proto does
+ * not have. Traverses only schema-valued positions so a `properties` member
+ * literally named `allOf` is never touched.
+ */
+/**
+ * Recompute `propertyOrdering` on a proto-Schema object node after `allOf`
+ * merging changed its `properties` map — ordering emitted during
+ * normalization reflects the pre-merge keyset and would otherwise go stale.
+ */
+function syncGoogleParametersPropertyOrdering(node: JsonObject): JsonObject {
+	if (node.type !== "object" || !isJsonObject(node.properties)) return node;
+	const keys: string[] = [];
+	for (const name in node.properties) {
+		if (Object.hasOwn(node.properties, name)) keys.push(name);
+	}
+	if (keys.length > 1) node.propertyOrdering = keys;
+	else delete node.propertyOrdering;
+	return node;
+}
+
+function flattenAllOfForGoogleParametersNode(value: unknown, insideSchemaMap: boolean): unknown {
+	if (Array.isArray(value)) {
+		return value.map(entry => flattenAllOfForGoogleParametersNode(entry, false));
+	}
+	if (!isJsonObject(value)) return value;
+	const result: JsonObject = {};
+	for (const key in value) {
+		if (!Object.hasOwn(value, key)) continue;
+		const entry = value[key];
+		const childKind = classifySchemaChild(key, entry, insideSchemaMap);
+		result[key] = childKind ? flattenAllOfForGoogleParametersNode(entry, childKind === "map") : entry;
+	}
+	if (insideSchemaMap || !Array.isArray(result.allOf)) return result;
+
+	const merged = copySchemaWithout(result, "allOf");
+	for (const variant of result.allOf) {
+		if (!isJsonObject(variant) || mergeAllOfVariantInto(merged, variant) === undefined) {
+			return syncGoogleParametersPropertyOrdering(merged);
+		}
+	}
+	return syncGoogleParametersPropertyOrdering(merged);
+}
+
+function flattenAllOfForGoogleParameters(value: unknown): unknown {
+	return flattenAllOfForGoogleParametersNode(value, false);
+}
+
+/**
+ * Normalize a tool schema for Google's proto `Schema` — the OpenAPI-3.0
+ * subset behind the legacy `parameters` field, which is also what Google's
+ * OpenAI-compatible frontends (`/v1beta/openai`, Vertex `endpoints/openapi`)
+ * translate `tools[].function.parameters` into.
+ *
+ * Tighter than {@link normalizeSchemaForGoogle} (which targets the free-form
+ * `parametersJsonSchema` field): additionally drops keywords the proto lacks
+ * (`not`, `if`/`then`/`else`, `contains`, `uniqueItems`, `additionalItems`,
+ * `readOnly`/`writeOnly`, `deprecated`, `$comment`, `discriminator`, `xml`,
+ * `externalDocs`, `content*`), folds `oneOf` into `anyOf` (proto has
+ * `any_of` but no `one_of`), intersects `allOf` into the parent node, and
+ * coerces bare boolean subschemas permissively since `not` is absent too.
+ */
+export function normalizeSchemaForGoogleParameters(value: unknown): unknown {
+	const normalized = normalizeSchema(value, {
+		coerceBooleanSubschemas: "permissive",
+		unsupportedFields: isGoogleParametersUnsupportedSchemaField,
+		normalizeFieldNames: true,
+		collapseNullFields: true,
+		normalizeTypeArrayToNullable: true,
+		stripNullableKeyword: false,
+		autoPropertyOrdering: true,
+		ensureObjectProperties: true,
+		liftStrippedToDescription: { format: "spill" },
+		mergeObjectCombiners: true,
+		collapseSameTypeCombiners: true,
+		collapseMixedTypeCombiners: false,
+		stripResidualCombinersFixpoint: false,
+		extractNullableFromUnions: false,
+		inferTypeForBareEnum: true,
+		dropNonScalarEnum: false,
+		stringEnumsOnly: true,
+		foldOneOfIntoAnyOf: true,
+	});
+	return flattenAllOfForGoogleParameters(normalized);
 }
 
 export function normalizeSchemaForCCA(value: unknown): unknown {

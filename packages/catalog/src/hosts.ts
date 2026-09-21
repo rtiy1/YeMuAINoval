@@ -63,6 +63,18 @@ export const KNOWN_HOSTS = {
 	nvidia: { providers: ["nvidia"], urlMarkers: ["integrate.api.nvidia.com"] },
 	moonshotNative: { providers: ["moonshot", "kimi-code"], urlMarkers: ["api.moonshot.ai", "api.kimi.com"] },
 	opencode: { providers: ["opencode-go", "opencode-zen"], urlMarkers: ["opencode.ai"] },
+	/**
+	 * Google's OpenAI-compatible surfaces — AI Studio `/v1beta/openai` and
+	 * Vertex `…/endpoints/openapi` — translate `tools[].function.parameters`
+	 * into the proto `Schema` (OpenAPI subset) and 400 on keywords it lacks
+	 * (`additionalProperties`, `propertyNames`, bare boolean subschemas, …).
+	 * Selects the `"google"` toolSchemaFlavor on the chat-completions path.
+	 * Native Google APIs (`google`-family providers) normalize elsewhere.
+	 */
+	googleOpenAICompat: {
+		providers: ["google", "google-vertex", "google-gemini-cli", "google-antigravity"],
+		urlMarkers: ["generativelanguage.googleapis.com", "aiplatform.googleapis.com"],
+	},
 	/** ZenMux's Anthropic-compatible proxy (`zenmux.ai/api/anthropic`) forwards to signature-enforcing Anthropic. */
 	zenmux: { providers: ["zenmux"], urlMarkers: ["zenmux.ai"] },
 	chutes: { urlMarkers: ["chutes.ai"] },

@@ -341,6 +341,14 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isLocalOpenAICompatBackend =
 		!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
 		(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl));
+	const isGoogleOpenAICompatHost = modelMatchesHost(hostModel, "googleOpenAICompat");
+	// Gemini-family ids take the Google proto-Schema flavor on ANY host: proxies
+	// (OpenRouter, custom gateways, Chinese relay services) forward
+	// `tools.function.parameters` — and the sibling `strict` flag — verbatim to
+	// Google, which 400s on `additionalProperties`, `strict`, `propertyNames`,
+	// bare boolean subschemas, … Same proxy-verbatim contract that triggers
+	// MFJS for Kimi ids.
+	const usesGoogleToolSchema = isGoogleOpenAICompatHost || modelFamilyToken(spec.id) === "gemini";
 	// Stream-timeout floor applies to ANY loopback/RFC1918 backend, INCLUDING
 	// local proxies (litellm) excluded from `isLocalOpenAICompatBackend` above:
 	// widening the first-event/idle abort ceiling only helps a slow local
@@ -572,14 +580,25 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		isOpenRouterHost: isOpenRouter,
 		wireModelIdMode,
 		isVercelGatewayHost: isVercelGateway,
-		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
+		// `strict` rides the same verbatim-forwarded envelope as `parameters`:
+		// Google's proto Schema has no such field and 400s on it, so Google-bound
+		// requests must keep the wire flag uniformly absent.
+		supportsStrictMode: usesGoogleToolSchema ? false : detectStrictModeSupport(provider, baseUrl),
 		extraBody: isDirectDeepseekReasoning ? { thinking: { type: "enabled" } } : undefined,
 		toolStrictMode: isCerebras ? "all_strict" : "mixed",
 		// Kimi-family ids trigger MFJS on any host, not just native base URLs:
 		// proxies (OpenRouter, custom gateways) forward `tools.function.parameters`
-		// to Moonshot verbatim, which 400s on non-MFJS constructs.
+		// to Moonshot verbatim, which 400s on non-MFJS constructs. Gemini-family
+		// ids and Google's OpenAI-compat hosts get the proto-Schema flavor for
+		// the same reason.
 		toolSchemaFlavor:
-			isMoonshotNative || isKimiModel ? "moonshot-mfjs" : isLocalOpenAICompatBackend ? "grammar" : undefined,
+			isMoonshotNative || isKimiModel
+				? "moonshot-mfjs"
+				: usesGoogleToolSchema
+					? "google"
+					: isLocalOpenAICompatBackend
+						? "grammar"
+						: undefined,
 		streamFirstEventTimeoutMs: isLocalServingBackend ? 0 : undefined,
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens:
@@ -652,6 +671,10 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	const isKimiModel = id ? isKimiModelId(id) : false;
 	const isAnthropicModel = id ? isClaudeModelId(id) || isAnthropicNamespacedModelId(id) : false;
 	const isDeepseekFamily = id ? isDeepseekModelIdOrName(id) || isDeepseekModelIdOrName(spec.name) : false;
+	// Mirrors buildOpenAICompat: Gemini behind a Responses-capable proxy still
+	// lands on Google's proto-Schema validator for tool parameters.
+	const usesGoogleToolSchema =
+		modelMatchesHost({ provider: spec.provider, baseUrl }, "googleOpenAICompat") || modelFamilyToken(id) === "gemini";
 	const reasoningCapable = Boolean(spec.reasoning);
 	// `replayReasoningContent` is Responses-only-false, so the proxy carve-out is
 	// irrelevant here; the stream-timeout floor still applies to ANY loopback /
@@ -663,7 +686,8 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 
 	const compat: ResolvedOpenAIResponsesCompat = {
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
-		supportsStrictMode: isAzure || detectStrictModeSupport(spec.provider, baseUrl),
+		// Google-bound requests keep the `strict` wire flag off (see chat-completions).
+		supportsStrictMode: usesGoogleToolSchema ? false : isAzure || detectStrictModeSupport(spec.provider, baseUrl),
 		supportsReasoningEffort: spec.provider !== "xai-oauth" || isGrokReasoningEffortCapable(id),
 		supportsLongPromptCacheRetention: isOpenAIUrl,
 		supportsPromptCacheBreakpoints,
@@ -717,8 +741,8 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		isVercelGatewayHost: isVercelGateway,
 		wireModelIdMode: isOpenRouter ? "openrouter" : "raw",
 		// Mirrors buildOpenAICompat: Kimi behind a Responses-capable proxy still
-		// lands on Moonshot's MFJS validator.
-		toolSchemaFlavor: isKimiModel ? "moonshot-mfjs" : undefined,
+		// lands on Moonshot's MFJS validator; Gemini likewise on Google's.
+		toolSchemaFlavor: isKimiModel ? "moonshot-mfjs" : usesGoogleToolSchema ? "google" : undefined,
 		alwaysSendMaxTokens: spec.id ? isKimiModelId(spec.id) : false,
 		enableGeminiThinkingLoopGuard: modelFamilyToken(spec.id ?? "") === "gemini",
 		supportsObfuscationOptOut: isOpenAIUrl || spec.provider === "openai",

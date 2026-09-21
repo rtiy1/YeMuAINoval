@@ -45,6 +45,7 @@ import { callWithCopilotModelRetry } from "../utils/retry";
 import {
 	adaptSchemaForStrict,
 	NO_STRICT,
+	normalizeSchemaForGoogleParameters,
 	normalizeSchemaForMoonshot,
 	sanitizeSchemaForGrammar,
 	toolWireSchema,
@@ -2328,12 +2329,19 @@ function convertTools(
 					// build a GBNF grammar from the schema and 400 with
 					// `Unrecognized schema: true` on the bare boolean subschema
 					// `toolWireSchema` emits for open fields (issue #5914).
+					// Google's OpenAI-compat surfaces translate `parameters` into the
+					// proto `Schema` (OpenAPI subset) and 400 with
+					// `Unknown name "…" at 'request.tools[0].function.parameters'`
+					// on `additionalProperties`, `propertyNames`, `not`, bare
+					// boolean subschemas, and combinators other than `anyOf`.
 					parameters:
 						compat.toolSchemaFlavor === "moonshot-mfjs"
 							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
 							: compat.toolSchemaFlavor === "grammar"
 								? sanitizeSchemaForGrammar(wireParameters)
-								: wireParameters,
+								: compat.toolSchemaFlavor === "google"
+									? (normalizeSchemaForGoogleParameters(wireParameters) as Record<string, unknown>)
+									: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
 					...(includeStrict ? { strict: true } : includeExplicitFalse ? { strict: false } : {}),
 				},

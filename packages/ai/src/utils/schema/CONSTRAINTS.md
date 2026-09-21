@@ -84,6 +84,42 @@ Schemas sent on the Google JSON Schema path MUST follow:
    - `{ "type": "object" }` becomes `{ "type": "object", "properties": {} }`.
 ---
 
+## 2b) Google `parameters` proto-Schema subset (`normalizeSchemaForGoogleParameters`)
+
+Schemas sent on Google's OpenAI-compatible surfaces (`/v1beta/openai`, Vertex
+`endpoints/openapi`) are translated into the proto `Schema` behind the legacy
+`parameters` field — an OpenAPI-3.0 subset narrower than
+`parametersJsonSchema`. They MUST additionally satisfy:
+
+1. **All §2 unsupported keywords stripped**, plus proto-missing keys:
+   - `not`, `if`, `then`, `else`, `contains`, `additionalItems`, `uniqueItems`
+   - `readOnly`, `writeOnly`, `deprecated`, `$comment`
+   - `discriminator`, `xml`, `externalDocs`
+   - `contentEncoding`, `contentMediaType`, `contentSchema`
+   - Human-meaningful stripped keys spill into `description` as in §2.
+2. **`oneOf` is folded into `anyOf`** — the proto has `any_of` but no
+   `one_of`. Mixed-type `anyOf` unions are preserved (the proto expresses
+   them); same-type and object-only unions are collapsed/merged.
+3. **`allOf` is intersected into the parent node** — `properties` merged
+   key-wise, `required` unioned; an unmergeable `allOf` is dropped rather than
+   failing the request.
+4. **Bare boolean subschemas coerce permissively** — `true`/`false` both
+   become `{}` because the proto has no `not` to express `false`.
+5. **Proto-supported keywords are kept**: `type`, `description`, `nullable`,
+   `enum` (strings only — non-string enums drop the `enum`, keep `type`),
+   `items`, `properties`, `required`, `propertyOrdering`, `anyOf`, `title`,
+   `default`, `example`, `minProperties`/`maxProperties`.
+6. **`strict` is never sent alongside** — the compat layer reports
+   `supportsStrictMode: false` for Google-bound targets because the proto has
+   no `strict` field and rejects it (`Unknown name "strict"`).
+
+Auto-detection (`toolSchemaFlavor: "google"`): Google's OpenAI-compat hosts
+(`generativelanguage.googleapis.com`, `*aiplatform.googleapis.com`, and the
+`google`-family provider ids) plus Gemini-family model ids on any host —
+proxies forward `parameters` verbatim, matching the Kimi→MFJS contract.
+
+---
+
 ## 3) Claude via Cloud Code Assist (`normalizeSchemaForCCA`)
 
 For Cloud Code Assist Claude tool declarations, schema MUST satisfy stricter constraints than generic Google path.
@@ -148,6 +184,9 @@ If any remain, schema is incompatible.
 
 - **Google Gemini/Vertex/Gemini CLI (non-CCA Claude)**:
   - Use `normalizeSchemaForGoogle` and send schema on `parametersJsonSchema` path.
+
+- **Google OpenAI-compatible endpoints (`/v1beta/openai`, Vertex `endpoints/openapi`, Gemini-family models through OpenAI-compat proxies)**:
+  - Use `normalizeSchemaForGoogleParameters` (`toolSchemaFlavor: "google"`); never send `strict`.
 
 - **Cloud Code Assist Claude models (`model.id` starts with `claude-`)**:
   - Use `normalizeSchemaForCCA` and send sanitized normalized schema in `parameters`.
