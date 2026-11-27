@@ -2,6 +2,11 @@ name: Desktop Build
 
 on:
   workflow_dispatch:
+    inputs:
+      macos:
+        description: '同时构建 macOS 包（默认只构建 Windows）'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -16,6 +21,8 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: yemu-novel-windows-x64
             bundles: nsis
+          # macOS 构建默认不跑：单次三平台要十几分钟，日常验证只需要 Windows。
+          # 需要出 macOS 包时手动派发并把 `macos` 输入设为 true。
           - os: macos-13
             target: x86_64-apple-darwin
             artifact: yemu-novel-macos-x64
@@ -24,6 +31,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact: yemu-novel-macos-arm64
             bundles: app,dmg
+    # 默认只跑 Windows；需要 macOS 包时手动派发并勾选 macos。
+    # tag 触发时构建全部平台。
+    if: >-
+      !startsWith(matrix.os, 'macos') || inputs.macos == true || github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

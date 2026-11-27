@@ -36,7 +36,6 @@
       "../.server-runtime/server",
       "../.server-runtime/src",
       "../.server-runtime/skills",
-      "../.server-runtime/public",
       "../.server-runtime/node_modules",
       "../.server-runtime/dist",
       "../.server-runtime/package.json"

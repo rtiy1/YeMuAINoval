@@ -235,6 +235,21 @@ async function runWithAiQuota(userId, operation, callback) {
 }
 
 function findOr404(db, projectId, userId) {
+  // 工作区模式下 projectId 是书根路径，db 里没有对应记录。
+  // 这里合成一个项目对象，避免 52 处调用点都要写分支。
+  const activeRoot = workspaceState.current?.root
+  if (activeRoot && String(projectId) === String(activeRoot)) {
+    return {
+      id: activeRoot,
+      userId: userId || LOCAL_USER_ID,
+      title: workspaceState.current.meta?.title || '',
+      type: workspaceState.current.meta?.type || '长篇',
+      genre: workspaceState.current.meta?.genre || '',
+      style: workspaceState.current.meta?.style || '',
+      tone: workspaceState.current.meta?.premise || '',
+      isActive: true,
+    }
+  }
   const project = findProject(db, projectId)
   if (!project || (userId && project.userId !== userId)) {
     const error = new Error('作品不存在')
@@ -261,6 +276,12 @@ function draftMapFor(db, projectId) {
 }
 
 function chapterOr404(db, project, chapterId) {
+  // 工作区模式下章节在磁盘上，db.chapters 是空的。
+  // 章节有效性由具体的文件路由校验（workspaceChapterList），这里只做占位。
+  const activeRoot = workspaceState.current?.root
+  if (activeRoot && String(project?.id) === String(activeRoot)) {
+    return { id: chapterId, title: '', state: 'draft' }
+  }
   const chapter = (db.chapters[project.id] || []).find((item) => String(item.id) === String(chapterId))
   if (!chapter) throw Object.assign(new Error('章节不存在'), { status: 404 })
   return chapter

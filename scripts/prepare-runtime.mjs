@@ -172,6 +172,26 @@ async function main() {
     log(`复制 ${workspace} → node_modules/@yemu/${packageName}`)
   }
 
+  // 校验 tauri.conf.json 里声明的每个资源都实际存在。
+  // 曾经因为 bundle.resources 还留着已删除的 public/ 导致 Windows 构建失败。
+  const tauriConfigPath = path.join(repoRoot, 'src-tauri', 'tauri.conf.json')
+  const tauriConfigRaw = await fs.readFile(tauriConfigPath, 'utf8').catch(() => null)
+  if (tauriConfigRaw) {
+    const resources = JSON.parse(tauriConfigRaw)?.bundle?.resources || []
+    const missing = []
+    for (const entry of resources) {
+      const resolved = path.resolve(path.join(repoRoot, 'src-tauri'), entry)
+      if (!(await exists(resolved))) missing.push(entry)
+    }
+    if (missing.length) {
+      console.error('[runtime] tauri.conf.json 引用了不存在的资源：')
+      for (const entry of missing) console.error(`  ${entry}`)
+      process.exitCode = 1
+      return
+    }
+    log(`tauri.conf.json 资源校验通过（${resources.length} 项）`)
+  }
+
   const total = await directorySize(outDir)
   log(`完成：${outDir}（${formatSize(total)}）`)
 }
