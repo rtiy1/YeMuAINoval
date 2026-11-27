@@ -7,13 +7,12 @@ import {
   runStoryDelegate,
   storyAgentModelCapabilities as resolveStoryAgentModelCapabilities,
 } from '../src/agent-runtime.ts'
-import { decryptSecret } from './auth.mjs'
-import { loadDb, updateDb } from './store.mjs'
-import { importWorkspaceChanges, materializeProjectWorkspace, projectWorkspaceDir, writeWorkspaceFile } from './local-workspace.mjs'
+import { decryptSecret } from './secrets.mjs'
+import { loadDb } from './store.mjs'
 import { activeModelSettings } from './model-settings.mjs'
 import { enrichStoryAgentPayload } from './writing-context.mjs'
-import { decorateInstalledMarketSkill } from './market-skill-runtime.mjs'
 import { readStoryDocument, writeStoryDocument } from './story-document-store.mjs'
+import { currentWorkspaceRoot } from './workspace-runtime.mjs'
 
 const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
 
@@ -52,12 +51,11 @@ export function storyAgentModelCapabilities(settings = {}) {
 
 async function preparedStoryAgentBody(user, input) {
   const db = await loadDb()
-  const payload = enrichStoryAgentPayload(db, user.id, input.payload || {}, input.message)
-  const prepared = await decorateInstalledMarketSkill(user.id, { ...input, payload })
+  const payload = await enrichStoryAgentPayload(db, user.id, input.payload || {}, input.message)
   return {
-    message: prepared.message,
-    skill: prepared.skill || null,
-    payload: prepared.payload,
+    message: input.message,
+    skill: input.skill || null,
+    payload,
     model_config: storyAgentModelConfig(user),
   }
 }
@@ -74,39 +72,20 @@ export async function invokeStoryAgent(
   const body = await preparedStoryAgentBody(user, input)
   const projectId = body.payload?.project_id || body.payload?.projectId || null
   const canPersistStoryFiles = body.payload?.tool_policy?.mutateStoryData === 'allow'
-  const localShellWorkspace = projectId && process.env.AUTH_MODE === 'local'
-    ? projectWorkspaceDir(projectId)
-    : null
-  if (localShellWorkspace) {
-    const db = await loadDb()
-    await materializeProjectWorkspace(db, user.id, projectId, localShellWorkspace)
-  }
-  try {
-    return await runStoryAgent(body, {
-      signal,
-      onDelta: onDelta || undefined,
-      onReasoningDelta: onReasoningDelta || undefined,
-      onToolEvent: onToolEvent || undefined,
-      onAssistantMessageEvent: onAssistantMessageEvent || undefined,
-      localShellWorkspace: localShellWorkspace || undefined,
-      readStoryFile: projectId
-        ? async (path) => readStoryDocument(user.id, projectId, path)
-        : undefined,
-      writeStoryFile: projectId && canPersistStoryFiles
-        ? async (file) => {
-            const result = await writeStoryDocument(user.id, projectId, file)
-            if (localShellWorkspace) {
-              await writeWorkspaceFile(localShellWorkspace, file.path, file.content).catch(() => false)
-            }
-            return result
-          }
-        : undefined,
-    })
-  } finally {
-    if (localShellWorkspace) {
-      await updateDb((db) => importWorkspaceChanges(db, user.id, projectId, localShellWorkspace)).catch(() => {})
-    }
-  }
+  // 工作区就是磁盘上的书根本身：本地命令与文件工具都直接作用于此，无需物化/回灌。
+  const localShellWorkspace = currentWorkspaceRoot()
+  return await runStoryAgent(body, {
+    signal,
+    onDelta: onDelta || undefined,
+    onReasoningDelta: onReasoningDelta || undefined,
+    onToolEvent: onToolEvent || undefined,
+    onAssistantMessageEvent: onAssistantMessageEvent || undefined,
+    localShellWorkspace: localShellWorkspace || undefined,
+    readStoryFile: async (path) => readStoryDocument(path),
+    writeStoryFile: canPersistStoryFiles
+      ? async (file) => writeStoryDocument(file)
+      : undefined,
+  })
 }
 
 function delegateRoles(input) {
@@ -136,9 +115,7 @@ export async function invokeStoryAgentDelegates(user, input, signal = undefined,
     try {
       const result = await runStoryDelegate({ ...body, role }, {
         signal,
-        readStoryFile: projectId
-          ? async (path) => readStoryDocument(user.id, projectId, path)
-          : undefined,
+        readStoryFile: async (path) => readStoryDocument(path),
       })
       const completed = {
         id,

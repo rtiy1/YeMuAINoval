@@ -148,3 +148,27 @@ export function writeEditorPreferences(preferences, storage) {
 export function resolveEditorTheme(mode, systemDark = false) {
   return mode === 'light' || mode === 'dark' ? mode : systemDark ? 'dark' : 'light'
 }
+
+// 是否运行在 Tauri 桌面壳里。壳会注入 __TAURI_INTERNALS__。
+export function isDesktopShell() {
+  return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
+}
+
+// 原生文件夹选择器。浏览器里返回 null，调用方应回退到手输路径。
+// 动态 import 是为了让浏览器构建不把 Tauri 包打进主 bundle。
+export async function pickWorkspaceFolder() {
+  if (!isDesktopShell()) return null
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: '选择作品工作区',
+      buttonLabel: '打开',
+    })
+    if (!selected) return null
+    return Array.isArray(selected) ? selected[0] : String(selected)
+  } catch {
+    return null
+  }
+}

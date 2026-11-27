@@ -28,6 +28,7 @@ import {
   EyeOff,
   FileText,
   FolderOpen,
+  FolderTree,
   Flame,
   Globe,
   Highlighter,
@@ -86,6 +87,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { api } from './api'
+import { isDesktopShell, pickWorkspaceFolder } from './platform.mjs'
 import { buildEditHunks, composeAcceptedText } from './edit-proposal.mjs'
 import { EDITOR_AGENT_COMMANDS, parseCompactCommandArgs, parseSlashCommand, resolveSelection } from './agent-commands.mjs'
 import {
@@ -182,7 +184,6 @@ const primaryNavItems = [
   { id: 'works', label: '我的作品', icon: BookOpen },
   { id: 'relations', label: '人物关系图', icon: Network },
   { id: 'library', label: '素材库', icon: Library },
-  { id: 'skill-market', label: '技能市场', icon: Store },
   { id: 'stats', label: '写作统计', icon: BarChart3 },
   { id: 'profile', label: '个人中心', icon: UserRound },
 ]
@@ -408,6 +409,124 @@ function parseSmartProposal(response) {
   return { title: title.slice(0, 80), type, genre: genre.slice(0, 30), style: style.slice(0, 80), tone: tone.slice(0, 2000), chapters: chapters.slice(0, 100).map((chapter) => ({ title: chapter.title.slice(0, 100), content: chapter.content.slice(0, 5000) })) }
 }
 
+
+function WorkspacePicker({ recent, error, busy, onOpen }) {
+  const [path, setPath] = useState('')
+  const desktop = isDesktopShell()
+  return (
+    <div className="workspace-picker">
+      <div className="workspace-picker-inner">
+        <div className="workspace-picker-brand">
+          <span className="brand-mark"><span>叙</span></span>
+          <div>
+            <h1>叙事工坊</h1>
+            <p>打开一个本地文件夹开始写作。文件夹里的 Markdown 就是你的作品，可以用任何编辑器修改。</p>
+          </div>
+        </div>
+
+        <form
+          className="workspace-open-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!path.trim() || busy) return
+            onOpen({ path: path.trim() })
+          }}
+        >
+          {desktop ? (
+            <div className="workspace-desktop-open">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={busy}
+                onClick={async () => {
+                  const selected = await pickWorkspaceFolder()
+                  if (selected) onOpen({ path: selected })
+                }}
+              >
+                {busy ? <LoaderCircle size={16} className="spin" /> : <FolderOpen size={16} />}
+                选择文件夹…
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy}
+                onClick={async () => {
+                  const selected = await pickWorkspaceFolder()
+                  if (selected) onOpen({ path: selected, create: true })
+                }}
+              >
+                <Plus size={16} />
+                新建作品
+              </button>
+            </div>
+          ) : (
+            <>
+              <label>
+                <span>工作区路径</span>
+                <input
+                  value={path}
+                  onChange={(event) => setPath(event.target.value)}
+                  placeholder="例如 /Users/你/Documents/我的小说"
+                  spellCheck={false}
+                  disabled={busy}
+                />
+              </label>
+              <button type="submit" className="primary-button" disabled={busy || !path.trim()}>
+                {busy ? <LoaderCircle size={16} className="spin" /> : <FolderOpen size={16} />}
+                打开
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy || !path.trim()}
+                onClick={() => onOpen({ path: path.trim(), create: true })}
+              >
+                <Plus size={16} />
+                新建作品
+              </button>
+            </>
+          )}
+          <button type="submit" className="primary-button" disabled={busy || !path.trim()}>
+            {busy ? <LoaderCircle size={16} className="spin" /> : <FolderOpen size={16} />}
+            打开
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy || !path.trim()}
+            onClick={() => onOpen({ path: path.trim(), create: true })}
+          >
+            <Plus size={16} />
+            新建作品
+          </button>
+        </form>
+        {error && <p className="workspace-error">{error}</p>}
+
+        <div className="workspace-recent">
+          <h2>最近打开</h2>
+          {recent.length ? (
+            <ul>
+              {recent.map((item) => (
+                <li key={item.path}>
+                  <button type="button" onClick={() => onOpen({ path: item.path })} disabled={busy}>
+                    <FolderTree size={15} />
+                    <span className="workspace-recent-copy">
+                      <strong>{item.title || item.path}</strong>
+                      <small>{item.path}</small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="workspace-empty-hint">还没有打开过工作区。</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -420,6 +539,12 @@ function App() {
   })
   const [authMode, setAuthMode] = useState(() => passwordResetToken ? 'reset' : 'login')
   const [authError, setAuthError] = useState('')
+  // 本地工作区：未打开时先让用户选文件夹，其余交互与旧界面完全一致。
+  const [workspaceInfo, setWorkspaceInfo] = useState(null)
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [workspaceError, setWorkspaceError] = useState('')
+  const [recentWorkspaces, setRecentWorkspaces] = useState([])
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [activeSection, setActiveSection] = useState('editor')
   const [projects, setProjects] = useState([])
   const [activeProject, setActiveProject] = useState(null)
@@ -539,10 +664,22 @@ function App() {
       return undefined
     }
     let mounted = true
-    api.restoreSession()
-      .then((session) => { if (mounted) setUser(session?.user || null) })
-      .catch(() => { if (mounted) setUser(null) })
-      .finally(() => { if (mounted) setAuthLoading(false) })
+    // 本地单用户：先确认工作区是否已打开，再加载本地用户。
+    api.getWorkspace()
+      .then((response) => {
+        if (!mounted) return
+        setWorkspaceInfo(response?.workspace || null)
+        setRecentWorkspaces(response?.recent || [])
+      })
+      .catch(() => { if (mounted) setWorkspaceInfo(null) })
+      .finally(() => {
+        if (!mounted) return
+        setWorkspaceLoading(false)
+        api.restoreSession()
+          .then((session) => { if (mounted) setUser(session?.user || null) })
+          .catch(() => { if (mounted) setUser(null) })
+          .finally(() => { if (mounted) setAuthLoading(false) })
+      })
     return () => { mounted = false }
   }, [passwordResetToken])
 
@@ -1397,8 +1534,43 @@ function App() {
     setAuthMode('login')
   }
 
-  if (authLoading) {
+  async function switchWorkspace() {
+    // 不清空服务端工作区：只让界面回到选择页，用户取消时还能返回。
+    const listing = await api.getWorkspace().catch(() => null)
+    setRecentWorkspaces(listing?.recent || [])
+    setWorkspaceInfo(null)
+  }
+
+  async function openWorkspaceFolder(input) {
+    setWorkspaceBusy(true)
+    setWorkspaceError('')
+    try {
+      const response = await api.openWorkspace(input)
+      setWorkspaceInfo(response.workspace)
+      const listing = await api.getWorkspace().catch(() => null)
+      if (listing?.recent) setRecentWorkspaces(listing.recent)
+      // 打开后重新拉一次作品，让编辑器立刻绑定到这本工作区。
+      window.location.reload()
+    } catch (error) {
+      setWorkspaceError(error.message || '无法打开该文件夹')
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
+  if (workspaceLoading || authLoading) {
     return <div className="auth-loading"><div className="brand-mark"><span>叙</span></div><LoaderCircle size={20} className="spin" /><span>正在恢复创作空间</span></div>
+  }
+
+  if (!workspaceInfo) {
+    return (
+      <WorkspacePicker
+        recent={recentWorkspaces}
+        error={workspaceError}
+        busy={workspaceBusy}
+        onOpen={openWorkspaceFolder}
+      />
+    )
   }
 
   if (!user) {
@@ -1411,8 +1583,15 @@ function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><span>叙</span></div>
           <div className="brand-copy">
-            <div className="brand-name">叙事工坊</div>
-            <div className="brand-subtitle">STORY STUDIO</div>
+            <div className="brand-name">{workspaceInfo?.meta?.title || '叙事工坊'}</div>
+            <button
+              type="button"
+              className="brand-subtitle brand-workspace-switch"
+              title={workspaceInfo?.root || ''}
+              onClick={switchWorkspace}
+            >
+              切换工作区
+            </button>
           </div>
           <button type="button" className="sidebar-collapse-button" aria-label={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'} title={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
             {sidebarCollapsed ? <PanelRight size={16} /> : <PanelLeft size={16} />}
@@ -1482,7 +1661,6 @@ function App() {
           {activeSection === 'works' && <Works projects={projects} onOpen={openProject} onNew={() => setShowNew(true)} onEdit={(p) => setEditProjectTarget(p)} onDelete={deleteProject} onImport={() => setImportProjectOpen(true)} />}
           {activeSection === 'relations' && <RelationshipGraphPage projects={projects} onNotify={notify} onCreateProject={() => setShowNew(true)} />}
           {activeSection === 'library' && <LibraryView ideas={ideas} onCreate={createIdea} onEditIdea={editIdea} onDeleteIdea={deleteIdea} projects={projects} />}
-          {activeSection === 'skill-market' && <SkillMarket user={user} onNotify={notify} onSkillsChanged={refreshSkills} />}
           {activeSection === 'stats' && <WritingStats stats={dashboard} projects={projects} />}
           {activeSection === 'profile' && <ProfileCenter user={user} stats={dashboard} projects={projects} onNavigate={selectSection} onOpenSettings={() => setSettingsCategory('model')} onOpenProject={openProject} />}
         </div>
@@ -1913,196 +2091,6 @@ function Overview({ projects, stats, onOpen, onNew, onNavigate }) {
           <section className="recent-section"><div className="section-heading compact"><div><span className="section-overline">作品空间</span><h2>最近的作品</h2></div><button className="text-button" onClick={() => onNavigate('works')}>管理作品 <ArrowUpRight size={15} /></button></div><div className="project-grid">{projects.map((project) => <ProjectCard key={project.id} project={project} onOpen={onOpen} />)}</div></section>
         </>
       )}
-    </div>
-  )
-}
-
-function WritingAssistantPage({ session, loading, skills, onSend, onClear, onReviewProposal, onOpenSettings, onNotify, onOpenProject }) {
-  const [input, setInput] = useState('')
-  const [selectedSkill, setSelectedSkill] = useState('')
-  const [webFetch, setWebFetch] = useState(false)
-  const [model, setModel] = useState('')
-  const [modelList, setModelList] = useState([])
-  const [modelLoading, setModelLoading] = useState(false)
-  const [modelSaving, setModelSaving] = useState(false)
-  const [customQuestionId, setCustomQuestionId] = useState('')
-  const [customAnswer, setCustomAnswer] = useState('')
-  const conversationRef = useRef(null)
-  const requirements = session?.requirements || {}
-  const messages = session?.messages || []
-  const questions = session?.questions || []
-  const hasStarted = messages.length > 0
-  const needsModel = messages.at(-1)?.role === 'assistant' && messages.at(-1)?.text?.includes('配置模型')
-  const availableSkills = (skills || []).filter((item) => item.name !== 'story' && callableSkill(item))
-  const starterPrompts = [
-    '我想写一本小说',
-    '我想写一个现代都市故事',
-    '帮我构思一个悬疑短篇',
-  ]
-
-  useEffect(() => {
-    if (selectedSkill && !availableSkills.some((item) => item.name === selectedSkill)) setSelectedSkill('')
-  }, [availableSkills, selectedSkill])
-
-  useEffect(() => {
-    let mounted = true
-    api.getSettings()
-      .then((response) => { if (mounted) setModel(response.settings?.model || '') })
-      .catch(() => undefined)
-    return () => { mounted = false }
-  }, [])
-
-  useEffect(() => {
-    const node = conversationRef.current
-    if (!node) return
-    node.scrollTop = node.scrollHeight
-  }, [messages, loading, session?.phase])
-
-  async function loadModels() {
-    if (modelLoading || modelList.length) return
-    setModelLoading(true)
-    try {
-      const response = await api.getModels()
-      setModelList(response.models || [])
-    } catch (error) {
-      onNotify(error.message || '获取模型列表失败')
-    } finally {
-      setModelLoading(false)
-    }
-  }
-
-  async function changeModel(nextModel) {
-    setModel(nextModel)
-    setModelSaving(true)
-    try {
-      await api.updateSettings({ model: nextModel })
-      onNotify(`已切换全局模型：${nextModel}`)
-    } catch (error) {
-      onNotify(error.message || '切换模型失败')
-    } finally {
-      setModelSaving(false)
-    }
-  }
-
-  function send(message) {
-    const options = {}
-    if (selectedSkill) options.skill = selectedSkill
-    if (webFetch) options.web_fetch = true
-    onSend(message, options)
-  }
-
-  function toggleWebFetch() {
-    const next = !webFetch
-    setWebFetch(next)
-    onNotify(next
-      ? '网页读取已开启：夜雨可以直接读取公开网页链接'
-      : '网页读取已关闭')
-  }
-
-  function submitCustomQuestion(event, questionId) {
-    event?.preventDefault()
-    const value = customAnswer.trim()
-    if (!value || loading) return
-    setCustomQuestionId('')
-    setCustomAnswer('')
-    send(value)
-  }
-
-  function submit(event) {
-    event?.preventDefault()
-    const message = input.trim()
-    if (!message || loading) return
-    setInput('')
-    send(message)
-  }
-
-  function handleKeyDown(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      submit(event)
-    }
-  }
-
-  return (
-    <div className="page assistant-page">
-      <div className="assistant-chat-shell">
-        <header className="assistant-chat-header">
-          <div className="assistant-chat-title">
-            <span className="assistant-chat-mark"><Bot size={18} /></span>
-            <div>
-              <small>统一 AI 创作入口</small>
-              <h1>{ASSISTANT_NAME}</h1>
-            </div>
-          </div>
-          <div className="assistant-chat-actions">
-            {session && <button className="text-button" disabled={loading} onClick={onClear}>{session.phase === 'writing' ? '开始另一本' : '新对话'}</button>}
-          </div>
-        </header>
-
-        <div className="assistant-chat-stream" ref={conversationRef} aria-live="polite">
-          {!hasStarted && !loading && (
-            <div className="assistant-chat-empty">
-              <div className="assistant-chat-empty-icon"><Bot size={28} /></div>
-              <h2>从一个想法开始</h2>
-              <p>描述你的目标。我会自动选择合适的 Skill；信息不足时，会像计划模式一样只确认真正影响下一步的内容。</p>
-              <div className="assistant-chat-starters">
-                {starterPrompts.map((item) => <button type="button" key={item} disabled={loading} onClick={() => send(item)}>{item}</button>)}
-              </div>
-            </div>
-          )}
-
-          {messages.map((message) => (
-            <div className={`assistant-chat-message ${message.role}`} key={message.id}>
-              <div className="assistant-chat-avatar" aria-hidden="true">{message.role === 'assistant' ? <Bot size={15} /> : <UserRound size={15} />}</div>
-              <div className="assistant-chat-bubble"><p>{message.text}</p></div>
-            </div>
-          ))}
-
-          {questions.length > 0 && !loading && session?.phase !== 'awaiting_confirmation' && (
-            <div className="assistant-plan-questions">
-              {questions.map((question) => (
-                <section className="assistant-plan-question" key={question.id}>
-                  <span>需要确认</span>
-                  <h3>{question.question}</h3>
-                  {question.options?.length > 0 && <div>{[
-                    ...question.options,
-                    ...(question.options.some((option) => /^(其他|自定义|other)$/i.test(option.label || '')) ? [] : [{ label: '其他', value: '__custom__', description: '自定义输入' }]),
-                  ].map((option) => <button type="button" key={option.value} onClick={() => option.value === '__custom__' ? setCustomQuestionId(question.id) : send(option.value)}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</button>)}</div>}
-                  {customQuestionId === question.id && <form className="assistant-plan-custom" onSubmit={(event) => submitCustomQuestion(event, question.id)}><input autoFocus value={customAnswer} maxLength={1000} onChange={(event) => setCustomAnswer(event.target.value)} placeholder="输入你的自定义答案…" aria-label="自定义答案" /><button type="submit" disabled={!customAnswer.trim()}>继续</button></form>}
-                </section>
-              ))}
-            </div>
-          )}
-
-          {loading && (
-            <div className="assistant-chat-message assistant loading">
-              <div className="assistant-chat-avatar" aria-hidden="true"><LoaderCircle size={15} className="spin" /></div>
-              <div className="assistant-chat-bubble"><p>正在理解目标并规划下一步…</p></div>
-            </div>
-          )}
-        </div>
-
-        <div className="assistant-chat-composer">
-          {session?.phase === 'awaiting_confirmation' && session.proposal && <button type="button" className="dark-button assistant-chat-proposal" onClick={onReviewProposal}><BookOpenCheck size={16} />查看并确认建书方案</button>}
-          {needsModel && <button type="button" className="secondary-button assistant-chat-settings" onClick={onOpenSettings}><Settings2 size={15} />配置模型</button>}
-          {session?.phase === 'writing' && session.projectId && <div className="assistant-chat-complete"><p><Check size={15} />作品已创建，可以进入编辑器继续写作。</p><button type="button" className="primary-button" onClick={() => onOpenProject(session.projectId)}><PenLine size={15} />打开作品</button></div>}
-
-          {session?.phase !== 'writing' && (
-            <>
-              <form className="assistant-chat-form" onSubmit={submit}>
-                <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown} rows={1} maxLength={4000} disabled={loading || session?.phase === 'awaiting_confirmation'} placeholder={hasStarted ? '继续补充，或直接提出新的创作任务…' : '描述你的创作目标…'} aria-label="输入创作想法" />
-                <button type="submit" className="assistant-send" disabled={loading || !input.trim()} aria-label="发送创作想法" title="发送"><Send size={16} /></button>
-              </form>
-              <div className="assistant-composer-tools">
-                <button type="button" className={`composer-toggle ${webFetch ? 'active' : ''}`} aria-pressed={webFetch} title={webFetch ? '关闭网页读取' : '开启后夜雨可读取公开网页'} onClick={toggleWebFetch}><Globe size={13} /><span>{webFetch ? '网页读取已开启' : '网页读取'}</span></button>
-                <label title="自动选择或强制指定 Skill"><Wand2 size={13} /><select value={selectedSkill} onChange={(event) => setSelectedSkill(event.target.value)}><option value="">自动选择 Skill</option>{availableSkills.map((item) => <option key={item.name} value={item.name}>{item.displayName || skillMeta[item.name]?.label || item.name}</option>)}</select></label>
-                <label title="切换后同步到全局设置"><Bot size={13} /><select value={model} disabled={modelSaving} onFocus={loadModels} onChange={(event) => changeModel(event.target.value)}><option value="">{modelLoading ? '读取模型中…' : '选择模型'}</option>{model && !modelList.includes(model) && <option value={model}>{model}</option>}{modelList.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-              </div>
-            </>
-          )}
-          <p className="assistant-chat-hint">Enter 发送 · Shift+Enter 换行 · 模型切换同步全局设置</p>
-        </div>
-      </div>
     </div>
   )
 }
@@ -2701,7 +2689,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
   const [agentContextWindow, setAgentContextWindow] = useState(100000)
   const [agentCompaction, setAgentCompaction] = useState({ enabled: true, strategy: 'context-full', thresholdPercent: -1, thresholdTokens: -1, reserveTokens: null, keepRecentTokens: 20000 })
   const [agentSettingSaving, setAgentSettingSaving] = useState(false)
-  const [agentWebFetch, setAgentWebFetch] = useState(true)
   
   const agentMode = 'build'
   const [agentPickerOpen, setAgentPickerOpen] = useState(null)
@@ -3841,7 +3828,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
     if (command.name === 'tools') {
       appendLocalCommandResult(message, [
         'read_story_skill　读取 Story Skill 与参考文件',
-        'web_fetch　读取已知 URL 的公开网页（开启网页读取后可用）',
         'list_story_files　浏览 PostgreSQL 作品工作区',
         'read_story_file　读取 PostgreSQL 作品文件',
         'write_story_file　创建或更新作品文件',
@@ -4185,7 +4171,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
       chapterTitle: displayChapter.title,
       mode: requestMode,
       multiAgent: useMultiAgent,
-      webFetch: agentWebFetch,
       sourceText: draft,
       selectionStart,
       selectionEnd,
@@ -4247,7 +4232,6 @@ function Editor({ project, projects = [], skills = [], chapters, activeChapter, 
           selection_end: selectionEnd,
           reviewable_edit: editRequested,
           tool_policy: {
-            externalSearch: agentWebFetch ? 'allow' : 'deny',
             mutateStoryData: requestMode === 'build' ? 'allow' : 'propose',
             deleteStoryData: 'deny',
           },

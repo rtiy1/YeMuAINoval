@@ -1,25 +1,20 @@
 import { EventEmitter } from 'node:events'
-import { createTaskRedis, isTaskQueueEnabled } from './task-queue.mjs'
-
-export const TASK_PROGRESS_CHANNEL = 'ai-tasks:v1:progress'
 
 // Coalescing window for streams. Model deltas arrive in dense bursts (one
 // `thinking_delta` per token); buffering them for this many milliseconds and
-// merging consecutive same-item deltas turns N tiny SSE frames/Redis messages
-// into roughly one per tick without adding perceptible latency.
+// merging consecutive same-item deltas turns N tiny SSE frames into roughly
+// one per tick without adding perceptible latency.
+//
+// 单用户本地应用：任务只在 API 进程内执行，进度事件走进程内 EventEmitter，
+// 不再需要 Redis 跨进程广播。
 const STREAM_TICK_MS = 12
 
 const emitter = new EventEmitter()
 emitter.setMaxListeners(0)
 
-let publisher = null
-let subscriber = null
-let bridgePromise = null
-let publishTimer = null
 let flushTimer = null
 // taskId -> buffered messages awaiting the next tick flush
 const pendingLocal = new Map()
-let pendingRedisEvents = []
 
 function localEvent(message) {
   if (!message?.taskId || !message?.event?.type) return
@@ -34,29 +29,12 @@ function sameDeltaKey(event) {
   return `${event.type}:${event.phase || ''}:${event.itemId || ''}`
 }
 
-function flushRedisEvents() {
-  publishTimer = null
-  const events = pendingRedisEvents
-  pendingRedisEvents = []
-  if (!events.length || !isTaskQueueEnabled()) return
-  publisher ||= createTaskRedis()
-  void publisher.publish(TASK_PROGRESS_CHANNEL, JSON.stringify(events)).catch(() => undefined)
-}
-
 function flushTaskEvents(taskId, override = null) {
   const list = pendingLocal.get(taskId)
   const buffered = list ? [...list] : []
   pendingLocal.delete(taskId)
   const messages = override ? [...buffered, override] : buffered
-  if (!messages.length) return
   for (const message of messages) localEvent(message)
-  if (isTaskQueueEnabled()) {
-    pendingRedisEvents.push(...messages)
-    if (!publishTimer) {
-      publishTimer = setTimeout(flushRedisEvents, STREAM_TICK_MS)
-      publishTimer.unref?.()
-    }
-  }
 }
 
 export function flushTaskStreamEvents() {
@@ -105,40 +83,8 @@ export function subscribeTaskStream(taskId, listener) {
   return () => emitter.off(key, listener)
 }
 
-export async function startTaskStreamBridge() {
-  if (!isTaskQueueEnabled()) return false
-  if (!bridgePromise) {
-    bridgePromise = (async () => {
-      subscriber = createTaskRedis()
-      await subscriber.subscribe(TASK_PROGRESS_CHANNEL)
-      subscriber.on('message', (_channel, raw) => {
-        try {
-          const parsed = JSON.parse(raw)
-          for (const message of Array.isArray(parsed) ? parsed : [parsed]) localEvent(message)
-        } catch {
-          // Ignore malformed or stale progress messages; database snapshots remain the recovery path.
-        }
-      })
-      return true
-    })().catch((error) => {
-      bridgePromise = null
-      subscriber?.disconnect()
-      subscriber = null
-      throw error
-    })
-  }
-  return await bridgePromise
-}
-
 export async function closeTaskStream() {
-  if (publishTimer) clearTimeout(publishTimer)
   if (flushTimer) clearTimeout(flushTimer)
   flushTaskStreamEvents()
-  flushRedisEvents()
   emitter.removeAllListeners()
-  const clients = [publisher, subscriber].filter(Boolean)
-  publisher = null
-  subscriber = null
-  bridgePromise = null
-  await Promise.allSettled(clients.map((client) => client.quit().catch(() => client.disconnect())))
 }

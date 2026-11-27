@@ -1,31 +1,10 @@
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import cookieParser from 'cookie-parser'
-import cors from 'cors'
 import express from 'express'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
-import {
-  authSessionConfig,
-  createAccessToken,
-  createEmailVerificationCode,
-  createPasswordResetToken,
-  createRefreshSession,
-  decryptSecret,
-  hashPasswordResetToken,
-  hashRefreshToken,
-  hashPassword,
-  maskKey,
-  publicUser,
-  refreshCookie,
-  usesDefaultSecret,
-  verifyAccessToken,
-  verifyEmailVerificationCode,
-  verifyPassword,
-} from './auth.mjs'
-import { refreshCookieOptions } from './auth-cookie.mjs'
-import { emailConfig, sendPasswordResetEmail, sendRegistrationVerificationEmail } from './email.mjs'
+import { decryptSecret, maskKey, publicUser, usesDefaultSecret } from './secrets.mjs'
 import { closeStore, countWords, findProject, formatWords, loadDb, storeInfo, updateDb } from './store.mjs'
 import * as chatMemory from './chat-memory.mjs'
 import {
@@ -34,8 +13,7 @@ import {
   storyAgentModelCapabilities,
   storyAgentRuntimeInfo,
 } from './story-agent.mjs'
-import { closeTaskQueue, enqueueWritingTask, isTaskQueueEnabled, publishTaskCancellation } from './task-queue.mjs'
-import { closeTaskStream, startTaskStreamBridge, subscribeTaskStream } from './task-stream.mjs'
+import { closeTaskStream, subscribeTaskStream } from './task-stream.mjs'
 import { purgeReasoningData } from './purge-reasoning.mjs'
 import { executeWritingTask as runWritingTask } from './writing-task-executor.mjs'
 import { compactAgentThread } from './context-compaction.mjs'
@@ -62,10 +40,23 @@ import {
   publicModelProfile,
   sanitizeModelSettings,
 } from './model-settings.mjs'
-import { readSkillPackage, removeSkillPackage, validateSkillPackage, writeSkillPackage } from './skill-market-storage.mjs'
-import { reviewSkillPackage, skillReviewPublicConfig } from './skill-review.mjs'
-import { isMarketSkillPublished, marketSkillKey } from './market-skill-runtime.mjs'
 import { parseAgentChoiceResponse } from '../src/editor-agent.mjs'
+import { closeWorkspaceRuntime, getRecentWorkspaces, initialWorkspace, rememberWorkspace, workspaceState } from './workspace-runtime.mjs'
+import { registerWorkspaceRoutes } from './workspace-routes.mjs'
+import {
+  createHistorySnapshot,
+  createWorkspaceChapter,
+  deleteWorkspaceChapter,
+  isWorkspaceProjectId,
+  readChapterContent,
+  renameWorkspaceChapter,
+  updateWorkspaceMeta,
+  workspaceChapterHistory,
+  workspaceRoot,
+  workspaceChapterList,
+  workspaceProject,
+  writeChapterContent,
+} from './workspace-adapter.mjs'
 
 const app = express()
 const parsedPort = Number(process.env.PORT)
@@ -73,30 +64,12 @@ const port = Number.isFinite(parsedPort) ? (parsedPort === 0 ? crypto.randomInt(
 const host = process.env.HOST || '127.0.0.1'
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(serverDir, '..', 'dist')
-const allowedOrigins = (process.env.WEB_ORIGIN || 'http://127.0.0.1:5173,http://localhost:5173').split(',').map((origin) => origin.trim()).filter(Boolean)
-const appPublicUrl = (() => {
-  const configured = process.env.APP_PUBLIC_URL || allowedOrigins[0] || 'http://127.0.0.1:5173'
-  let parsed
-  try {
-    parsed = new URL(configured)
-  } catch {
-    throw new Error('APP_PUBLIC_URL must be a valid HTTP or HTTPS URL')
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
-    throw new Error('APP_PUBLIC_URL must be a public HTTP or HTTPS URL without embedded credentials')
-  }
-  parsed.search = ''
-  parsed.hash = ''
-  return parsed.toString()
-})()
-const corsMiddleware = cors({ origin: true, credentials: true })
 const PROJECT_TYPES = new Set(['长篇', '短篇', '参考书'])
 const PROJECT_STATUSES = new Set(['构思中', '连载中', '已完结', '已拆文'])
 const CHAPTER_STATES = new Set(['draft', 'current', 'done'])
 const FORESHADOW_STATUSES = new Set(['planned', 'planted', 'resolved', 'abandoned'])
 const STORY_MEMORY_TYPES = new Set(['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit'])
 const STORY_MEMORY_STATUSES = new Set(['active', 'archived'])
-const SKILL_MARKET_CATEGORIES = new Set(['写作', '审稿', '人物', '世界观', '效率', '其他'])
 const WRITING_REQUIREMENTS = ['type', 'genre', 'style', 'premise']
 const GENRE_SUGGESTIONS = [
   '现代言情', '古代言情', '东方玄幻', '武侠仙侠', '都市高武', '都市脑洞',
@@ -107,21 +80,10 @@ const STYLE_SUGGESTIONS = ['逆袭打脸', '重生复仇', '甜宠拉扯', '克�
 const writingTaskControllers = new Map()
 // 桌面/本地模式：不校验登录，所有请求统一走一个隐式本地用户，数据只落本地 JSON。
 // 由桌面壳（Tauri sidecar）或 scripts/desktop-start.mjs 设置。
-const localMode = process.env.AUTH_MODE === 'local'
 const LOCAL_USER_ID = 'local-user'
 
-if (isTaskQueueEnabled() && !String(process.env.DATABASE_URL || '').trim()) {
-  throw new Error('Redis AI task queue requires DATABASE_URL so API and workers share transactional state')
-}
-const registrationMode = process.env.REGISTRATION_MODE || (process.env.NODE_ENV === 'production' ? 'owner-only' : 'open')
-if (!['open', 'owner-only', 'closed'].includes(registrationMode)) {
-  throw new Error('REGISTRATION_MODE must be open, owner-only, or closed')
-}
-if (process.env.NODE_ENV === 'production' && !localMode && registrationMode !== 'closed' && !emailConfig.configured) {
-  throw new Error('Email delivery must be configured when registration is enabled in production')
-}
-if (process.env.NODE_ENV === 'production' && !localMode) {
-  if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) throw new Error('AUTH_SECRET must contain at least 32 characters in production')
+if (process.env.NODE_ENV === 'production' && !process.env.AUTH_SECRET) {
+  throw new Error('AUTH_SECRET must be set in production (用来加密本地保存的模型 Key)')
 }
 const sharedModelAccessAllowed = process.env.ALLOW_SHARED_MODEL_KEY === 'true'
 const aiDailyLimit = nonNegativeIntegerEnv('AI_DAILY_REQUEST_LIMIT', 0, 100_000)
@@ -138,64 +100,20 @@ function nonNegativeIntegerEnv(name, fallback, maximum) {
   return Number.isInteger(value) && value >= 0 ? Math.min(value, maximum) : fallback
 }
 
-function isCodespacesOrigin(origin) {
-  if (process.env.CODESPACES !== 'true' || !process.env.CODESPACE_NAME) return false
-  try {
-    const url = new URL(origin)
-    const domain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev'
-    return url.protocol === 'https:'
-      && url.hostname.startsWith(`${process.env.CODESPACE_NAME}-`)
-      && url.hostname.endsWith(`.${domain}`)
-  } catch {
-    return false
-  }
-}
-
 app.disable('x-powered-by')
-if (process.env.TRUST_PROXY && process.env.TRUST_PROXY !== 'false') {
-  const proxySetting = /^\d+$/.test(process.env.TRUST_PROXY)
-    ? Number(process.env.TRUST_PROXY)
-    : process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY
-  app.set('trust proxy', proxySetting)
-}
-app.use(helmet({ contentSecurityPolicy: false }))
+// 桌面应用是同源页面（服务端自己托管 dist/），只需拦住跨站来源。
 app.use((req, res, next) => {
   const origin = req.get('origin')
-  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim()
-  const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim()
-  const ownOrigin = `${forwardedProto || req.protocol}://${forwardedHost || req.get('host')}`
-  if (!origin || origin === ownOrigin || allowedOrigins.includes(origin) || isCodespacesOrigin(origin)) {
-    corsMiddleware(req, res, next)
+  const ownOrigin = `${req.protocol}://${req.get('host')}`
+  if (origin && origin !== ownOrigin) {
+    next(Object.assign(new Error('不允许的请求来源'), { status: 403 }))
     return
   }
-  next(Object.assign(new Error('不允许的请求来源'), { status: 403 }))
+  next()
 })
-app.use(cookieParser())
 app.use(express.json({ limit: '20mb' }))
 
-app.use(['/api/auth/register', '/api/auth/login'], rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 20,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: '登录尝试过于频繁，请稍后再试' },
-}))
-
-app.use('/api/auth/register/code', rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: '验证码发送过于频繁，请稍后再试' },
-}))
-
-app.use(['/api/auth/password/forgot', '/api/auth/password/reset'], rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: '密码找回请求过于频繁，请稍后再试' },
-}))
+app.use(express.json({ limit: '20mb' }))
 
 function cleanText(value, field, maxLength) {
   if (typeof value !== 'string') {
@@ -246,25 +164,6 @@ function isNetworkError(error) {
   return error?.name === 'TimeoutError'
     || error?.name === 'TypeError'
     || ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(error?.cause?.code)
-}
-
-function cleanEmail(value) {
-  const email = cleanText(value, '邮箱', 160).toLowerCase()
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    const error = new Error('邮箱格式不正确')
-    error.status = 400
-    throw error
-  }
-  return email
-}
-
-function cleanPassword(value) {
-  if (typeof value !== 'string' || value.length < 8 || value.length > 128) {
-    const error = new Error('密码长度需要在 8 到 128 个字符之间')
-    error.status = 400
-    throw error
-  }
-  return value
 }
 
 function cleanTags(value) {
@@ -333,12 +232,6 @@ async function runWithAiQuota(userId, operation, callback) {
     }).catch(() => undefined)
     throw error
   }
-}
-
-function unauthorized(message = '请先登录') {
-  const error = new Error(message)
-  error.status = 401
-  return error
 }
 
 function findOr404(db, projectId, userId) {
@@ -708,70 +601,14 @@ function dashboardStats(db, userId) {
   }
 }
 
-function publicSkillMarketItem(item, userId, author = null, installs = []) {
-  const isOwner = item.userId === userId
-  const installed = installs.some((entry) => entry.userId === userId && entry.skillId === item.id)
-  const review = item.review
-    ? {
-        status: item.review.verdict === 'allow' ? 'approved' : 'rejected',
-        reviewer: item.review.reviewer,
-        riskLevel: item.review.riskLevel,
-        summary: item.review.summary,
-        reviewedAt: item.review.reviewedAt,
-        ...(isOwner ? { findings: item.review.findings || [] } : {}),
-      }
-    : { status: 'legacy', reviewer: 'none', riskLevel: 'unknown', summary: '该 Skill 发布于安全审查功能启用之前。', reviewedAt: null }
-  return {
-    id: item.id,
-    name: item.name,
-    description: item.description,
-    version: item.version,
-    category: item.category,
-    tags: item.tags || [],
-    fileName: item.fileName,
-    fileType: item.fileType,
-    fileSize: item.fileSize,
-    sha256: item.sha256,
-    downloads: Math.max(0, Number(item.downloads) || 0),
-    author: {
-      id: item.userId,
-      name: author?.name || item.authorName || '匿名作者',
-    },
-    isOwner,
-    installed,
-    installCount: installs.filter((entry) => entry.skillId === item.id).length,
-    status: item.status,
-    isListed: isMarketSkillPublished(item),
-    skillKey: marketSkillKey(item.id),
-    review,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-  }
-}
-
-function setRefreshCookie(res, token, req) {
-  res.cookie(refreshCookie.name, token, refreshCookieOptions(req, { maxAge: refreshCookie.maxAge }))
-}
-
-function clearRefreshCookie(res, req) {
-  res.clearCookie(refreshCookie.name, refreshCookieOptions(req))
-}
-
-async function issueSession(user, req, res) {
-  const accessToken = await createAccessToken(user)
-  const refresh = createRefreshSession(user.id, { userAgent: req.get('user-agent') })
-  await updateDb((db) => {
-    db.sessions = db.sessions.filter((session) => new Date(session.expiresAt) > new Date())
-    db.sessions.push(refresh.session)
-  })
-  setRefreshCookie(res, refresh.token, req)
-  return { accessToken, user: publicUser(user) }
-}
-
-// 本地模式：确保存在一个隐式本地用户（并为其创建一本入门作品），
-// 供所有无登录请求共用；重试幂等，不会重复建用户/作品。
+// 单用户本地应用：确保存在唯一的本地用户记录。
+// 结果缓存在进程内——旧实现每个请求都会 updateDb，导致整个 db.json 被反复重写。
+let cachedLocalUser = null
+let localUserPromise = null
 async function ensureLocalUser() {
-  return updateDb((db) => {
+  if (cachedLocalUser) return cachedLocalUser
+  if (localUserPromise) return localUserPromise
+  localUserPromise = updateDb((db) => {
     let user = db.users.find((item) => item.id === LOCAL_USER_ID)
     if (user) return user
     const timestamp = new Date().toISOString()
@@ -797,300 +634,47 @@ async function ensureLocalUser() {
       createChapterRecord(db, project, '第一章')
     }
     return user
+  }).then((user) => {
+    cachedLocalUser = user
+    localUserPromise = null
+    return user
+  }).catch((error) => {
+    localUserPromise = null
+    throw error
   })
+  return localUserPromise
 }
 
-async function localSessionPayload() {
-  return { accessToken: null, user: publicUser(await ensureLocalUser()) }
-}
-
+// 单用户本地应用没有登录态：所有请求直接绑定到本地用户。
 async function authenticate(req, _res, next) {
   try {
-    if (localMode) {
-      req.user = await ensureLocalUser()
-      next()
-      return
-    }
-    const authorization = req.get('authorization') || ''
-    if (!authorization.startsWith('Bearer ')) throw unauthorized()
-    const payload = await verifyAccessToken(authorization.slice(7))
-    const db = await loadDb()
-    const user = db.users.find((item) => item.id === payload.sub)
-    if (!user) throw unauthorized('账号不存在')
-    if (Number(payload.authVersion ?? 0) !== (Number(user.authVersion) || 0)) throw unauthorized('登录已过期，请重新登录')
-    req.user = user
+    req.user = await ensureLocalUser()
     next()
   } catch (error) {
-    next(error.status ? error : unauthorized())
+    next(error)
   }
 }
 
 app.get('/api/health', async (_req, res, next) => {
   try {
-    const db = await loadDb()
     res.json({
       ok: true,
-      users: db.users.length,
-      projects: db.projects.length,
       storage: storeInfo(),
       agentRuntime: storyAgentRuntimeInfo(),
-      skillReview: skillReviewPublicConfig(),
-      email: emailConfig,
-      authSession: {
-        accessMinutes: authSessionConfig.accessTtlSeconds / 60,
-        refreshDays: authSessionConfig.refreshTtlMs / (24 * 60 * 60 * 1000),
-      },
+      workspace: workspaceState.current?.root || null,
     })
   } catch (error) {
     next(error)
   }
 })
 
-const registrationCodeResponseMessage = '如果该邮箱可以注册，我们会发送一封验证码邮件，请检查收件箱和垃圾邮件。'
+// 单用户本地应用：所有请求都隐式归属同一个本地用户。
+// 保留这一层是因为 135 处路由都用 req.user.id 做作用域过滤。
+app.use('/api', authenticate)
 
-app.post('/api/auth/register/code', async (req, res, next) => {
-  try {
-    if (localMode) return res.status(202).json({ message: registrationCodeResponseMessage })
-    const email = cleanEmail(req.body?.email)
-    const verificationRequest = await updateDb((db) => {
-      if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
-        throw Object.assign(new Error('当前站点未开放注册'), { status: 403 })
-      }
-      const now = Date.now()
-      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => new Date(item.expiresAt).getTime() > now && Number(item.attempts || 0) < 5)
-      if (db.users.some((item) => item.email === email)) return null
-      const existing = db.emailVerificationCodes.find((item) => item.email === email)
-      if (existing && now - new Date(existing.createdAt).getTime() < 60_000) return { cooldown: true }
-      const verification = createEmailVerificationCode(email)
-      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
-      db.emailVerificationCodes.push(verification.record)
-      return verification
-    })
-
-    if (verificationRequest?.record) {
-      try {
-        const delivery = await sendRegistrationVerificationEmail({
-          to: email,
-          code: verificationRequest.code,
-          expiresInMinutes: authSessionConfig.emailVerificationTtlMs / (60 * 1000),
-          idempotencyKey: verificationRequest.record.id,
-        })
-        if (!delivery.delivered) {
-          await updateDb((db) => {
-            db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verificationRequest.record.id)
-          })
-        }
-      } catch (error) {
-        await updateDb((db) => {
-          db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verificationRequest.record.id)
-        }).catch(() => undefined)
-        console.error(`Registration verification email delivery failed: ${error.message}`)
-      }
-    }
-
-    const payload = { message: registrationCodeResponseMessage, retryAfterSeconds: 60 }
-    if (process.env.NODE_ENV === 'test' && process.env.EMAIL_VERIFICATION_EXPOSE_CODE === 'true' && verificationRequest?.code) {
-      payload.verificationCode = verificationRequest.code
-    }
-    res.status(202).json(payload)
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/auth/register', async (req, res, next) => {
-  try {
-    if (localMode) return res.json(await localSessionPayload())
-    const name = cleanText(req.body?.name, '昵称', 40)
-    const email = cleanEmail(req.body?.email)
-    const password = cleanPassword(req.body?.password)
-    const verificationCode = typeof req.body?.verificationCode === 'string' ? req.body.verificationCode.trim() : ''
-    if (!/^\d{6}$/.test(verificationCode)) {
-      throw Object.assign(new Error('请输入 6 位邮箱验证码'), { status: 400 })
-    }
-    const passwordHash = await hashPassword(password)
-    const user = {
-      id: crypto.randomUUID(),
-      name,
-      email,
-      passwordHash,
-      authVersion: 0,
-      createdAt: new Date().toISOString(),
-    }
-    const result = await updateDb((db) => {
-      if (registrationMode === 'closed' || (registrationMode === 'owner-only' && db.users.length > 0)) {
-        throw Object.assign(new Error('当前站点未开放注册'), { status: 403 })
-      }
-      if (db.users.some((item) => item.email === email)) {
-        throw Object.assign(new Error('该邮箱已经注册'), { status: 409 })
-      }
-      const now = Date.now()
-      const verification = db.emailVerificationCodes.find((item) => item.email === email && new Date(item.expiresAt).getTime() > now && Number(item.attempts || 0) < 5)
-      if (!verification || !verifyEmailVerificationCode(email, verificationCode, verification.codeHash)) {
-        if (verification) {
-          verification.attempts = Number(verification.attempts || 0) + 1
-          if (verification.attempts >= 5) db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.id !== verification.id)
-        } else {
-          db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
-        }
-        return { error: '邮箱验证码无效或已过期，请重新获取' }
-      }
-      db.emailVerificationCodes = db.emailVerificationCodes.filter((item) => item.email !== email)
-      db.users.push(user)
-      if (!db.projects.some((project) => project.userId === user.id)) {
-        const timestamp = new Date().toISOString()
-        const project = {
-          id: crypto.randomUUID(), userId: user.id, title: '我的第一本书', type: '长篇', genre: '现代言情', status: '构思中', progress: 0,
-          words: '0', updated: '刚刚', chapters: 0, style: '', tone: '等待你的第一笔设定', cover: 'cover-new', isActive: true, createdAt: timestamp, updatedAt: timestamp,
-        }
-        db.projects.push(project)
-        db.chapters[project.id] = []
-        db.drafts[project.id] = {}
-        createChapterRecord(db, project, '第一章')
-      }
-      return { user }
-    })
-    if (result.error) throw Object.assign(new Error(result.error), { status: 400 })
-    const created = result.user
-    res.status(201).json(await issueSession(created, req, res))
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/auth/login', async (req, res, next) => {
-  try {
-    if (localMode) return res.json(await localSessionPayload())
-    const email = cleanEmail(req.body?.email)
-    const password = cleanPassword(req.body?.password)
-    const db = await loadDb()
-    const user = db.users.find((item) => item.email === email)
-    if (!user || !(await verifyPassword(password, user.passwordHash))) throw unauthorized('邮箱或密码不正确')
-    res.json(await issueSession(user, req, res))
-  } catch (error) {
-    next(error)
-  }
-})
-
-const passwordResetResponseMessage = '如果该邮箱已注册，我们会发送一封密码重置邮件，请检查收件箱和垃圾邮件。'
-
-app.post('/api/auth/password/forgot', async (req, res, next) => {
-  try {
-    const email = cleanEmail(req.body?.email)
-    const resetRequest = await updateDb((db) => {
-      const now = Date.now()
-      db.passwordResetTokens = db.passwordResetTokens.filter((item) => new Date(item.expiresAt).getTime() > now)
-      const user = db.users.find((item) => item.email === email)
-      if (!user) return null
-      const reset = createPasswordResetToken(user.id)
-      db.passwordResetTokens = db.passwordResetTokens.filter((item) => item.userId !== user.id)
-      db.passwordResetTokens.push(reset.record)
-      return { user: publicUser(user), ...reset }
-    })
-
-    if (resetRequest) {
-      const resetUrl = new URL(appPublicUrl)
-      resetUrl.searchParams.set('reset_token', resetRequest.token)
-      try {
-        await sendPasswordResetEmail({
-          to: resetRequest.user.email,
-          name: resetRequest.user.name,
-          resetUrl: resetUrl.toString(),
-          expiresInMinutes: authSessionConfig.passwordResetTtlMs / (60 * 1000),
-          idempotencyKey: resetRequest.record.id,
-        })
-      } catch (error) {
-        console.error(`Password reset email delivery failed: ${error.message}`)
-      }
-    }
-
-    const payload = { message: passwordResetResponseMessage }
-    if (process.env.NODE_ENV === 'test' && process.env.PASSWORD_RESET_EXPOSE_TOKEN === 'true' && resetRequest) {
-      payload.resetToken = resetRequest.token
-    }
-    res.status(202).json(payload)
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/auth/password/reset', async (req, res, next) => {
-  try {
-    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : ''
-    if (token.length < 32 || token.length > 200) {
-      throw Object.assign(new Error('重置链接无效或已过期，请重新申请'), { status: 400 })
-    }
-    const password = cleanPassword(req.body?.password)
-    const passwordHash = await hashPassword(password)
-    const tokenHash = hashPasswordResetToken(token)
-    await updateDb((db) => {
-      const now = Date.now()
-      const reset = db.passwordResetTokens.find((item) => item.tokenHash === tokenHash && new Date(item.expiresAt).getTime() > now)
-      const user = reset && db.users.find((item) => item.id === reset.userId)
-      if (!reset || !user) {
-        db.passwordResetTokens = db.passwordResetTokens.filter((item) => new Date(item.expiresAt).getTime() > now)
-        throw Object.assign(new Error('重置链接无效或已过期，请重新申请'), { status: 400 })
-      }
-      user.passwordHash = passwordHash
-      user.authVersion = (Number(user.authVersion) || 0) + 1
-      db.sessions = db.sessions.filter((session) => session.userId !== user.id)
-      db.passwordResetTokens = db.passwordResetTokens.filter((item) => item.userId !== user.id)
-    })
-    clearRefreshCookie(res, req)
-    res.json({ message: '密码已更新，请使用新密码登录。' })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/auth/refresh', async (req, res, next) => {
-  try {
-    if (localMode) return res.json(await localSessionPayload())
-    const rawToken = req.cookies[refreshCookie.name]
-    if (!rawToken) throw unauthorized()
-    const tokenHash = hashRefreshToken(rawToken)
-    const result = await updateDb((db) => {
-      const index = db.sessions.findIndex((session) => session.tokenHash === tokenHash && new Date(session.expiresAt) > new Date())
-      if (index === -1) throw unauthorized('登录已过期，请重新登录')
-      const session = db.sessions[index]
-      const user = db.users.find((item) => item.id === session.userId)
-      if (!user) throw unauthorized('账号不存在')
-      db.sessions.splice(index, 1)
-      const nextSession = createRefreshSession(user.id, { userAgent: req.get('user-agent') })
-      db.sessions.push(nextSession.session)
-      return { user, token: nextSession.token }
-    })
-    setRefreshCookie(res, result.token, req)
-    res.json({ accessToken: await createAccessToken(result.user), user: publicUser(result.user) })
-  } catch (error) {
-    clearRefreshCookie(res, req)
-    next(error)
-  }
-})
-
-app.post('/api/auth/logout', async (req, res, next) => {
-  try {
-    if (localMode) {
-      clearRefreshCookie(res, req)
-      return res.status(204).end()
-    }
-    const rawToken = req.cookies[refreshCookie.name]
-    if (rawToken) {
-      const tokenHash = hashRefreshToken(rawToken)
-      await updateDb((db) => { db.sessions = db.sessions.filter((session) => session.tokenHash !== tokenHash) })
-    }
-    clearRefreshCookie(res, req)
-    res.status(204).end()
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.get('/api/auth/me', authenticate, (req, res) => {
+app.get('/api/auth/me', (req, res) => {
   res.json({ user: publicUser(req.user) })
 })
-
-app.use('/api', authenticate)
 
 const aiInvocationPaths = [
   /^\/api\/ai\/models$/,
@@ -1109,7 +693,6 @@ const aiInvocationPaths = [
 app.use(rateLimit({
   windowMs: 60_000,
   limit: aiRequestRateLimit,
-  keyGenerator: (req) => req.user.id,
   skip: (req) => req.method !== 'POST' || !aiInvocationPaths.some((pattern) => pattern.test(req.path)),
   standardHeaders: 'draft-8',
   legacyHeaders: false,
@@ -1336,9 +919,8 @@ async function executeWritingTaskLocally(taskId, userId) {
 }
 
 async function dispatchWritingTask(task) {
-  if (isTaskQueueEnabled()) {
+  if (false) {
     try {
-      await enqueueWritingTask(task.id)
     } catch (error) {
       await updateDb((db) => {
         const current = db.writingTasks.find((item) => item.id === task.id)
@@ -1385,8 +967,12 @@ async function startWritingTask(user, body, forcedThreadId = null) {
     }
   } else if (projectId) {
     const db = await loadDb()
-    const project = findOr404(db, projectId, user.id)
-    if (chapterId) chapterOr404(db, project, chapterId)
+    // 工作区模式下 project_id 就是书根路径，不要求 db 里有对应作品记录。
+    const activeRoot = workspaceState.current?.root
+    if (!activeRoot || String(projectId) !== String(activeRoot)) {
+      const project = findOr404(db, projectId, req.user.id)
+      if (chapterId) chapterOr404(db, project, chapterId)
+    }
   }
   const idempotencyKey = cleanOptionalText(body?.idempotencyKey, '幂等键', 160)
   const requestKey = taskRequestKey(user.id, input, idempotencyKey)
@@ -1722,11 +1308,10 @@ async function interruptWritingTask(userId, taskId) {
   if (localExecution && (!prepared.executionId || localExecution.executionId === prepared.executionId)) {
     localExecution.controller.abort()
   }
-  await publishTaskCancellation(prepared.task.id, prepared.executionId)
   return prepared.task
 }
 
-async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}, webFetch = false) {
+async function requestWritingAssistantTurn(user, session, message, skill = null, payload = {}) {
   const response = await invokeStoryAgent(user, {
     message,
     skill: skill || undefined,
@@ -1734,7 +1319,6 @@ async function requestWritingAssistantTurn(user, session, message, skill = null,
       ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
       conversation: (session.messages || []).map(({ role, text }) => ({ role, text })),
       requirements: session.requirements || emptyWritingRequirements(),
-      web_fetch: webFetch,
       assistant_mode: 'guided-project-creation',
     },
   })
@@ -1844,246 +1428,10 @@ app.get('/api/ai/skills', async (req, res, next) => {
   try {
     const modelReady = Boolean(hasActiveModelCredential(req.user.settings) || sharedModelAccessAllowed)
     const builtInCatalog = await listStoryAgentSkills()
-    const db = await loadDb()
-    const installedIds = new Set((db.skillMarketInstalls || [])
-      .filter((entry) => entry.userId === req.user.id)
-      .map((entry) => entry.skillId))
-    const communitySkills = (db.skillMarketItems || [])
-      .filter((item) => installedIds.has(item.id) && isMarketSkillPublished(item))
-      .map((item) => ({
-        name: marketSkillKey(item.id),
-        displayName: item.name,
-        version: item.version,
-        description: item.description,
-        status: modelReady ? 'ready' : 'needs_model',
-        executor: 'yemu-agent-runtime',
-        source: 'market',
-        marketSkillId: item.id,
-      }))
-    const builtInSkills = builtInCatalog
-      .filter((skill) => skill.name !== 'story-community')
-      .map((skill) => ({ ...skill, status: modelReady ? 'ready' : 'needs_model' }))
     res.json({
       runtime: storyAgentRuntimeInfo(),
-      skills: [...builtInSkills, ...communitySkills],
+      skills: builtInCatalog.map((skill) => ({ ...skill, status: modelReady ? 'ready' : 'needs_model' })),
     })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.get('/api/skill-market', async (req, res, next) => {
-  try {
-    const query = String(req.query.q || '').trim().toLowerCase().slice(0, 120)
-    const category = String(req.query.category || '').trim()
-    const mineOnly = req.query.mine === 'true'
-    const db = await loadDb()
-    const users = new Map(db.users.map((user) => [user.id, user]))
-    const items = (db.skillMarketItems || [])
-      .filter((item) => isMarketSkillPublished(item) || item.userId === req.user.id)
-      .filter((item) => !mineOnly || item.userId === req.user.id)
-      .filter((item) => !category || item.category === category)
-      .filter((item) => !query || [item.name, item.description, item.category, ...(item.tags || []), users.get(item.userId)?.name]
-        .filter(Boolean).join(' ').toLowerCase().includes(query))
-      .sort((left, right) => Number(right.downloads || 0) - Number(left.downloads || 0)
-        || String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-      .map((item) => publicSkillMarketItem(item, req.user.id, users.get(item.userId), db.skillMarketInstalls || []))
-    res.json({ items, categories: [...SKILL_MARKET_CATEGORIES], review: skillReviewPublicConfig() })
-  } catch (error) {
-    next(error)
-  }
-})
-
-const skillUploadRateLimit = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: 30,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: 'Skill 上传和审查过于频繁，请稍后再试' },
-})
-
-app.post('/api/skill-market', skillUploadRateLimit, async (req, res, next) => {
-  let storageName = ''
-  try {
-    const name = cleanText(req.body?.name, 'Skill 名称', 80)
-    const description = cleanText(req.body?.description, 'Skill 简介', 500)
-    const version = cleanOptionalText(req.body?.version, '版本号', 32) || '1.0.0'
-    const category = cleanEnum(req.body?.category || '其他', '分类', SKILL_MARKET_CATEGORIES)
-    const tags = cleanTags(req.body?.tags)
-    const rawFileName = path.basename(cleanText(req.body?.fileName, '文件名', 180))
-    const fileName = rawFileName.replace(/[^\p{L}\p{N}._()（）\-\s]/gu, '_')
-    if (!fileName || fileName === '.' || fileName === '..') throw Object.assign(new Error('文件名无效'), { status: 400 })
-    const existing = await loadDb()
-    const duplicate = (existing.skillMarketItems || []).find((entry) => entry.userId === req.user.id
-      && entry.name.toLowerCase() === name.toLowerCase()
-      && entry.version === version)
-    if (duplicate) throw Object.assign(new Error('同名同版本 Skill 已经发布'), { status: 409 })
-    const validated = validateSkillPackage({ fileName, contentBase64: req.body?.contentBase64 })
-    const review = await reviewSkillPackage({
-      name,
-      description,
-      version,
-      category,
-      tags,
-      fileName,
-      extension: validated.extension,
-      buffer: validated.buffer,
-      sha256: validated.sha256,
-    })
-    if (review.verdict !== 'allow') {
-      const primaryFinding = review.findings?.[0]?.title
-      throw Object.assign(new Error(primaryFinding
-        ? `Skill 未通过安全审查：${primaryFinding}`
-        : `Skill 未通过安全审查：${review.summary}`), { status: 422 })
-    }
-    const id = crypto.randomUUID()
-    storageName = await writeSkillPackage(id, validated.extension, validated.buffer)
-    const timestamp = new Date().toISOString()
-    const item = {
-      id,
-      userId: req.user.id,
-      authorName: req.user.name,
-      name,
-      description,
-      version,
-      category,
-      tags,
-      fileName,
-      fileType: validated.contentType,
-      fileSize: validated.size,
-      sha256: validated.sha256,
-      storageName,
-      downloads: 0,
-      status: review.reviewer === 'model' ? 'published' : 'pending_review',
-      review,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }
-    await updateDb((db) => {
-      db.skillMarketItems ||= []
-      const duplicate = db.skillMarketItems.find((entry) => entry.userId === req.user.id
-        && entry.name.toLowerCase() === name.toLowerCase()
-        && entry.version === version)
-      if (duplicate) throw Object.assign(new Error('同名同版本 Skill 已经发布'), { status: 409 })
-      db.skillMarketItems.unshift(item)
-    })
-    res.status(201).json({ item: publicSkillMarketItem(item, req.user.id, req.user, []) })
-  } catch (error) {
-    if (storageName) await removeSkillPackage(storageName).catch(() => undefined)
-    next(error)
-  }
-})
-
-app.get('/api/skill-market/:skillId/download', async (req, res, next) => {
-  try {
-    const db = await loadDb()
-    const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId && isMarketSkillPublished(entry))
-    if (!item) throw Object.assign(new Error('Skill 不存在或已下架'), { status: 404 })
-    const buffer = await readSkillPackage(item.storageName)
-    await updateDb((current) => {
-      const target = (current.skillMarketItems || []).find((entry) => entry.id === item.id && isMarketSkillPublished(entry))
-      if (target) {
-        target.downloads = Math.max(0, Number(target.downloads) || 0) + 1
-        target.updatedAt = new Date().toISOString()
-      }
-    })
-    res.set({
-      'Content-Type': item.fileType || 'application/octet-stream',
-      'Content-Length': String(buffer.length),
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-    })
-    res.attachment(item.fileName)
-    res.send(buffer)
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/skill-market/:skillId/review', skillUploadRateLimit, async (req, res, next) => {
-  try {
-    const db = await loadDb()
-    const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
-    if (!item) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
-    if (item.userId !== req.user.id) throw Object.assign(new Error('只能重新审查自己上传的 Skill'), { status: 403 })
-    const buffer = await readSkillPackage(item.storageName)
-    const validated = validateSkillPackage({ fileName: item.fileName, contentBase64: buffer.toString('base64') })
-    if (validated.sha256 !== item.sha256) throw Object.assign(new Error('Skill 文件完整性校验失败'), { status: 409 })
-    const review = await reviewSkillPackage({
-      name: item.name,
-      description: item.description,
-      version: item.version,
-      category: item.category,
-      tags: item.tags,
-      fileName: item.fileName,
-      extension: validated.extension,
-      buffer: validated.buffer,
-      sha256: validated.sha256,
-    })
-    const updated = await updateDb((current) => {
-      const target = (current.skillMarketItems || []).find((entry) => entry.id === item.id && entry.userId === req.user.id)
-      if (!target) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
-      target.review = review
-      target.status = review.verdict === 'allow' && review.reviewer === 'model' ? 'published' : 'pending_review'
-      target.updatedAt = new Date().toISOString()
-      return target
-    })
-    if (!isMarketSkillPublished(updated)) {
-      throw Object.assign(new Error(review.verdict === 'reject'
-        ? `Skill 未通过安全审查：${review.findings?.[0]?.title || review.summary}`
-        : '专用模型审查尚未完成，Skill 仍处于待审查状态'), { status: 422 })
-    }
-    const latest = await loadDb()
-    res.json({ item: publicSkillMarketItem(updated, req.user.id, req.user, latest.skillMarketInstalls || []) })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.post('/api/skill-market/:skillId/install', async (req, res, next) => {
-  try {
-    const installedAt = new Date().toISOString()
-    const item = await updateDb((db) => {
-      const target = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
-      if (!isMarketSkillPublished(target)) throw Object.assign(new Error('该 Skill 尚未通过审查并上架'), { status: 404 })
-      db.skillMarketInstalls ||= []
-      const exists = db.skillMarketInstalls.some((entry) => entry.userId === req.user.id && entry.skillId === target.id)
-      if (!exists) db.skillMarketInstalls.push({ userId: req.user.id, skillId: target.id, installedAt })
-      return target
-    })
-    const db = await loadDb()
-    const author = db.users.find((user) => user.id === item.userId)
-    res.json({ item: publicSkillMarketItem(item, req.user.id, author, db.skillMarketInstalls || []) })
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.delete('/api/skill-market/:skillId/install', async (req, res, next) => {
-  try {
-    await updateDb((db) => {
-      db.skillMarketInstalls ||= []
-      db.skillMarketInstalls = db.skillMarketInstalls
-        .filter((entry) => !(entry.userId === req.user.id && entry.skillId === req.params.skillId))
-    })
-    res.status(204).end()
-  } catch (error) {
-    next(error)
-  }
-})
-
-app.delete('/api/skill-market/:skillId', async (req, res, next) => {
-  try {
-    const removed = await updateDb((db) => {
-      const item = (db.skillMarketItems || []).find((entry) => entry.id === req.params.skillId)
-      if (!item) throw Object.assign(new Error('Skill 不存在'), { status: 404 })
-      if (item.userId !== req.user.id) throw Object.assign(new Error('只能下架自己上传的 Skill'), { status: 403 })
-      db.skillMarketItems = db.skillMarketItems.filter((entry) => entry.id !== item.id)
-      db.skillMarketInstalls = (db.skillMarketInstalls || []).filter((entry) => entry.skillId !== item.id)
-      return item
-    })
-    await removeSkillPackage(removed.storageName)
-    res.status(204).end()
   } catch (error) {
     next(error)
   }
@@ -3098,8 +2446,6 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
     if (skill && !/^[a-z0-9-]+$/.test(skill)) throw Object.assign(new Error('Skill 名称格式无效'), { status: 400 })
     const payload = req.body?.payload && typeof req.body.payload === 'object' && !Array.isArray(req.body.payload) ? req.body.payload : {}
     if (JSON.stringify(payload).length > 1_000_000) throw Object.assign(new Error('智能体上下文不能超过 1,000,000 个字符'), { status: 400 })
-    const webFetch = req.body?.web_fetch === true
-
     let session = await loadWritingSession(req.user.id)
     if (!session || session.userId !== req.user.id || req.body?.restart === true || session.phase === 'writing') {
       session = createWritingSession(req.user.id)
@@ -3119,8 +2465,8 @@ app.post('/api/writing-assistant/messages', async (req, res, next) => {
 
     const generated = await runWithAiQuota(
       req.user.id,
-      webFetch ? 'writing-assistant-fetch' : 'writing-assistant-turn',
-      () => requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload, webFetch),
+      'writing-assistant-turn',
+      () => requestWritingAssistantTurn(req.user, writingSessionPublic(session), message, skill, payload),
     )
     const reloaded = await loadWritingSession(req.user.id)
     if (!reloaded || reloaded.id !== session.id) throw Object.assign(new Error('创作会话已变化，请重新发送'), { status: 409 })
@@ -3202,6 +2548,11 @@ app.delete('/api/writing-assistant/session', async (req, res, next) => {
 
 app.get('/api/projects', async (req, res, next) => {
   try {
+    // 本地工作区模式：书籍列表就是「当前工作区」这一本。
+    if (workspaceRoot()) {
+      res.json({ projects: [await workspaceProject()] })
+      return
+    }
     const db = await loadDb()
     res.json({ projects: db.projects.filter((project) => project.userId === req.user.id) })
   } catch (error) {
@@ -3220,6 +2571,10 @@ app.get('/api/dashboard', async (req, res, next) => {
 
 app.get('/api/projects/:projectId', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      res.json({ project: await workspaceProject() })
+      return
+    }
     const db = await loadDb()
     res.json({ project: findOr404(db, req.params.projectId, req.user.id) })
   } catch (error) {
@@ -3378,6 +2733,10 @@ app.delete('/api/projects/:projectId', async (req, res, next) => {
 
 app.get('/api/projects/:projectId/chapters', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      res.json({ chapters: await workspaceChapterList() })
+      return
+    }
     const db = await loadDb()
     findOr404(db, req.params.projectId, req.user.id)
     res.json({ chapters: db.chapters[req.params.projectId] || [] })
@@ -3389,6 +2748,10 @@ app.get('/api/projects/:projectId/chapters', async (req, res, next) => {
 app.post('/api/projects/:projectId/chapters', async (req, res, next) => {
   try {
     const title = cleanText(req.body?.title, '章节标题', 100)
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      res.status(201).json({ chapter: await createWorkspaceChapter(title, '') })
+      return
+    }
     const result = await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       return createChapterRecord(db, project, title)
@@ -3401,6 +2764,17 @@ app.post('/api/projects/:projectId/chapters', async (req, res, next) => {
 
 app.patch('/api/projects/:projectId/chapters/:chapterId', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      if (req.body?.title !== undefined) {
+        const title = cleanText(req.body.title, '章节标题', 100)
+        res.json({ chapter: await renameWorkspaceChapter(req.params.chapterId, title) })
+        return
+      }
+      const chapter = (await workspaceChapterList()).find((item) => String(item.id) === String(req.params.chapterId))
+      if (!chapter) throw Object.assign(new Error('章节不存在'), { status: 404 })
+      res.json({ chapter })
+      return
+    }
     const result = await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       const chapter = (db.chapters[project.id] || []).find((item) => String(item.id) === req.params.chapterId)
@@ -3419,6 +2793,11 @@ app.patch('/api/projects/:projectId/chapters/:chapterId', async (req, res, next)
 
 app.delete('/api/projects/:projectId/chapters/:chapterId', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      await deleteWorkspaceChapter(req.params.chapterId)
+      res.status(204).end()
+      return
+    }
     await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       const chapters = db.chapters[project.id] || []
@@ -3495,6 +2874,12 @@ app.put('/api/projects/:projectId/draft', async (req, res, next) => {
 
 app.get('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      const result = await readChapterContent(req.params.chapterId)
+      if (!result) throw Object.assign(new Error('章节不存在'), { status: 404 })
+      res.json({ content: result.content, chapter: result.chapter })
+      return
+    }
     const db = await loadDb()
     const project = findOr404(db, req.params.projectId, req.user.id)
     const chapter = chapterOr404(db, project, req.params.chapterId)
@@ -3507,6 +2892,10 @@ app.get('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, n
 
 app.get('/api/projects/:projectId/chapters/:chapterId/history', async (req, res, next) => {
   try {
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      res.json({ snapshots: await workspaceChapterHistory(req.params.chapterId) })
+      return
+    }
     const db = await loadDb()
     const project = findOr404(db, req.params.projectId, req.user.id)
     const chapter = chapterOr404(db, project, req.params.chapterId)
@@ -3522,7 +2911,7 @@ app.get('/api/projects/:projectId/chapters/:chapterId/context', async (req, res,
     const db = await loadDb()
     const project = findOr404(db, req.params.projectId, req.user.id)
     const chapter = chapterOr404(db, project, req.params.chapterId)
-    res.json({ context: buildWritingContext(db, project, chapter) })
+    res.json({ context: await buildWritingContext(db, project, chapter) })
   } catch (error) {
     next(error)
   }
@@ -3532,6 +2921,11 @@ app.post('/api/projects/:projectId/chapters/:chapterId/history', async (req, res
   try {
     if (typeof req.body?.content !== 'string') throw Object.assign(new Error('历史正文必须是文本'), { status: 400 })
     if (req.body.content.length > 500000) throw Object.assign(new Error('历史正文不能超过 500,000 个字符'), { status: 400 })
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      const result = await createHistorySnapshot(req.params.chapterId, req.body.content)
+      res.status(result.duplicate ? 200 : 201).json(result)
+      return
+    }
     const result = await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       const chapter = chapterOr404(db, project, req.params.chapterId)
@@ -3547,6 +2941,11 @@ app.put('/api/projects/:projectId/chapters/:chapterId/draft', async (req, res, n
   try {
     if (typeof req.body?.content !== 'string') throw Object.assign(new Error('正文必须是文本'), { status: 400 })
     if (req.body.content.length > 500000) throw Object.assign(new Error('单章正文不能超过 500,000 个字符'), { status: 400 })
+    if (isWorkspaceProjectId(req.params.projectId)) {
+      const result = await writeChapterContent(req.params.chapterId, req.body.content)
+      res.json({ chapter: result.chapter, content: result.content, words: result.words })
+      return
+    }
     const result = await updateDb((db) => {
       const project = findOr404(db, req.params.projectId, req.user.id)
       const chapter = chapterOr404(db, project, req.params.chapterId)
@@ -3664,7 +3063,7 @@ app.post('/api/projects/:projectId/chapters/:chapterId/memory-candidates', async
         payload: {
           chapter_title: chapter.title,
           content,
-          writing_context: buildWritingContext(db, project, chapter),
+          writing_context: await buildWritingContext(db, project, chapter),
           memory_candidate_schema: {
             type: ['character_state', 'event', 'world_rule', 'chapter_summary', 'canon_fact', 'voice_habit'],
             fields: ['type', 'title', 'content', 'importance', 'character_name', 'tags', 'reason', 'replaces_memory_id'],
@@ -3847,6 +3246,10 @@ app.delete('/api/ideas/:ideaId', async (req, res, next) => {
   }
 })
 
+// 工作区接口：本地工作区的打开/关闭、文件读写、章节与结构化状态。
+// 放在 /api 404 兜底之前注册，避免被兜底吞掉。
+registerWorkspaceRoutes(app, { workspaceState, getRecentWorkspaces, rememberWorkspace })
+
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: '接口不存在' })
 })
@@ -3866,10 +3269,6 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: status >= 500 ? '服务器内部错误' : error.message })
 })
 
-await startTaskStreamBridge().catch((error) => {
-  console.error(`AI task progress bridge unavailable: ${error.message}`)
-})
-
 let reasoningPurge = null
 const recoverableTasks = await updateDb((db) => {
   const timestamp = new Date().toISOString()
@@ -3879,24 +3278,15 @@ const recoverableTasks = await updateDb((db) => {
   const recoverable = []
   for (const task of db.writingTasks) {
     if (!['queued', 'running'].includes(task.status)) continue
-    if (isTaskQueueEnabled()) {
-      // Running Redis entries remain owned by their worker. The pending-entry
-      // lease will recover them if that worker actually disappeared.
-      if (task.status === 'running') continue
-      task.statusMessage = '任务等待 worker 执行'
-      task.activityPhase = 'queued'
-      task.activityPhaseStartedAt = timestamp
-      task.lastActivityAt = timestamp
-    } else {
-      if (task.status === 'running') task.resumeFromCheckpoint = true
-      task.status = 'queued'
-      task.progress = 0
-      task.activeExecutionId = null
-      task.statusMessage = '服务重启后正在从上次进度继续'
-      task.activityPhase = 'queued'
-      task.activityPhaseStartedAt = timestamp
-      task.lastActivityAt = timestamp
-    }
+    // 任务只在 API 进程内执行：重启后统一回到队列并从检查点续跑。
+    if (task.status === 'running') task.resumeFromCheckpoint = true
+    task.status = 'queued'
+    task.progress = 0
+    task.activeExecutionId = null
+    task.statusMessage = '服务重启后正在从上次进度继续'
+    task.activityPhase = 'queued'
+    task.activityPhaseStartedAt = timestamp
+    task.lastActivityAt = timestamp
     task.updatedAt = timestamp
     recoverable.push({ id: task.id, userId: task.userId })
   }
@@ -3910,8 +3300,7 @@ if (reasoningPurge?.changed) {
   )
 }
 for (const task of recoverableTasks) {
-  if (isTaskQueueEnabled()) await enqueueWritingTask(task.id)
-  else queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })
+  queueMicrotask(() => { void executeWritingTaskLocally(task.id, task.userId) })
 }
 
 const server = app.listen(port, host, () => {
@@ -3921,6 +3310,12 @@ const server = app.listen(port, host, () => {
   const storage = storeInfo()
   console.log(`Storage: ${storage.backend}${storage.dataFile ? ` (${storage.dataFile})` : ''}`)
   if (usesDefaultSecret) console.warn('AUTH_SECRET is not set; use a strong secret in production.')
+  void initialWorkspace().then((workspace) => {
+    if (workspace) console.log(`Workspace: ${workspace.root}`)
+    else console.log('Workspace: 未打开（前端将显示工作区选择页）')
+  }).catch((error) => {
+    console.error(`Failed to restore workspace: ${error.message}`)
+  })
   if (process.env.STORY_PORT_FILE) {
     // 桌面壳/启动器通过该文件获知实际监听端口（配合 PORT=0 使用）。
     const portFile = process.env.STORY_PORT_FILE
@@ -3950,7 +3345,7 @@ async function shutdown(signal) {
   const forceClose = setTimeout(() => server.closeAllConnections(), 8_000)
   await closed
   clearTimeout(forceClose)
-  await Promise.allSettled([chatMemory.closeClient(), closeTaskStream(), closeTaskQueue(), closeStore()])
+  await Promise.allSettled([closeWorkspaceRuntime(), chatMemory.closeClient(), closeTaskStream(), closeStore()])
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

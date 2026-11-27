@@ -281,7 +281,6 @@ function ToolItem({ item }) {
     write_story_file: FilePlus2,
     edit_story_file: FilePenLine,
     read_story_skill: FileText,
-    web_fetch: Globe2,
   }
   const Icon = item.type === 'collabAgentToolCall'
     ? UsersRound

@@ -222,7 +222,6 @@ const storyToolLabels = {
   read_story_skill: '读取 Story Skill',
   list_story_files: '查看作品文件',
   read_story_file: '读取作品文件',
-  web_fetch: '读取网页',
   write_story_file: '写入作品文件',
   edit_story_file: '修改作品文件',
   request_user_input: '请求补充信息',

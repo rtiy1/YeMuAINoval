@@ -32,10 +32,16 @@ static SERVER: Mutex<Option<ServerProcess>> = Mutex::new(None);
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
-            // 单实例：重复启动时聚焦已有窗口即可
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 单实例：重复启动时把已有窗口提到前台。
+            if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -76,7 +82,18 @@ async fn spawn_local_server(app: &tauri::AppHandle) -> Result<String, Box<dyn st
     fs::create_dir_all(&data_dir)?;
     let resource_dir = app.path().resource_dir()?;
 
-    let server_entry = resource_dir.join("server").join("index.mjs");
+    // 打包时 `bundle.resources` 指向的是 `.server-runtime/*`，Tauri 会保留它的
+    // 相对层级，所以运行时位于 resource_dir/.server-runtime。同时兼容旧布局。
+    let runtime_dir = {
+        let nested = resource_dir.join(".server-runtime");
+        if nested.join("server").join("index.mjs").exists() {
+            nested
+        } else {
+            resource_dir.clone()
+        }
+    };
+
+    let server_entry = runtime_dir.join("server").join("index.mjs");
     if !server_entry.exists() {
         return Err(format!("server bundle missing: {}", server_entry.display()).into());
     }
@@ -84,26 +101,20 @@ async fn spawn_local_server(app: &tauri::AppHandle) -> Result<String, Box<dyn st
     let auth_secret = ensure_local_auth_secret(&data_dir)?;
     let port_file = data_dir.join("port.txt");
     let story_data_file = data_dir.join("db.json");
-    let skill_market_dir = data_dir.join("skill-market");
 
     let (rx, child) = app
         .shell()
         .sidecar("bun")?
         .args([std::ffi::OsString::from(server_entry.into_os_string())])
-        .env("AUTH_MODE", "local")
         .env("AUTH_SECRET", auth_secret)
         .env("HOST", "127.0.0.1")
         .env("PORT", "0")
         .env("STORY_PORT_FILE", port_file.to_string_lossy().into_owned())
         .env("STORY_DATA_FILE", story_data_file.to_string_lossy().into_owned())
-        .env("STORY_SKILL_MARKET_DIR", skill_market_dir.to_string_lossy().into_owned())
-        .env("AI_TASK_QUEUE_ENABLED", "false")
-        .env("DATABASE_URL", "")
-        .env("REDIS_URL", "")
-        .env("WEB_ORIGIN", "http://127.0.0.1")
+        .env("DESKTOP_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("NODE_ENV", "production")
         .env("ALLOW_SHARED_MODEL_KEY", "false")
-        .current_dir(resource_dir)
+        .current_dir(runtime_dir)
         .spawn()?;
 
     *SERVER.lock().unwrap() = Some(ServerProcess { child, _rx: rx });
@@ -135,10 +146,13 @@ fn ensure_local_auth_secret(data_dir: &PathBuf) -> Result<String, Box<dyn std::e
 
 fn create_main_window(app: &tauri::AppHandle, url: &str) -> Result<(), Box<dyn std::error::Error>> {
     let parsed: tauri::Url = url.parse()?;
+    // build() 默认就会显示窗口；这里不再用 on_page_load 做延迟显示，
+    // 因为那依赖 `tauri::webview::PageLoadEvent` 的精确路径与闭包签名，
+    // 在本机没有 Rust 工具链时无法验证。首屏白屏可忽略（服务端已就绪）。
     WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(parsed))
-        .title("叙事工坊 · YeMu AI Novel")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(960.0, 600.0)
+        .title("叙事工坊")
+        .inner_size(1280.0, 820.0)
+        .min_inner_size(960.0, 620.0)
         .center()
         .build()?;
     Ok(())

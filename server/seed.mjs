@@ -1,8 +1,5 @@
 export const seed = {
   users: [],
-  sessions: [],
-  passwordResetTokens: [],
-  emailVerificationCodes: [],
   projects: [],
   chapters: {},
   drafts: {},
@@ -13,7 +10,5 @@ export const seed = {
   aiUsage: [],
   foreshadows: [],
   storyMemories: [],
-  skillMarketItems: [],
-  skillMarketInstalls: [],
   ideas: [],
 }
