@@ -20,7 +20,9 @@ export interface StoryFileWorkspace {
 }
 
 const MAX_STORY_FILES = 80;
-const MAX_STORY_FILE_CHARS = 50_000;
+// 读取上限必须高于写入上限（50k），否则长章节「读取-编辑-写回」会丢内容。
+const MAX_STORY_FILE_CHARS = 200_000;
+const MAX_STORY_FILE_WRITE_CHARS = 50_000;
 
 function cleanText(value: unknown, limit: number): string {
 	return String(value ?? "").trim().slice(0, limit);
@@ -89,8 +91,12 @@ export function createStoryFileWorkspace(
 
 	async function read(pathValue: string): Promise<StoryFileRecord> {
 		const path = normalizeStoryFilePath(pathValue);
+		// 本轮已经写入但尚未落盘的内容优先（保证同一轮内多次 edit 累积生效）。
+		const staged = changes.get(path);
+		if (staged?.content !== undefined) return { ...staged };
+		// 其余情况必须穿透到磁盘：writing_context.loaded 里是截断过的摘要，
+		// 用它做编辑基底会把长章节的后半段静默截断。
 		const current = files.get(path);
-		if (current?.content !== undefined) return { ...current };
 		const loaded = readThrough ? fileRecord(await readThrough(path), true) : null;
 		if (!loaded || loaded.path !== path) throw new Error(`作品文件不存在：${path}`);
 		const merged = { ...current, ...loaded };

@@ -21,14 +21,7 @@ import readStorySkillDescription from "./prompts/tool-read-story-skill.md" with 
 import requestUserInputDescription from "./prompts/tool-request-user-input.md" with { type: "text" };
 import runLocalShellDescription from "./prompts/tool-run-local-shell.md" with { type: "text" };
 import submitStoryResultDescription from "./prompts/tool-submit-story-result.md" with { type: "text" };
-import webFetchDescription from "./prompts/tool-web-fetch.md" with { type: "text" };
 import writeStoryFileDescription from "./prompts/tool-write-story-file.md" with { type: "text" };
-import {
-	type HeadlessWebFetchResult,
-	runWebFetch,
-	webFetchSchema,
-	type WebFetchParams,
-} from "./web-fetch-runtime";
 import {
 	createStoryFileWorkspace,
 	mergeStoryFileArtifacts,
@@ -175,6 +168,19 @@ const runLocalShellSchema = z.object({
 	cwd: z.string().max(500).optional(),
 });
 
+const globSchema = z.object({
+	pattern: z.string().min(1).max(500).describe("相对工作区的 glob 模式，例如 正文/*.md 或 **/细纲_*.md"),
+	limit: z.number().int().min(1).max(2_000).optional(),
+});
+
+const grepSchema = z.object({
+	pattern: z.string().min(1).max(1_000).describe("正则表达式；特殊字符请转义"),
+	path: z.string().max(300).optional().describe("限定搜索的子目录或文件，默认整个工作区"),
+	include: z.string().max(200).optional().describe("只搜匹配该 glob 的文件，例如 正文/*.md"),
+	case_sensitive: z.boolean().optional(),
+	limit: z.number().int().min(1).max(500).optional(),
+});
+
 type AgentMode = "story" | "delegate" | "compact";
 
 export interface YemuModelConfig {
@@ -277,7 +283,6 @@ export interface StoryAgentCallbacks {
 	onToolEvent?: (event: StoryToolEvent) => void | Promise<void>;
 	readStoryFile?: (path: string) => Promise<StoryFileRecord | null>;
 	writeStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
-	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
 	localShellWorkspace?: string;
 	signal?: AbortSignal;
 }
@@ -337,8 +342,6 @@ interface ToolState {
 	storyFiles: StoryFileWorkspace;
 	canMutateStoryFiles: boolean;
 	persistStoryFile?: (file: StoryFileRecord) => void | Promise<void>;
-	canFetchWeb: boolean;
-	fetchWeb?: (params: WebFetchParams, signal?: AbortSignal) => Promise<HeadlessWebFetchResult>;
 	canRunLocalShell: boolean;
 	localShellWorkspace?: string;
 }
@@ -825,13 +828,8 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 async function skillInstructions(
 	skillName: string,
 	skillMap: Map<string, Skill>,
-	payload: Record<string, unknown>,
+	_payload: Record<string, unknown>,
 ): Promise<string> {
-	const community = payload.community_skill;
-	if (skillName === "story-community" && community && typeof community === "object" && !Array.isArray(community)) {
-		const instructions = (community as Record<string, unknown>).instructions;
-		if (typeof instructions === "string" && instructions.trim()) return instructions;
-	}
 	const skill = skillMap.get(skillName) ?? skillMap.get("story");
 	if (!skill) throw new Error("Story Skill 目录为空");
 	return await Bun.file(skill.filePath).text();
@@ -957,6 +955,98 @@ function executeLocalShellCommand(
 	});
 }
 
+// 工作区搜索：跳过内部目录，避免把 .yemu/.story/.git 的内容暴露给模型。
+const SEARCH_SKIP_DIRS = new Set([".yemu", ".story", ".story-review", ".git", "node_modules", ".obsidian", ".DS_Store"]);
+const SEARCH_TEXT_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".json", ".yaml", ".yml", ".toml", ".csv"]);
+
+async function walkWorkspaceFiles(root: string, dir: string, out: string[], budget = { left: 5_000 }) {
+	if (budget.left <= 0) return;
+	let entries;
+	try {
+		entries = await fs.readdir(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (budget.left <= 0) return;
+		if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			await walkWorkspaceFiles(root, full, out, budget);
+			continue;
+		}
+		if (!entry.isFile()) continue;
+		if (!SEARCH_TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+		budget.left -= 1;
+		out.push(path.relative(root, full).split(path.sep).join("/"));
+	}
+}
+
+// Bun.Glob 只接受相对模式；这里额外把 Windows 反斜杠规范化。
+async function globWorkspaceFiles(root: string, pattern: string, limit: number): Promise<string[]> {
+	const normalized = String(pattern || "").replaceAll("\\", "/").replace(/^\/+/, "").trim();
+	if (!normalized) return [];
+	const glob = new Bun.Glob(normalized);
+	const matches: string[] = [];
+	for await (const file of glob.scan({ cwd: root, onlyFiles: true, dot: false })) {
+		const relative = file.split(path.sep).join("/");
+		if (relative.split("/").some((segment) => SEARCH_SKIP_DIRS.has(segment))) continue;
+		matches.push(relative);
+		if (matches.length >= limit) break;
+	}
+	return matches.sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
+async function grepWorkspace(root: string, options: {
+	regex: RegExp;
+	scope?: string;
+	include?: string;
+	limit: number;
+}): Promise<{ lines: string[]; matches: number; files: number; truncated: boolean }> {
+	const files: string[] = [];
+	if (options.scope) {
+		const scope = String(options.scope).replaceAll("\\", "/").replace(/^\/+/, "").trim();
+		const absolute = path.resolve(root, scope);
+		const relative = path.relative(root, absolute);
+		if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("搜索范围必须位于工作区内");
+		const info = await fs.stat(absolute).catch(() => null);
+		if (info?.isDirectory()) await walkWorkspaceFiles(root, absolute, files);
+		else if (info?.isFile()) files.push(relative.split(path.sep).join("/"));
+	} else {
+		await walkWorkspaceFiles(root, root, files);
+	}
+
+	const includeGlob = options.include ? new Bun.Glob(String(options.include).replaceAll("\\", "/")) : null;
+	const lines: string[] = [];
+	let matches = 0;
+	let touchedFiles = 0;
+	let truncated = false;
+
+	for (const relative of files) {
+		if (includeGlob && !includeGlob.match(relative)) continue;
+		const content = await fs.readFile(path.join(root, relative), "utf8").catch(() => null);
+		if (content === null) continue;
+		let fileMatched = false;
+		const rows = content.split(/\r?\n/);
+		for (const [index, row] of rows.entries()) {
+			options.regex.lastIndex = 0;
+			if (!options.regex.test(row)) continue;
+			if (!fileMatched) {
+				fileMatched = true;
+				touchedFiles += 1;
+			}
+			matches += 1;
+			if (lines.length < options.limit) {
+				const preview = row.length > 240 ? `${row.slice(0, 240)}…` : row;
+				lines.push(`${relative}:${index + 1}: ${preview.trim()}`);
+			} else {
+				truncated = true;
+			}
+		}
+	}
+	return { lines, matches, files: touchedFiles, truncated };
+}
+
 function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[] {
 	const readTool: AgentTool<typeof readStorySkillSchema, { path: string }> = {
 		name: "read_story_skill",
@@ -1074,22 +1164,6 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
-	const fetchTool: AgentTool<typeof webFetchSchema, HeadlessWebFetchResult["details"]> = {
-		name: "web_fetch",
-		label: "读取网页",
-		description: webFetchDescription.trim(),
-		parameters: webFetchSchema,
-		strict: true,
-		loadMode: "essential",
-		approval: "read",
-		async execute(_toolCallId, params, signal) {
-			if (!state.canFetchWeb) throw new Error("当前任务未开启网页读取");
-			return state.fetchWeb
-				? await state.fetchWeb(params, signal)
-				: await runWebFetch(params, { signal });
-		},
-	};
-
 	const writeFileTool: AgentTool<typeof writeStoryFileSchema, { path: string; chars: number }> = {
 		name: "write_story_file",
 		label: "暂存作品文件",
@@ -1163,6 +1237,73 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 		},
 	};
 
+	const globTool: AgentTool<typeof globSchema, { count: number; truncated: boolean }> = {
+		name: "glob",
+		label: "按模式查找文件",
+		description: [
+			"按 glob 模式查找工作区内的文件，返回相对路径列表。",
+			"支持 `*`（单层）、`**`（任意层）、`?`（单字符）与 `{a,b}` 分支。",
+			"示例：`正文/*.md`、`**/细纲_*.md`、`设定/{角色,势力}/*.md`。",
+			"自动跳过 .yemu/.story/.git 等内部目录。",
+		].join("\n"),
+		parameters: globSchema,
+		loadMode: "essential",
+		approval: "read",
+		async execute(_toolCallId, params) {
+			if (!state.localShellWorkspace) throw new Error("当前环境没有可搜索的工作区");
+			const limit = params.limit ?? 500;
+			const matches = await globWorkspaceFiles(state.localShellWorkspace, params.pattern, limit + 1);
+			const truncated = matches.length > limit;
+			const files = truncated ? matches.slice(0, limit) : matches;
+			return {
+				content: [{
+					type: "text",
+					text: files.length
+						? `${files.length} 个匹配${truncated ? "（已截断）" : ""}：\n${files.join("\n")}`
+						: `没有匹配 ${params.pattern} 的文件`,
+				}],
+				details: { count: files.length, truncated },
+			};
+		},
+	};
+
+	const grepTool: AgentTool<typeof grepSchema, { matches: number; files: number }> = {
+		name: "grep",
+		label: "搜索文件内容",
+		description: [
+			"在工作区文件内容里按正则搜索，返回 `路径:行号: 内容`。",
+			"可用 `path` 限定子目录、用 `include` 限定文件类型。",
+			"适合查找设定/伏笔/角色在某处是否出现。",
+		].join("\n"),
+		parameters: grepSchema,
+		loadMode: "essential",
+		approval: "read",
+		async execute(_toolCallId, params) {
+			if (!state.localShellWorkspace) throw new Error("当前环境没有可搜索的工作区");
+			let regex: RegExp;
+			try {
+				regex = new RegExp(params.pattern, params.case_sensitive ? "g" : "gi");
+			} catch (error) {
+				throw new Error(`正则表达式无效：${error instanceof Error ? error.message : String(error)}`);
+			}
+			const result = await grepWorkspace(state.localShellWorkspace, {
+				regex,
+				scope: params.path,
+				include: params.include,
+				limit: params.limit ?? 200,
+			});
+			return {
+				content: [{
+					type: "text",
+					text: result.lines.length
+						? `${result.matches} 处匹配，来自 ${result.files} 个文件${result.truncated ? "（已截断）" : ""}：\n${result.lines.join("\n")}`
+						: `没有匹配 ${params.pattern} 的内容`,
+				}],
+				details: { matches: result.matches, files: result.files },
+			};
+		},
+	};
+
 	const localShellTool: AgentTool<typeof runLocalShellSchema, { exitCode: number | null; durationMs: number }> = {
 		name: "run_local_shell",
 		label: "运行本地命令",
@@ -1178,10 +1319,20 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 			const blocked = LOCAL_SHELL_BLOCKED_PATTERNS.find((pattern) => pattern.test(command));
 			if (blocked) throw new Error("该命令存在不可逆风险，已拒绝执行；请改用更具体、影响范围更小的命令");
 			const workspace = state.localShellWorkspace;
-			const cwd = params.cwd ? path.resolve(workspace, params.cwd) : workspace;
 			await fs.mkdir(workspace, { recursive: true });
-			const stat = await fs.stat(cwd).catch(() => null);
-			if (!stat?.isDirectory()) throw new Error(`工作目录不存在：${cwd}`);
+			// cwd 必须留在工作区内：先按词法解析，再用 realpath 校验，防止经符号链接逃逸。
+			const requested = params.cwd ? path.resolve(workspace, params.cwd) : workspace;
+			const stat = await fs.stat(requested).catch(() => null);
+			if (!stat?.isDirectory()) throw new Error(`工作目录不存在：${requested}`);
+			const [realWorkspace, realRequested] = await Promise.all([
+				fs.realpath(workspace),
+				fs.realpath(requested),
+			]);
+			const relative = path.relative(realWorkspace, realRequested);
+			if (relative.startsWith("..") || path.isAbsolute(relative)) {
+				throw new Error("工作目录必须位于作品工作区内");
+			}
+			const cwd = realRequested;
 			const timeoutMs = params.timeout_ms ?? LOCAL_SHELL_DEFAULT_TIMEOUT_MS;
 			const result = await executeLocalShellCommand(command, cwd, timeoutMs, signal);
 			const sections = [
@@ -1200,9 +1351,9 @@ function createTools(state: ToolState, skillMap: Map<string, Skill>): AgentTool[
 
 	return [
 		readTool,
-		...(state.canFetchWeb ? [fetchTool] : []),
 		listFilesTool,
 		readFileTool,
+		...(state.canRunLocalShell ? [globTool, grepTool] : []),
 		...(state.canMutateStoryFiles ? [writeFileTool, editFileTool] : []),
 		...(state.canRunLocalShell ? [localShellTool] : []),
 		inputTool,
@@ -1400,11 +1551,6 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 	const systemPrompt = render(agentSystemTemplate, {
 		mode: request.mode,
 		role: request.role,
-		webFetchEnabled:
-			request.mode === "story" &&
-			(request.payload.web_fetch === true ||
-				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
-					"allow"),
 	});
 	const { model, apiKey, effort, disableReasoning } = modelForConfig(request.modelConfig);
 	const renderUserPrompt = (payload: Record<string, unknown>): string =>
@@ -1454,12 +1600,6 @@ async function runRuntime(request: RuntimeRequest): Promise<RuntimeResult> {
 			"allow"
 				? request.callbacks?.writeStoryFile
 				: undefined,
-		canFetchWeb:
-			request.mode === "story" &&
-			(request.payload.web_fetch === true ||
-				String((request.payload.tool_policy as Record<string, unknown> | undefined)?.externalSearch ?? "deny") ===
-					"allow"),
-		fetchWeb: request.callbacks?.fetchWeb,
 		canRunLocalShell:
 			request.mode === "story" &&
 			String((request.payload.tool_policy as Record<string, unknown> | undefined)?.localShell ?? "deny") ===

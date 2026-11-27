@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { decryptSecret, encryptSecret } from './auth.mjs'
+import { decryptSecret, encryptSecret } from './secrets.mjs'
 import {
   activeModelProfile,
   activeModelSettings,

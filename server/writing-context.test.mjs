@@ -1,123 +1,167 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { buildWritingContext, chapterStoryFilePath, enrichStoryAgentPayload, readStoryFileForAgent, resolveStoryAttachments, storyFilePath } from './writing-context.mjs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, beforeEach, describe, test } from 'node:test'
+import { buildWritingContext, enrichStoryAgentPayload, resolveStoryAttachments, workspaceChapters } from './writing-context.mjs'
+import { ensureWorkspaceSkeleton, openWorkspace, writeWorkspaceText } from './workspace-store.mjs'
+import { workspaceState } from './workspace-runtime.mjs'
 
+const project = { id: 'project-1', userId: 'local-user', title: '旧港来信', type: '长篇', genre: '悬疑', style: '克制', tone: '追查失踪案' }
 const now = '2026-07-28T00:00:00.000Z'
-const project = { id: 'project-1', userId: 'user-1', title: '旧港来信', type: '长篇', genre: '悬疑', style: '克制', tone: '追查失踪案' }
-const chapters = Array.from({ length: 15 }, (_, index) => ({ id: index + 1, title: `第${index + 1}章`, outline: `大纲 ${index + 1}`, state: 'done' }))
-const db = {
-  projects: [project],
-  chapters: { [project.id]: chapters },
-  drafts: { [project.id]: Object.fromEntries(chapters.map((chapter) => [chapter.id, `正文 ${chapter.id}\n章末 ${chapter.id}`])) },
-  ideas: [
-    { id: 'idea-1', userId: 'user-1', projectId: project.id, label: '线索', title: '灯塔', body: '灯塔每晚闪三次。', tags: ['旧港'], updatedAt: now },
-    { id: 'idea-2', userId: 'user-1', projectId: project.id, label: '大纲文档', folder: '大纲', title: '全书大纲', body: '# 大纲\n\n主角追查旧港失踪案。', tags: ['Skill产物', '文件:大纲/大纲.md'], updatedAt: now },
-    { id: 'idea-3', userId: 'user-1', projectId: project.id, label: '大纲文档', folder: '大纲', title: '第十五章细纲', body: '# 第十五章细纲\n\n主角进入灯塔。', tags: ['Skill产物', '文件:大纲/细纲_第015章.md'], updatedAt: now },
-    { id: 'idea-4', userId: 'user-1', projectId: project.id, label: '大纲文档', folder: '大纲', title: '第一卷卷纲', body: '# 第一卷\n\n- 章节范围：第1-15章\n- 灯塔谜案告一段落。', tags: ['Skill产物', '文件:大纲/卷纲_第一卷.md'], updatedAt: now },
-    { id: 'idea-5', userId: 'user-1', projectId: project.id, label: '追踪文档', folder: '追踪', title: '伏笔追踪', body: '# 伏笔\n\n第三封信尚未回收。', tags: ['Skill产物', '文件:追踪/伏笔.md'], updatedAt: now },
-    { id: 'idea-6', userId: 'user-1', projectId: project.id, label: '大纲文档', folder: '大纲', title: '第一章细纲', body: '# 第一章细纲\n\n主角初到旧港。', tags: ['Skill产物', '文件:大纲/细纲_第001章.md'], updatedAt: now },
-  ],
-  foreshadows: [{ id: 'foreshadow-1', userId: 'user-1', projectId: project.id, title: '第三封信', content: '第三封信来自失踪记者。', status: 'planted', importance: 5 }],
-  storyMemories: [
-    { id: 'memory-1', userId: 'user-1', projectId: project.id, type: 'chapter_summary', title: '第一章摘要', content: '主角抵达旧港。', sourceChapterId: 1, importance: 4, status: 'active', updatedAt: now },
-    { id: 'memory-2', userId: 'user-1', projectId: project.id, type: 'canon_fact', title: '记者身份', content: '记者曾在灯塔工作。', importance: 5, status: 'active', updatedAt: now },
-  ],
+
+let tempRoot = null
+let workspace = null
+
+function emptyDb() {
+  return {
+    projects: [{ ...project }],
+    chapters: { [project.id]: [] },
+    drafts: { [project.id]: {} },
+    ideas: [],
+    foreshadows: [],
+    storyMemories: [],
+  }
 }
 
-test('writing context separates chapter layers and loads Skill files by path', () => {
-  const context = buildWritingContext(db, project, chapters[14], '续写第15章')
-  assert.equal(context.version, 4)
-  assert.deepEqual(context.layers.near.chapters.map((item) => item.id), [12, 13, 14])
-  assert.deepEqual(context.layers.mid.chapters.map((item) => item.id), [3, 4, 5, 6, 7, 8, 9, 10, 11])
-  assert.deepEqual(context.layers.far.chapters.map((item) => item.id), [1, 2])
-  assert.equal(context.layers.far.chapters[0].summarySource, 'memory')
-  assert.equal(context.summaryStatus.previousChapterCount, 14)
-  assert.deepEqual(context.summaryStatus.missingChapterIds.slice(0, 2), [2, 3])
-  const inventoryPaths = context.storyFiles.inventory.map((item) => item.path)
-  assert.ok(inventoryPaths.includes('大纲/大纲.md'))
-  assert.ok(inventoryPaths.includes('追踪/伏笔.md'))
-  assert.ok(inventoryPaths.includes('线索/灯塔.md'))
-  assert.equal(inventoryPaths.filter((path) => path.startsWith('正文/')).length, 15)
-  assert.equal(context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
-  assert.match(context.storyFiles.loaded[0].content, /进入灯塔/)
-  assert.equal(context.storyFiles.loaded[1].path, '大纲/卷纲_第一卷.md')
-  assert.ok(context.storyFiles.loaded.findIndex((item) => item.path === '追踪/伏笔.md')
-    < context.storyFiles.loaded.findIndex((item) => item.path === '大纲/细纲_第001章.md'))
-  const serialized = JSON.stringify(context)
-  assert.ok(serialized.indexOf('"storyFiles"') < serialized.indexOf('"previousChapters"'))
-  assert.deepEqual(context.materials.map((item) => item.title), ['灯塔'])
+beforeEach(async () => {
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), 'yemu-ctx-'))
+  const dir = path.join(tempRoot, '旧港来信')
+  await ensureWorkspaceSkeleton(dir)
+  workspace = await openWorkspace(dir)
+  workspaceState.current = workspace
 })
 
-test('typed attachments resolve current data at invocation time', () => {
-  const references = [
-    { name: 'stale', kind: 'stale', content: '旧内容', reference: { type: 'chapter', id: '2' } },
-    { name: 'stale', kind: 'stale', content: '旧内容', reference: { type: 'idea', id: 'idea-1' } },
-    { name: 'stale', kind: 'stale', content: '旧内容', reference: { type: 'foreshadow', id: 'foreshadow-1' } },
-    { name: 'stale', kind: 'stale', content: '旧内容', reference: { type: 'memory', id: 'memory-2' } },
-  ]
-  const resolved = resolveStoryAttachments(db, project, 'user-1', references)
-  assert.match(resolved[0].content, /正文 2/)
-  assert.match(resolved[1].content, /灯塔每晚闪三次/)
-  assert.match(resolved[2].content, /第三封信来自失踪记者/)
-  assert.match(resolved[3].content, /记者曾在灯塔工作/)
-  assert.ok(resolved.every((item) => !item.content.includes('旧内容')))
+afterEach(async () => {
+  workspaceState.current = null
+  await rm(tempRoot, { recursive: true, force: true })
+  tempRoot = null
+  workspace = null
 })
 
-test('agent payload enforces a bounded permission policy', () => {
-  const payload = enrichStoryAgentPayload(db, 'user-1', {
-    project_id: project.id,
-    chapter_id: 15,
-    attached_files: [{ name: '灯塔', reference: { type: 'idea', id: 'idea-1' } }],
-    tool_policy: { externalSearch: 'allow', mutateStoryData: 'propose', deleteStoryData: 'allow' },
-  }, '续写第15章')
-  assert.equal(payload.tool_policy.externalSearch, 'allow')
-  assert.equal(payload.tool_policy.mutateStoryData, 'propose')
-  assert.equal(payload.tool_policy.deleteStoryData, 'deny')
-  assert.equal(payload.tool_policy.localShell, process.env.AUTH_MODE === 'local' ? 'allow' : 'deny')
-  assert.match(payload.attached_files[0].content, /灯塔每晚闪三次/)
-  assert.equal(payload.writing_context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
-})
-
-test('local shell capability is server-controlled and denied outside local mode', () => {
-  const original = process.env.AUTH_MODE
-  try {
-    process.env.AUTH_MODE = 'local'
-    const localPayload = enrichStoryAgentPayload(db, 'user-1', {
-      project_id: project.id, tool_policy: { localShell: 'deny' },
-    }, 'test')
-    assert.equal(localPayload.tool_policy.localShell, 'allow')
-
-    process.env.AUTH_MODE = 'web'
-    const webPayload = enrichStoryAgentPayload(db, 'user-1', {
-      project_id: project.id, tool_policy: { localShell: 'allow' },
-    }, 'test')
-    assert.equal(webPayload.tool_policy.localShell, 'deny')
-  } finally {
-    if (original === undefined) delete process.env.AUTH_MODE
-    else process.env.AUTH_MODE = original
+async function seedBook() {
+  for (let index = 1; index <= 15; index += 1) {
+    await writeWorkspaceText(workspace, `正文/第${String(index).padStart(3, '0')}章_第${index}章.md`, `正文 ${index}\n章末 ${index}`, { snapshot: false })
   }
-})
+  await writeWorkspaceText(workspace, '大纲/大纲.md', '# 大纲\n\n主角追查旧港失踪案。', { snapshot: false })
+  await writeWorkspaceText(workspace, '大纲/细纲_第015章.md', '# 第十五章细纲\n\n主角进入灯塔。', { snapshot: false })
+  await writeWorkspaceText(workspace, '大纲/细纲_第001章.md', '# 第一章细纲\n\n主角初到旧港。', { snapshot: false })
+  await writeWorkspaceText(workspace, '大纲/卷纲_第一卷.md', '# 第一卷\n\n- 章节范围：第1-15章\n- 灯塔谜案告一段落。', { snapshot: false })
+  await writeWorkspaceText(workspace, '追踪/伏笔.md', '# 伏笔\n\n第三封信尚未回收。', { snapshot: false })
+  await writeWorkspaceText(workspace, '设定/题材定位.md', '悬疑 · 克制叙事', { snapshot: false })
+}
 
-test('agent file reads are scoped to the current user and project', () => {
-  const file = readStoryFileForAgent(db, 'user-1', project.id, '大纲/大纲.md')
-  assert.equal(file.path, '大纲/大纲.md')
-  assert.match(file.content, /旧港失踪案/)
-  assert.equal(readStoryFileForAgent(db, 'other-user', project.id, '大纲/大纲.md'), null)
-  assert.equal(readStoryFileForAgent(db, 'user-1', project.id, '../db.json'), null)
-})
-
-test('left-rail records and chapter drafts are exposed as readable workspace files', () => {
-  const currentDb = structuredClone(db)
-  currentDb.ideas.push({
-    id: 'idea-plain', userId: 'user-1', projectId: project.id,
-    label: '人物', folder: '人物', title: '林默', body: '失踪案记者', tags: [],
+describe('工作区写作上下文', () => {
+  test('章节从磁盘派生，正文按章节路径读取', async () => {
+    await seedBook()
+    const chapters = await workspaceChapters(workspace)
+    assert.equal(chapters.length, 15)
+    assert.deepEqual(chapters.slice(0, 3).map((chapter) => chapter.number), [1, 2, 3])
+    assert.equal(chapters[14].path, '正文/第015章_第15章.md')
+    assert.match(chapters[14].outline, /进入灯塔/, '细纲应作为 chapter.outline')
   })
-  const characterPath = storyFilePath(currentDb.ideas.at(-1))
-  assert.equal(characterPath, '人物/林默.md')
-  assert.equal(readStoryFileForAgent(currentDb, 'user-1', project.id, characterPath).content, '失踪案记者')
 
-  const chapter = currentDb.chapters[project.id][0]
-  const chapterPath = chapterStoryFilePath(chapter)
-  assert.match(chapterPath, /^正文\//)
-  assert.equal(readStoryFileForAgent(currentDb, 'user-1', project.id, chapterPath).content, currentDb.drafts[project.id][String(chapter.id)])
+  test('上下文分层与优先文件排序', async () => {
+    await seedBook()
+    const db = emptyDb()
+    const chapters = await workspaceChapters(workspace)
+    const context = await buildWritingContext(db, project, chapters[14], '续写第15章')
+
+    assert.equal(context.version, 4)
+    assert.deepEqual(context.layers.near.chapters.map((item) => item.id), [12, 13, 14])
+    assert.deepEqual(context.layers.far.chapters.map((item) => item.id), [1, 2])
+    assert.equal(context.summaryStatus.previousChapterCount, 14)
+
+    const inventoryPaths = context.storyFiles.inventory.map((item) => item.path)
+    assert.ok(inventoryPaths.includes('大纲/大纲.md'))
+    assert.ok(inventoryPaths.includes('追踪/伏笔.md'))
+    assert.ok(inventoryPaths.includes('设定/题材定位.md'))
+    assert.ok(!inventoryPaths.includes('设定/角色'), '目录不应出现在 inventory')
+
+    const loaded = context.storyFiles.loaded
+    assert.equal(loaded[0].path, '大纲/细纲_第015章.md', '当前章细纲应最先加载')
+    assert.match(loaded[0].content, /进入灯塔/)
+    assert.ok(!loaded.some((item) => item.path === '正文/第001章_第1章.md'), '非当前章正文不加载')
+    assert.equal(loaded.filter((item) => item.path.startsWith('正文/')).length, 1, '只加载当前章正文')
+  })
+
+  test('当前章正文被加载且内容来自磁盘', async () => {
+    await seedBook()
+    await writeWorkspaceText(workspace, '正文/第015章_第15章.md', '外部改写后的第十五章正文', { snapshot: false })
+    const chapters = await workspaceChapters(workspace)
+    const context = await buildWritingContext(emptyDb(), project, chapters[14], '续写第15章')
+    const current = context.storyFiles.loaded.find((item) => item.path === '正文/第015章_第15章.md')
+    assert.ok(current)
+    assert.match(current.content, /外部改写后的第十五章正文/)
+    // near 层是「之前」的章节，不含当前章；它取的是第14章的章末。
+    assert.deepEqual(context.layers.near.chapters.map((item) => item.id), [12, 13, 14])
+    assert.match(context.layers.near.chapters.at(-1).ending, /章末 14/)
+  })
+
+  test('未打开工作区时降级为空上下文', async () => {
+    workspaceState.current = null
+    const context = await buildWritingContext(emptyDb(), project, { id: 1, title: '第一章' }, '续写')
+    assert.deepEqual(context.storyFiles.inventory, [])
+    assert.deepEqual(context.storyFiles.loaded, [])
+  })
+})
+
+describe('权限策略', () => {
+  test('打开工作区时本地命令恒为 allow，删除恒为 deny', async () => {
+    await seedBook()
+    const chapters = await workspaceChapters(workspace)
+    const payload = await enrichStoryAgentPayload(emptyDb(), 'local-user', {
+      project_id: project.id,
+      chapter_id: chapters[14].number,
+      tool_policy: { mutateStoryData: 'propose', deleteStoryData: 'allow' },
+    }, '续写第15章')
+    assert.equal(payload.tool_policy.mutateStoryData, 'propose')
+    assert.equal(payload.tool_policy.deleteStoryData, 'deny')
+    assert.equal(payload.tool_policy.localShell, 'allow')
+    assert.equal(payload.writing_context.storyFiles.loaded[0].path, '大纲/细纲_第015章.md')
+  })
+
+  test('未打开工作区且项目不存在时返回 404', async () => {
+    workspaceState.current = null
+    await assert.rejects(
+      () => enrichStoryAgentPayload({ ...emptyDb(), projects: [] }, 'local-user', { project_id: 'missing' }, 'test'),
+      (error) => error.status === 404,
+    )
+  })
+})
+
+describe('附件解析', () => {
+  test('有效引用解析为当前内容', async () => {
+    const db = emptyDb()
+    db.ideas.push({ id: 'idea-1', userId: 'local-user', projectId: project.id, label: '线索', title: '灯塔', body: '灯塔每晚闪三次。', tags: [], updatedAt: now })
+    const resolved = resolveStoryAttachments(db, project, 'local-user', [
+      { name: '灯塔', reference: { type: 'idea', id: 'idea-1' } },
+    ])
+    assert.equal(resolved.length, 1)
+    assert.match(resolved[0].content, /灯塔每晚闪三次/)
+  })
+
+  test('失效引用按既有约定抛错', async () => {
+    assert.throws(
+      () => resolveStoryAttachments(emptyDb(), project, 'local-user', [
+        { name: 'x', reference: { type: 'idea', id: 'missing' } },
+      ]),
+      /引用内容不存在/,
+    )
+  })
+})
+
+describe('短篇结构', () => {
+  test('根目录 正文.md 作为唯一章节', async () => {
+    const shortDir = path.join(tempRoot, '短篇')
+    await ensureWorkspaceSkeleton(shortDir)
+    await writeFile(path.join(shortDir, '正文.md'), '短篇正文内容', 'utf8')
+    await rm(path.join(shortDir, '正文'), { recursive: true, force: true })
+    const shortWorkspace = await openWorkspace(shortDir)
+    workspaceState.current = shortWorkspace
+    const chapters = await workspaceChapters(shortWorkspace)
+    assert.equal(chapters.length, 1)
+    assert.equal(chapters[0].title, '正文')
+    assert.equal(chapters[0].singleFile, true)
+  })
 })

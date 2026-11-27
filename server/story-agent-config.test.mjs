@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { encryptSecret } from './auth.mjs'
+import { encryptSecret } from './secrets.mjs'
 import { classifyTaskError, storyAgentModelCapabilities, storyAgentModelConfig } from './story-agent.mjs'
 
 test('Story Agent uses TUI catalog output limits instead of the legacy Web override', () => {

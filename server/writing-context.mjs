@@ -1,3 +1,8 @@
+import { readdir, readFile, stat } from 'node:fs/promises'
+import path from 'node:path'
+import { currentWorkspaceRoot } from './workspace-runtime.mjs'
+import { listChapters, readWorkspaceMeta, readWorkspaceText, resolveInside } from './workspace-store.mjs'
+
 const STORY_MEMORY_ORDER = new Map(['canon_fact', 'world_rule', 'character_state', 'voice_habit', 'event', 'chapter_summary'].map((type, index) => [type, index]))
 
 export { STORY_MEMORY_ORDER }
@@ -70,30 +75,27 @@ export function readStoryFileForAgent(db, userId, projectId, requestedPath) {
   }
 }
 
-function buildStoryFiles(db, project, chapter, instruction = '') {
+// 从工作区磁盘构建 storyFiles（inventory + loaded）。
+// 目录约定与 skills/story* 一致：正文/ 大纲/ 设定/ 追踪/ 参考资料/。
+// 排序权重沿用旧实现，保证「大纲.md」「题材定位.md」「追踪/伏笔.md」等仍优先进入上下文。
+async function buildStoryFiles(db, project, chapter, instruction = '') {
   const cue = String(instruction || '')
-  const chapterNumber = Number(chapter?.id)
+  const chapterNumber = Number(chapter?.number ?? chapter?.id)
   const chapterToken = Number.isFinite(chapterNumber) ? `第${String(chapterNumber).padStart(3, '0')}章` : ''
   const writingIntent = /续写|日更|继续写|接着写|正文|写第\s*[一二三四五六七八九十百千万两\d]+\s*章/.test(cue)
-  const ideaRecords = (db.ideas || [])
-    .filter((idea) => idea.userId === project.userId && idea.projectId === project.id && storyFilePath(idea))
-  const chapterRecords = (db.chapters?.[project.id] || []).map((item) => ({
-    id: `chapter:${item.id}`,
-    title: item.title,
-    body: db.drafts?.[project.id]?.[String(item.id)] || '',
-    folder: '正文',
-    label: '章节正文',
-    tags: [`文件:${chapterStoryFilePath(item)}`],
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-    chapterId: item.id,
-  }))
-  const records = [...ideaRecords, ...chapterRecords]
-    .map((idea) => {
-      const path = storyFilePath(idea)
+  const root = currentWorkspaceRoot()
+  if (!root) return { inventory: [], loaded: [] }
+  const workspace = { root, meta: null }
+
+  const collected = await collectWorkspaceDocuments(workspace)
+  const currentChapterPath = String(chapter?.path || '')
+
+  const records = collected
+    .map((document) => {
+      const path = document.path
       let relevance = 0
       if (path.startsWith('正文/')) relevance += writingIntent ? 20 : 5
-      if (String(idea.chapterId ?? '') === String(chapter?.id ?? '')) relevance += 30
+      if (currentChapterPath && path === currentChapterPath) relevance += 30
       if (path === '大纲/大纲.md') relevance += 320
       if (path === '设定/题材定位.md') relevance += 270
       if (path === '设定/题材正文提示卡.md') relevance += 280
@@ -103,35 +105,36 @@ function buildStoryFiles(db, project, chapter, instruction = '') {
       if (writingIntent && path === '追踪/上下文.md') relevance += 285
       if (/^大纲\/卷纲_/.test(path)) {
         relevance += 180
-        const range = String(idea.body || '').match(/章节范围[：:]\s*第?\s*(\d+)\s*[-—~～至到]\s*第?\s*(\d+)\s*章/)
+        const range = String(document.content || '').match(/章节范围[：:]\s*第?\s*(\d+)\s*[-—~～至到]\s*第?\s*(\d+)\s*章/)
         if (chapterNumber && range && chapterNumber >= Number(range[1]) && chapterNumber <= Number(range[2])) relevance += 260
       }
       if (chapterToken && path.includes(`细纲_${chapterToken}`)) relevance += 500
       if (!writingIntent && /开书|大纲|卷纲|细纲|剧情/.test(cue) && path.startsWith('大纲/')) relevance += 100
       if (/设定|世界观|人物|角色|势力|关系/.test(cue) && path.startsWith('设定/')) relevance += 100
       if (/追踪|伏笔|时间线|状态/.test(cue) && path.startsWith('追踪/')) relevance += 100
-      return { idea, path, relevance }
+      return { document, path, relevance }
     })
     .sort((left, right) => right.relevance - left.relevance
-      || String(right.idea.updatedAt || '').localeCompare(String(left.idea.updatedAt || '')))
+      || String(right.document.updatedAt || '').localeCompare(String(left.document.updatedAt || '')))
 
-  const inventory = records.slice(0, 80).map(({ idea, path }) => ({
+  const inventory = records.slice(0, 80).map(({ document, path }) => ({
     path,
-    title: idea.title,
-    category: idea.folder || idea.label || path.split('/')[0] || '资料',
-    updatedAt: idea.updatedAt || idea.createdAt || '',
+    title: document.title,
+    category: path.split('/')[0] || '资料',
+    updatedAt: document.updatedAt || '',
   }))
   const loaded = []
   let remaining = 48_000
-  for (const { idea, path } of records) {
+  for (const { document, path } of records) {
     if (loaded.length >= 10 || remaining <= 0) break
-    if (path.startsWith('正文/') && String(idea.chapterId ?? '') !== String(chapter?.id ?? '')) continue
-    const content = contextExcerpt(idea.body, Math.min(10_000, remaining))
+    // 正文只加载当前章，其余章节靠 previousChapters 摘要，避免把整本书塞进上下文。
+    if (path.startsWith('正文/') && path !== currentChapterPath) continue
+    const content = contextExcerpt(document.content, Math.min(10_000, remaining))
     if (!content) continue
     loaded.push({
       path,
-      title: idea.title,
-      category: idea.folder || idea.label || path.split('/')[0] || '资料',
+      title: document.title,
+      category: path.split('/')[0] || '资料',
       content,
     })
     remaining -= content.length
@@ -139,9 +142,103 @@ function buildStoryFiles(db, project, chapter, instruction = '') {
   return { inventory, loaded }
 }
 
+// 扫描工作区里参与写作上下文的目录，返回 { path, title, content, updatedAt }。
+async function collectWorkspaceDocuments(workspace) {
+  const documents = []
+  for (const dirName of CONTEXT_DIRS) {
+    const dirPath = resolveInside(workspace.root, dirName)
+    if (!dirPath) continue
+    await walkDocuments(workspace.root, dirPath, documents)
+  }
+  return documents
+}
+
+const CONTEXT_DIRS = Object.freeze(['正文', '大纲', '设定', '追踪', '参考资料'])
+
+async function walkDocuments(rootDir, dirPath, documents, depth = 0) {
+  if (depth > 6 || documents.length >= 400) return
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => null)
+  if (!entries) return
+  for (const entry of entries) {
+    if (documents.length >= 400) return
+    const fullPath = path.join(dirPath, entry.name)
+    if (entry.isDirectory()) {
+      await walkDocuments(rootDir, fullPath, documents, depth + 1)
+      continue
+    }
+    if (!entry.isFile()) continue
+    const extension = path.extname(entry.name).toLowerCase()
+    if (!CONTEXT_EXTENSIONS.has(extension)) continue
+    const content = await readFile(fullPath, 'utf8').catch(() => null)
+    if (typeof content !== 'string') continue
+    const info = await stat(fullPath).catch(() => null)
+    documents.push({
+      path: path.relative(rootDir, fullPath).split(path.sep).join('/'),
+      title: entry.name.replace(/\.[^.]+$/, ''),
+      content: content.replace(/\r\n?/g, '\n'),
+      updatedAt: info?.mtime?.toISOString?.() ?? '',
+    })
+  }
+}
+
+const CONTEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt'])
+
+// 工作区模式：章节列表以磁盘为准（正文/第NNN章_标题.md）。
+// 返回结构与旧 db.chapters 记录兼容：{ id, number, title, path, outline, state, words }。
+// 大纲优先取 大纲/细纲_第NNN章.md，其次 大纲/大纲.md 的同名段落。
+export async function workspaceChapters(workspace) {
+  const { chapters } = await listChapters(workspace)
+  const output = []
+  for (const chapter of chapters) {
+    const outline = await chapterOutlineFor(workspace, chapter)
+    output.push({
+      id: chapter.number,
+      number: chapter.number,
+      title: chapter.title,
+      path: chapter.path,
+      fileName: chapter.fileName,
+      outline,
+      state: 'draft',
+      words: 0,
+      updatedAt: chapter.modifiedAt || '',
+      singleFile: Boolean(chapter.singleFile),
+    })
+  }
+  return output
+}
+
+async function chapterOutlineFor(workspace, chapter) {
+  if (!Number.isFinite(Number(chapter.number))) return ''
+  const token = String(chapter.number).padStart(3, '0')
+  const exact = await readWorkspaceText(workspace, `大纲/细纲_第${token}章.md`).catch(() => null)
+  if (exact) return contextExcerpt(exact.content, 2400)
+  return ''
+}
+
+// 工作区模式下章节记录由磁盘派生；没有打开工作区时回退到 db（迁移/导入期间）。
+async function resolveChapters(db, project) {
+  const root = currentWorkspaceRoot()
+  if (!root) return db.chapters[project.id] || []
+  return workspaceChapters({ root, meta: null })
+}
+
 function draftMapFor(db, projectId) {
   const current = db.drafts[projectId]
   return current && typeof current === 'object' && !Array.isArray(current) ? current : {}
+}
+
+// 工作区模式下正文在磁盘上：按章节路径读取，键仍用章节 id（=章节号）。
+async function draftMapForWorkspace(chapters) {
+  const root = currentWorkspaceRoot()
+  if (!root) return {}
+  const workspace = { root, meta: null }
+  const drafts = {}
+  for (const chapter of chapters) {
+    if (!chapter.path) continue
+    const file = await readWorkspaceText(workspace, chapter.path).catch(() => null)
+    drafts[String(chapter.id)] = file?.content || ''
+  }
+  return drafts
 }
 
 function chapterSummaryMap(memories) {
@@ -239,10 +336,10 @@ export function resolveStoryAttachments(db, project, userId, attachments) {
   }).filter((item) => item.name && item.content)
 }
 
-export function buildWritingContext(db, project, chapter, instruction = '') {
-  const chapters = db.chapters[project.id] || []
+export async function buildWritingContext(db, project, chapter, instruction = '') {
+  const chapters = await resolveChapters(db, project)
   const chapterIndex = chapters.findIndex((item) => String(item.id) === String(chapter.id))
-  const drafts = draftMapFor(db, project.id)
+  const drafts = await draftMapForWorkspace(chapters)
   const previousChapters = chapters
     .slice(Math.max(0, chapterIndex - 6), chapterIndex)
     .map((item) => ({
@@ -251,7 +348,7 @@ export function buildWritingContext(db, project, chapter, instruction = '') {
       outline: contextExcerpt(item.outline, 900),
       ending: contextExcerpt(drafts[String(item.id)], 1200).slice(-1200),
     }))
-  const storyFiles = buildStoryFiles(db, project, chapter, instruction)
+  const storyFiles = await buildStoryFiles(db, project, chapter, instruction)
   const materials = db.ideas
     .filter((idea) => idea.userId === project.userId
       && (!idea.projectId || idea.projectId === project.id)
@@ -318,22 +415,30 @@ export function buildWritingContext(db, project, chapter, instruction = '') {
   }
 }
 
-export function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
+export async function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
   const projectId = payload.project_id || payload.projectId
   const chapterId = payload.chapter_id || payload.chapterId
   if (!projectId) return payload
   const project = db.projects.find((item) => item.id === projectId && item.userId === userId)
-  if (!project) throw Object.assign(new Error('作品不存在'), { status: 404 })
+  if (!project) {
+    // 工作区模式下可能还没有对应的 db 项目记录：用工作区自身当项目。
+    const root = currentWorkspaceRoot()
+    if (!root) throw Object.assign(new Error('作品不存在'), { status: 404 })
+    const meta = await readWorkspaceMeta({ root, meta: null })
+    return await enrichForWorkspace(db, payload, { root, meta }, chapterId, instruction)
+  }
+  const chapters = await resolveChapters(db, project)
+  // 工作区模式下文件由用户/模型自由组织：找不到「当前章」时不再报错，
+  // 退回不绑定具体章节的上下文（整个工作区仍可读）。
   const chapter = chapterId
-    ? (db.chapters[project.id] || []).find((item) => String(item.id) === String(chapterId))
+    ? chapters.find((item) => String(item.id) === String(chapterId))
     : null
-  if (chapterId && !chapter) throw Object.assign(new Error('章节不存在'), { status: 404 })
   const writingContext = chapter
-    ? buildWritingContext(db, project, chapter, instruction)
+    ? await buildWritingContext(db, project, chapter, instruction)
     : {
       version: 2,
       project: { id: project.id, title: project.title, type: project.type, genre: project.genre, style: project.style || '', premise: project.tone || '' },
-      storyFiles: buildStoryFiles(db, project, null, instruction),
+      storyFiles: await buildStoryFiles(db, project, null, instruction),
       relationshipGraph: db.relationshipGraphs?.[project.id] || { nodes: [], edges: [] },
     }
   const attachedFiles = resolveStoryAttachments(db, project, userId, payload.attached_files)
@@ -341,10 +446,38 @@ export function enrichStoryAgentPayload(db, userId, payload, instruction = '') {
   const toolPolicy = {
     version: 1,
     readProjectContext: 'allow',
-    externalSearch: requestedPolicy.externalSearch === 'allow' ? 'allow' : 'deny',
     mutateStoryData: requestedPolicy.mutateStoryData === 'allow' ? 'allow' : 'propose',
     deleteStoryData: 'deny',
-    localShell: process.env.AUTH_MODE === 'local' ? 'allow' : 'deny',
+    localShell: currentWorkspaceRoot() ? 'allow' : 'deny',
   }
   return { ...payload, attached_files: attachedFiles, writing_context: writingContext, tool_policy: toolPolicy }
+}
+
+// 工作区存在但没有对应 db 项目记录时的降级路径。
+async function enrichForWorkspace(db, payload, workspace, chapterId, instruction) {
+  const chapters = await workspaceChapters(workspace)
+  const chapter = chapterId ? chapters.find((item) => String(item.id) === String(chapterId)) : null
+  const project = {
+    id: workspace.root,
+    userId: 'local-user',
+    title: workspace.meta?.title || '',
+    type: workspace.meta?.type || '长篇',
+    genre: workspace.meta?.genre || '',
+    style: workspace.meta?.style || '',
+    tone: workspace.meta?.premise || '',
+  }
+  const writingContext = await buildWritingContext(db, project, chapter || { id: null, title: '', outline: '', state: 'draft' }, instruction)
+  const requestedPolicy = payload.tool_policy && typeof payload.tool_policy === 'object' ? payload.tool_policy : {}
+  return {
+    ...payload,
+    attached_files: [],
+    writing_context: writingContext,
+    tool_policy: {
+      version: 1,
+      readProjectContext: 'allow',
+        mutateStoryData: requestedPolicy.mutateStoryData === 'allow' ? 'allow' : 'propose',
+      deleteStoryData: 'deny',
+      localShell: 'allow',
+    },
+  }
 }

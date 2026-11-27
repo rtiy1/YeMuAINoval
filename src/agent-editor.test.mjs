@@ -17,7 +17,6 @@ test('tool cards prefer the real bounded output over their fixed summary', () =>
     summary: '读取作品文件 · 设定/世界.md',
     meta: { output: '世界由七座浮空城组成。' },
   })).toBe('世界由七座浮空城组成。')
-  expect(tuiToolNames.web_fetch).toBe('fetch')
 })
 
 test('compacted request input arguments use the compatible ask shape', () => {

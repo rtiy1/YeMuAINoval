@@ -1,37 +1,66 @@
-import { expect, test } from 'bun:test'
-import { writeStoryDocumentToState } from './story-document-store.mjs'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { readStoryDocument, writeStoryDocument, workspaceHistoryRoot } from './story-document-store.mjs'
+import { ensureWorkspaceSkeleton, listSnapshots, openWorkspace, readWorkspaceText } from './workspace-store.mjs'
+import { workspaceState } from './workspace-runtime.mjs'
 
-function database() {
-  return {
-    users: [{ id: 'user-1' }],
-    projects: [{ id: 'project-1', userId: 'user-1', title: '测试作品' }],
-    ideas: [],
-    chapters: { 'project-1': [] },
-    drafts: { 'project-1': {} },
-    editHistory: { 'project-1': {} },
-  }
-}
+let tempRoot = null
 
-test('Agent documents are upserted into the database-backed left rail store', () => {
-  const db = database()
-  const first = writeStoryDocumentToState(db, 'user-1', 'project-1', {
-    path: '大纲/大纲.md',
-    title: '全书大纲',
-    category: '大纲',
-    content: '# 全书大纲\n\n主角追查旧港失踪案。',
+beforeEach(async () => {
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), 'yemu-doc-'))
+  const dir = path.join(tempRoot, '测试作品')
+  await ensureWorkspaceSkeleton(dir)
+  workspaceState.current = await openWorkspace(dir)
+})
+
+afterEach(async () => {
+  workspaceState.current = null
+  await rm(tempRoot, { recursive: true, force: true })
+  tempRoot = null
+})
+
+describe('作品文件直接落在工作区磁盘', () => {
+  test('写入后读回，内容与路径一致', async () => {
+    const written = await writeStoryDocument({
+      path: '大纲/大纲.md',
+      title: '全书大纲',
+      category: '大纲',
+      content: '# 全书大纲\n\n主角追查旧港失踪案。',
+    })
+    expect(written.file.path).toBe('大纲/大纲.md')
+    expect(written.file.category).toBe('大纲')
+
+    const disk = await readWorkspaceText(workspaceState.current, '大纲/大纲.md')
+    expect(disk.content).toContain('旧港失踪案')
+
+    const read = await readStoryDocument('大纲/大纲.md')
+    expect(read.content).toContain('旧港失踪案')
+    expect(read.title).toBe('大纲')
+    expect(read.category).toBe('大纲')
   })
-  expect(first.file?.path).toBe('大纲/大纲.md')
-  expect(first.application.fileChanges).toEqual([expect.objectContaining({ action: 'created', category: '大纲' })])
-  expect(db.ideas).toHaveLength(1)
-  expect(db.ideas[0]?.folder).toBe('大纲')
 
-  const second = writeStoryDocumentToState(db, 'user-1', 'project-1', {
-    path: '大纲/大纲.md',
-    title: '全书大纲',
-    category: '大纲',
-    content: '# 全书大纲\n\n主角最终找到灯塔。',
+  test('覆盖写入产生历史快照', async () => {
+    await writeStoryDocument({ path: '大纲/大纲.md', content: '第一版' })
+    const second = await writeStoryDocument({ path: '大纲/大纲.md', content: '第二版' })
+    expect(second.snapshot).toBeTruthy()
+
+    const snapshots = await listSnapshots(workspaceState.current, '大纲/大纲.md')
+    expect(snapshots).toHaveLength(1)
+    expect(workspaceHistoryRoot()).toContain('.yemu')
   })
-  expect(second.application.fileChanges[0]?.action).toBe('updated')
-  expect(db.ideas).toHaveLength(1)
-  expect(db.ideas[0]?.body).toContain('灯塔')
+
+  test('读取不存在的文件返回 null', async () => {
+    expect(await readStoryDocument('大纲/不存在.md')).toBeNull()
+  })
+
+  test('未打开工作区时拒绝写入', async () => {
+    workspaceState.current = null
+    await expect(writeStoryDocument({ path: '大纲/大纲.md', content: 'x' })).rejects.toThrow(/尚未打开工作区/)
+  })
+
+  test('拒绝路径穿越', async () => {
+    await expect(writeStoryDocument({ path: '../外逃.md', content: 'x' })).rejects.toThrow(/路径无效/)
+  })
 })

@@ -1,0 +1,2 @@
+- [小说 agent 工具范围](novel-agent-tool-scope.md) — 只做小说创作，不接 coding-agent 全套工具
+- [工作区即真相](workspace-as-truth.md) — 磁盘文件夹是作品的唯一真相，db.json 只存运行时状态

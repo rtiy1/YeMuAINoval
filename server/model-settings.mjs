@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { decryptSecret, encryptSecret, maskKey } from './auth.mjs'
+import { decryptSecret, encryptSecret, maskKey } from './secrets.mjs'
 import { normalizeThreadCompactionSettings } from './agent-thread.mjs'
 
 const PROFILE_LIMIT = 12

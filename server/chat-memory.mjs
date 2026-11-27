@@ -1,36 +1,27 @@
-import { createRequire } from 'node:module'
 import crypto from 'node:crypto'
 
-const require = createRequire(import.meta.url)
-
-export function isRedisEnabled() {
-  return Boolean(String(process.env.REDIS_URL || '').trim())
-}
-
-const KEY_PREFIX = 'writing-assistant:v2:'
+// 单用户本地应用：写作助手会话只存在 db.writingSessions 里。
+// 这里保留归一化工具与同名接口，方便调用方无需改动。
 const SESSION_VERSION = 2
 
-let clientPromise = null
+export function isRedisEnabled() {
+  return false
+}
 
-function getClient() {
-  if (!isRedisEnabled()) return null
-  if (!clientPromise) {
-    const redisUrl = String(process.env.REDIS_URL).trim()
-    const Redis = require('ioredis')
-    clientPromise = new Redis(redisUrl, {
-      lazyConnect: false,
-      maxRetriesPerRequest: 2,
-      enableReadyCheck: true,
-      reconnectOnError(err) {
-        return err?.message?.includes('READONLY') || false
-      },
-    })
-    clientPromise.on('error', (error) => {
-      // ioredis 默认会在后台重连；这里只记日志，避免未捕获事件杀进程。
-      if (process.env.NODE_ENV !== 'test') console.error('[chat-memory] redis error:', error.message)
-    })
-  }
-  return clientPromise
+export async function getSession() {
+  return null
+}
+
+export async function setSession() {
+  return false
+}
+
+export async function deleteSession() {
+  return false
+}
+
+export async function closeClient() {
+  // 无外部连接需要释放。
 }
 
 function emptyRequirements() {
@@ -74,54 +65,3 @@ export function serializeSession(session) {
   return JSON.stringify({ v: SESSION_VERSION, session })
 }
 
-export async function getSession(userId) {
-  if (!isRedisEnabled()) return null
-  const client = getClient()
-  if (!client) return null
-  try {
-    const raw = await client.get(`${KEY_PREFIX}${userId}`)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    return normalizeWritingSession(parsed?.session ?? parsed, userId)
-  } catch (error) {
-    if (process.env.NODE_ENV !== 'test') console.error('[chat-memory] getSession failed:', error.message)
-    return null
-  }
-}
-
-export async function setSession(userId, session) {
-  if (!isRedisEnabled()) return false
-  const client = getClient()
-  if (!client) return false
-  try {
-    const normalized = normalizeWritingSession(session, userId)
-    await client.set(`${KEY_PREFIX}${userId}`, serializeSession(normalized))
-    return true
-  } catch (error) {
-    if (process.env.NODE_ENV !== 'test') console.error('[chat-memory] setSession failed:', error.message)
-    return false
-  }
-}
-
-export async function deleteSession(userId) {
-  if (!isRedisEnabled()) return false
-  const client = getClient()
-  if (!client) return false
-  try {
-    await client.del(`${KEY_PREFIX}${userId}`)
-    return true
-  } catch (error) {
-    if (process.env.NODE_ENV !== 'test') console.error('[chat-memory] deleteSession failed:', error.message)
-    return false
-  }
-}
-
-export async function closeClient() {
-  if (!clientPromise) return
-  try {
-    await clientPromise.quit()
-  } catch {
-    // 忽略关闭错误
-  }
-  clientPromise = null
-}

@@ -1,0 +1,1 @@
+{"agentType":"general-purpose","isBuiltIn":true,"launchedWithDefaults":true,"description":"Research AI client desktop stacks","toolUseId":"chatcmpl-tool-9a80089c7d5e6b24","spawnDepth":1,"requestShape":"background","requestNonInteractive":true,"model":"deepseek-v4.1-flash-1017[1m]","modelNotNamed":true,"pickedEffortModel":"deepseek-v4.1-flash-1017[1m]","stoppedByUser":true}

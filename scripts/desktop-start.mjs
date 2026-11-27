@@ -11,6 +11,7 @@
 //   bun scripts/desktop-start.mjs            # 随机端口，保持运行
 //   bun scripts/desktop-start.mjs --port 8787  # 固定端口（tauri dev 用）
 //   bun scripts/desktop-start.mjs --open     # 启动并打开默认浏览器
+//   bun scripts/desktop-start.mjs --workspace ~/Documents/我的小说  # 直接打开指定工作区
 //   DESKTOP_DATA_DIR=/path bun scripts/desktop-start.mjs
 // ---------------------------------------------------------------
 import { randomBytes } from 'node:crypto'
@@ -29,12 +30,16 @@ const portFile = path.join(dataRoot, 'port.txt')
 const authSecretFile = path.join(dataRoot, 'auth-secret')
 
 function parseArgs(args) {
-  const out = { open: args.includes('--open'), port: null }
+  const out = { open: args.includes('--open'), port: null, workspace: null }
   const index = args.indexOf('--port')
   if (index !== -1 && args[index + 1]) {
     const parsed = Number(args[index + 1])
     if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) out.port = parsed
     else throw new Error(`无效端口: ${args[index + 1]}`)
+  }
+  const workspaceIndex = args.indexOf('--workspace')
+  if (workspaceIndex !== -1 && args[workspaceIndex + 1]) {
+    out.workspace = path.resolve(args[workspaceIndex + 1])
   }
   return out
 }
@@ -53,20 +58,15 @@ async function ensureAuthSecret() {
   return generated
 }
 
-async function buildEnv(port) {
+async function buildEnv(port, workspaceDir = null) {
   return {
     ...process.env,
-    AUTH_MODE: 'local',
+    ...(workspaceDir ? { STORY_WORKSPACE: workspaceDir } : {}),
     AUTH_SECRET: await ensureAuthSecret(),
     HOST: '127.0.0.1',
     PORT: port != null ? String(port) : '0', // 随机端口时写 STORY_PORT_FILE
     STORY_PORT_FILE: portFile,
     STORY_DATA_FILE: path.join(dataRoot, 'db.json'),
-    STORY_SKILL_MARKET_DIR: process.env.STORY_SKILL_MARKET_DIR || path.join(dataRoot, 'skill-market'),
-    AI_TASK_QUEUE_ENABLED: 'false',
-    DATABASE_URL: '',
-    REDIS_URL: '',
-    WEB_ORIGIN: 'http://127.0.0.1',
     NODE_ENV: process.env.NODE_ENV || 'development',
     ...(process.env.ALLOW_SHARED_MODEL_KEY === undefined ? { ALLOW_SHARED_MODEL_KEY: 'false' } : {}),
   }
@@ -92,7 +92,7 @@ const bunRuntime = process.env.BUN_RUNTIME || process.execPath
 const serverEntry = process.env.SERVER_ENTRY || path.join(repoRoot, 'server', 'index.mjs')
 
 await fs.mkdir(dataRoot, { recursive: true })
-const env = await buildEnv(args.port)
+const env = await buildEnv(args.port, args.workspace)
 console.log(`[desktop] 数据目录: ${dataRoot}`)
 console.log(`[desktop] 启动服务: ${bunRuntime} ${serverEntry}`)
 const child = spawn(bunRuntime, [serverEntry], { env, stdio: 'inherit' })

@@ -6,7 +6,6 @@ export const tuiToolNames = {
   read_story_skill: 'read',
   request_user_input: 'ask',
   submit_story_result: 'resolve',
-  web_fetch: 'fetch',
 }
 
 export function tuiToolArgs(item) {

@@ -47,7 +47,7 @@ async function rawRequest(path, options = {}) {
 
 async function refreshSession(notifyExpiry = true) {
   if (!refreshPromise) {
-    refreshPromise = rawRequest('/auth/refresh', { method: 'POST' })
+    refreshPromise = rawRequest('/auth/me')
       .then(({ response, payload }) => {
         if (!response.ok) {
           accessToken = null
@@ -147,19 +147,6 @@ export const api = {
   },
   getMe: () => request('/auth/me'),
   getSkills: () => request('/ai/skills'),
-  getSkillMarket: (params = {}) => {
-    const query = new URLSearchParams()
-    if (params.q) query.set('q', params.q)
-    if (params.category) query.set('category', params.category)
-    if (params.mine) query.set('mine', 'true')
-    return request(`/skill-market${query.size ? `?${query}` : ''}`)
-  },
-  uploadMarketSkill: (input) => request('/skill-market', { method: 'POST', body: JSON.stringify(input) }),
-  reviewMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/review`, { method: 'POST' }),
-  installMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/install`, { method: 'POST' }),
-  uninstallMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}/install`, { method: 'DELETE' }),
-  downloadMarketSkill: (skillId) => downloadRequest(`/skill-market/${encodeURIComponent(skillId)}/download`),
-  deleteMarketSkill: (skillId) => request(`/skill-market/${encodeURIComponent(skillId)}`, { method: 'DELETE' }),
   getAiUsage: () => request('/ai/usage'),
   runStoryAgent: (input, options = {}) => request('/ai/agent/runs', { method: 'POST', body: JSON.stringify(input), signal: options.signal }),
   getAgentThread: (projectId, chapterId) => request(`/ai/threads?projectId=${encodeURIComponent(projectId)}&chapterId=${encodeURIComponent(chapterId)}`),
@@ -232,4 +219,31 @@ export const api = {
   createForeshadow: (foreshadow) => request('/foreshadows', { method: 'POST', body: JSON.stringify(foreshadow) }),
   updateForeshadow: (foreshadowId, updates) => request(`/foreshadows/${encodeURIComponent(foreshadowId)}`, { method: 'PATCH', body: JSON.stringify(updates) }),
   deleteForeshadow: (foreshadowId) => request(`/foreshadows/${encodeURIComponent(foreshadowId)}`, { method: 'DELETE' }),
+
+  // ---- 本地工作区 ----
+  getWorkspace: () => request('/workspace'),
+  openWorkspace: (input) => request('/workspace/open', { method: 'POST', body: JSON.stringify(input) }),
+  closeWorkspace: () => request('/workspace/close', { method: 'POST' }),
+  getWorkspaceTree: () => request('/workspace/tree'),
+  reconcileWorkspace: (knownChapters = []) => request('/workspace/reconcile', { method: 'POST', body: JSON.stringify({ knownChapters }) }),
+  getWorkspaceMeta: () => request('/workspace/meta'),
+  updateWorkspaceMeta: (patch) => request('/workspace/meta', { method: 'PUT', body: JSON.stringify(patch) }),
+  readWorkspaceFile: (path) => request(`/workspace/file?path=${encodeURIComponent(path)}`),
+  writeWorkspaceFile: (path, content, options = {}) => request('/workspace/file', {
+    method: 'PUT',
+    body: JSON.stringify({ path, content, snapshot: options.snapshot !== false }),
+  }),
+  deleteWorkspaceFile: (path) => request(`/workspace/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  getWorkspaceChapters: () => request('/workspace/chapters'),
+  createWorkspaceChapter: (title, content = '') => request('/workspace/chapters', { method: 'POST', body: JSON.stringify({ title, content }) }),
+  renameWorkspaceChapter: (path, title) => request('/workspace/chapters', { method: 'PATCH', body: JSON.stringify({ path, title }) }),
+  deleteWorkspaceChapter: (path) => request(`/workspace/chapters?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  getWorkspaceHistory: (path) => request(`/workspace/history?path=${encodeURIComponent(path)}`),
+  getWorkspaceSnapshot: (path, snapshotId) => request(`/workspace/history/${encodeURIComponent(snapshotId)}?path=${encodeURIComponent(path)}`),
+  getWorkspaceState: (name) => request(`/workspace/state/${encodeURIComponent(name)}`),
+  updateWorkspaceState: (name, value) => request(`/workspace/state/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  getWorkspaceThreads: () => request('/workspace/threads'),
+  getWorkspaceThread: (threadId) => request(`/workspace/threads/${encodeURIComponent(threadId)}`),
+  saveWorkspaceThread: (threadId, thread) => request(`/workspace/threads/${encodeURIComponent(threadId)}`, { method: 'PUT', body: JSON.stringify({ thread }) }),
+  deleteWorkspaceThread: (threadId) => request(`/workspace/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' }),
 }
