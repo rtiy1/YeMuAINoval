@@ -68,6 +68,9 @@ jobs:
       - name: Run YeMu tests
         run: bun run test
 
+      - name: Build production frontend
+        run: bun run build
+
       - name: Check desktop runtime bundle
         run: |
           bun scripts/prepare-runtime.mjs
@@ -77,9 +80,6 @@ jobs:
             echo "::error::运行时超过 80MB（${size}MB）"
             exit 1
           fi
-
-      - name: Build production frontend
-        run: bun run build
 
       - name: Check patch whitespace
         run: git diff --check
